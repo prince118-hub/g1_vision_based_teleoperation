@@ -15,6 +15,7 @@ from . import config as C
 from .config import TeleopConfig
 from .gating import RejectReason
 from .ik import solve_arm_ik
+from .onceuro import KeypointFilter
 from .retargeting import compute_arm_targets
 from .robot import G1Robot
 from .zed_source import BodyFrame
@@ -36,6 +37,12 @@ class TeleopController:
         self._have_good_pose = False  # becomes True after the first applied frame
         self._depth_state = {}        # per-side previous depth (X_rob) of el/wr targets
         self._still_state = {}        # per-side stillness-lock anchor + locked flag
+        sm = cfg.smoothing
+        self._kp_filter = KeypointFilter(
+            (C.LEFT_SHOULDER, C.LEFT_ELBOW, C.LEFT_WRIST,
+             C.RIGHT_SHOULDER, C.RIGHT_ELBOW, C.RIGHT_WRIST),
+            freq=sm.euro_freq, min_cutoff=sm.euro_min_cutoff, beta=sm.euro_beta,
+        ) if sm.euro_enabled else None
 
     def _arms_have_nan(self, kp) -> bool:
         """Only guard we keep: never feed a NaN arm keypoint into IK, since
@@ -183,6 +190,8 @@ class TeleopController:
             return self._coast()
 
         kp = frame.keypoints_3d
+        if self._kp_filter is not None:
+            kp = self._kp_filter(kp)
         # Snapshot both shoulders BEFORE any IK runs. Each arm's IK calls
         # mj_forward internally, which would otherwise shift the other arm's
         # shoulder reading mid-frame and make one arm drift when the other moves.

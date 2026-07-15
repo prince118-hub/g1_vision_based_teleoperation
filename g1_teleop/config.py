@@ -107,6 +107,12 @@ class SmoothingConfig:
     yaw_alpha: float = 0.3      # yaw is noisier, smooth harder
     depth_alpha: float = 0.5    # extra low-pass on the noisy forward/back axis
     max_coast_frames: int = 5   # hold last good pose through short tracking dropouts
+    # One-Euro keypoint filter (Casiez et al. 2012): min_cutoff lower = smoother
+    # when still; beta higher = more responsive during motion (less lag).
+    euro_enabled: bool = True
+    euro_min_cutoff: float = 1.5
+    euro_beta: float = 0.05
+    euro_freq: float = 30.0     # ZED body tracking runs ~30 Hz
 
 
 @dataclass(frozen=True)
@@ -124,9 +130,9 @@ class IKConfig:
     neutral_weight: float = 0.03   # (legacy, unused by nullspace solver)
     nullspace_weight: float = 0.5  # pull toward seed pose in the nullspace (elbow-out)
     target_deadzone: float = 0.008  # (legacy, unused by stillness lock)
-    still_enter: float = 0.030     # per-frame motion below 30mm counts as "still"
-    still_break: float = 0.060     # must exceed 60mm to unlock and track (above ZED noise)
-    still_frames: int = 8          # this many consecutive still frames -> relock
+    still_enter: float = 0.020     # per-frame motion below 20mm counts as "still"
+    still_break: float = 0.040     # exceed 40mm to unlock (One-Euro lowers source noise)
+    still_frames: int = 6          # this many consecutive still frames -> relock
 
 
 @dataclass(frozen=True)
