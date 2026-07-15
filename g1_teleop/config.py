@@ -123,7 +123,9 @@ class IKConfig:
     damping: float = 0.12          # more damping = smoother, less churn
     neutral_weight: float = 0.03   # (legacy, unused by nullspace solver)
     nullspace_weight: float = 0.5  # pull toward seed pose in the nullspace (elbow-out)
-    target_deadzone: float = 0.008  # ignore target moves smaller than 8mm (kills micro-jitter)
+    target_deadzone: float = 0.008  # (legacy, unused by stillness lock)
+    still_enter: float = 0.015     # settle below 15mm of motion -> lock (hold pose)
+    still_break: float = 0.035     # must exceed 35mm to unlock -> start tracking again
 
 
 @dataclass(frozen=True)

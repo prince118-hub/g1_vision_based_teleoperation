@@ -35,7 +35,7 @@ class TeleopController:
         self._coast_count = 0        # consecutive dropout frames currently coasted
         self._have_good_pose = False  # becomes True after the first applied frame
         self._depth_state = {}        # per-side previous depth (X_rob) of el/wr targets
-        self._target_state = {}       # per-side previous full el/wr targets (for dead-zone)
+        self._still_state = {}        # per-side stillness-lock anchor + locked flag
 
     def _arms_have_nan(self, kp) -> bool:
         """Only guard we keep: never feed a NaN arm keypoint into IK, since
@@ -82,18 +82,36 @@ class TeleopController:
                             neutral, self.cfg.ik)
 
     def _apply_deadzone(self, side, el_target, wr_target):
-        """If the target barely moved since last frame, reuse the previous
-        target exactly. Sub-deadzone keypoint wobble then produces zero IK
-        change instead of a micro-twitch — the main jitter killer."""
-        dz = self.cfg.ik.target_deadzone
-        prev = self._target_state.get(side)
-        if prev is not None:
-            prev_el, prev_wr = prev
-            if (np.linalg.norm(el_target - prev_el) < dz and
-                    np.linalg.norm(wr_target - prev_wr) < dz):
-                return prev_el, prev_wr
-        self._target_state[side] = (el_target.copy(), wr_target.copy())
-        return el_target, wr_target
+        """Stillness lock (independent per arm): hold a fixed anchor target while
+        that arm is essentially still, releasing only when motion clearly exceeds
+        the break threshold. Zero recorded jitter when holding a pose, full
+        precision when moving. Hysteresis between enter/break prevents flicker."""
+        enter = self.cfg.ik.still_enter
+        brk = self.cfg.ik.still_break
+        st = self._still_state.get(side)
+
+        if st is None:
+            self._still_state[side] = {"anchor_el": el_target.copy(),
+                                       "anchor_wr": wr_target.copy(),
+                                       "locked": True}
+            return el_target, wr_target
+
+        d = max(np.linalg.norm(el_target - st["anchor_el"]),
+                np.linalg.norm(wr_target - st["anchor_wr"]))
+
+        if st["locked"]:
+            if d > brk:
+                st["locked"] = False
+                st["anchor_el"] = el_target.copy()
+                st["anchor_wr"] = wr_target.copy()
+                return el_target, wr_target
+            return st["anchor_el"], st["anchor_wr"]
+        else:
+            st["anchor_el"] = el_target.copy()
+            st["anchor_wr"] = wr_target.copy()
+            if d < enter:
+                st["locked"] = True
+            return el_target, wr_target
 
     def _smooth_depth(self, side, el_target, wr_target):
         """Low-pass only the forward/back axis (X_rob, index 0) of the targets.
