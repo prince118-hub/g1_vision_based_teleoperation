@@ -21,12 +21,14 @@ from g1_teleop import config as C
 def main() -> None:
     cfg = TeleopConfig()
     robot = G1Robot(cfg)
-    controller = TeleopController(robot, cfg)
+    controller = TeleopController(robot, cfg, debug_gate=True)
     zed = ZEDSource(cfg.zed)
 
+    print("=== teleop build: independent-arms + shoulder-snapshot (no averaging) ===")
     print("=== Link lengths (m) ===")
     print(f"  L upper/fore: {robot.upper_arm_left:.3f} / {robot.forearm_left:.3f}")
     print(f"  R upper/fore: {robot.upper_arm_right:.3f} / {robot.forearm_right:.3f}")
+    print("  (if L and R lengths are IDENTICAL you are running an old averaged file)")
     print("Move your arms — G1 mirrors. Q in camera window to quit.\n")
 
     try:

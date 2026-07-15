@@ -52,7 +52,7 @@ class TeleopController:
         if side == "left":
             sh, el, wr = C.LEFT_SHOULDER, C.LEFT_ELBOW, C.LEFT_WRIST
             ua, fa = r.upper_arm_left, r.forearm_left
-            shoulder_world = r.left_shoulder_world()
+            shoulder_world = self._shoulder_snapshot["left"]
             el_body, wr_body = r.left_elbow_body, r.left_wrist_body
             qpos, dof, lim = r.ik_left_qpos, r.ik_left_dof, r.ik_left_lim
             neutral = r.neutral_left
@@ -60,7 +60,7 @@ class TeleopController:
         else:
             sh, el, wr = C.RIGHT_SHOULDER, C.RIGHT_ELBOW, C.RIGHT_WRIST
             ua, fa = r.upper_arm_right, r.forearm_right
-            shoulder_world = r.right_shoulder_world()
+            shoulder_world = self._shoulder_snapshot["right"]
             el_body, wr_body = r.right_elbow_body, r.right_wrist_body
             qpos, dof, lim = r.ik_right_qpos, r.ik_right_dof, r.ik_right_lim
             neutral = r.neutral_right
@@ -82,36 +82,60 @@ class TeleopController:
                             neutral, self.cfg.ik)
 
     def _apply_deadzone(self, side, el_target, wr_target):
-        """Stillness lock (independent per arm): hold a fixed anchor target while
-        that arm is essentially still, releasing only when motion clearly exceeds
-        the break threshold. Zero recorded jitter when holding a pose, full
-        precision when moving. Hysteresis between enter/break prevents flicker."""
+        """Stillness lock (independent per arm).
+
+        Holds a fixed anchor pose while the arm is still (zero recorded jitter),
+        and releases only on a clear intentional move. The re-lock requires
+        SUSTAINED stillness — several consecutive low-movement frames — rather
+        than a single frame under threshold. Without that, ZED tracking noise
+        keeps every single frame above the enter threshold, the lock never
+        re-engages, and the arm follows the noise forever (the 'automove').
+        """
         enter = self.cfg.ik.still_enter
         brk = self.cfg.ik.still_break
+        need = self.cfg.ik.still_frames
         st = self._still_state.get(side)
 
         if st is None:
-            self._still_state[side] = {"anchor_el": el_target.copy(),
-                                       "anchor_wr": wr_target.copy(),
-                                       "locked": True}
+            self._still_state[side] = {
+                "anchor_el": el_target.copy(), "anchor_wr": wr_target.copy(),
+                "locked": True, "cand_el": el_target.copy(),
+                "cand_wr": wr_target.copy(), "still_count": 0,
+            }
             return el_target, wr_target
-
-        d = max(np.linalg.norm(el_target - st["anchor_el"]),
-                np.linalg.norm(wr_target - st["anchor_wr"]))
 
         if st["locked"]:
+            # Distance from the locked anchor. Only a clear move unlocks.
+            d = max(np.linalg.norm(el_target - st["anchor_el"]),
+                    np.linalg.norm(wr_target - st["anchor_wr"]))
             if d > brk:
                 st["locked"] = False
-                st["anchor_el"] = el_target.copy()
-                st["anchor_wr"] = wr_target.copy()
+                st["still_count"] = 0
+                st["cand_el"] = el_target.copy()
+                st["cand_wr"] = wr_target.copy()
                 return el_target, wr_target
             return st["anchor_el"], st["anchor_wr"]
+
+        # Unlocked: track the target, but watch for sustained stillness to relock.
+        # Movement is measured against a slowly-updated CANDIDATE anchor, not the
+        # live target, so noise around a held pose accumulates as "still" frames.
+        d_cand = max(np.linalg.norm(el_target - st["cand_el"]),
+                     np.linalg.norm(wr_target - st["cand_wr"]))
+        if d_cand < enter:
+            st["still_count"] += 1
         else:
-            st["anchor_el"] = el_target.copy()
-            st["anchor_wr"] = wr_target.copy()
-            if d < enter:
-                st["locked"] = True
-            return el_target, wr_target
+            st["still_count"] = 0
+            st["cand_el"] = el_target.copy()
+            st["cand_wr"] = wr_target.copy()
+
+        if st["still_count"] >= need:
+            # Sustained stillness -> relock at the candidate pose.
+            st["locked"] = True
+            st["anchor_el"] = st["cand_el"].copy()
+            st["anchor_wr"] = st["cand_wr"].copy()
+            return st["anchor_el"], st["anchor_wr"]
+
+        return el_target, wr_target
 
     def _smooth_depth(self, side, el_target, wr_target):
         """Low-pass only the forward/back axis (X_rob, index 0) of the targets.
@@ -159,6 +183,13 @@ class TeleopController:
             return self._coast()
 
         kp = frame.keypoints_3d
+        # Snapshot both shoulders BEFORE any IK runs. Each arm's IK calls
+        # mj_forward internally, which would otherwise shift the other arm's
+        # shoulder reading mid-frame and make one arm drift when the other moves.
+        self._shoulder_snapshot = {
+            "left": self.robot.left_shoulder_world(),
+            "right": self.robot.right_shoulder_world(),
+        }
         raw_left = self._solve_arm(kp, "left")
         raw_right = self._solve_arm(kp, "right")
         if raw_left is None or raw_right is None:

@@ -124,8 +124,9 @@ class IKConfig:
     neutral_weight: float = 0.03   # (legacy, unused by nullspace solver)
     nullspace_weight: float = 0.5  # pull toward seed pose in the nullspace (elbow-out)
     target_deadzone: float = 0.008  # (legacy, unused by stillness lock)
-    still_enter: float = 0.015     # settle below 15mm of motion -> lock (hold pose)
-    still_break: float = 0.035     # must exceed 35mm to unlock -> start tracking again
+    still_enter: float = 0.030     # per-frame motion below 30mm counts as "still"
+    still_break: float = 0.060     # must exceed 60mm to unlock and track (above ZED noise)
+    still_frames: int = 8          # this many consecutive still frames -> relock
 
 
 @dataclass(frozen=True)
