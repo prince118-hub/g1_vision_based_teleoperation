@@ -11,7 +11,7 @@ from typing import Dict, List
 
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-MODEL_PATH: str = r"D:\Charles_Aninon\Thesis Project\scene.xml"
+MODEL_PATH: str = r"D:\Charles_Aninon\Thesis Project\g1_vision_teleop\scene.xml"
 
 
 # ─── ZED BODY_38 keypoint indices ─────────────────────────────────────────────
@@ -51,7 +51,7 @@ SKELETON_PAIRS = [
 # (crushing forward reach, causing arms to drift sideways and jitter). Noise is
 # now handled by the depth_alpha temporal filter, so this can be near 1.0 to
 # keep real reach. Lower slightly if forward reach becomes too noisy.
-DEPTH_SCALE: float = 0.8
+DEPTH_SCALE: float = 0.6
 
 
 # ─── Joint names ──────────────────────────────────────────────────────────────
@@ -110,8 +110,8 @@ class SmoothingConfig:
     # One-Euro keypoint filter (Casiez et al. 2012): min_cutoff lower = smoother
     # when still; beta higher = more responsive during motion (less lag).
     euro_enabled: bool = True
-    euro_min_cutoff: float = 1.5
-    euro_beta: float = 0.05
+    euro_min_cutoff: float = 2.0
+    euro_beta: float = 0.08
     euro_freq: float = 30.0     # ZED body tracking runs ~30 Hz
 
 

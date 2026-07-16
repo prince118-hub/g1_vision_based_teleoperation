@@ -1,0 +1,80 @@
+<mujoco model="g1_29dof_rev_1_0 scene">
+  <include file="g1.xml"/>
+
+  <statistic center="1.2 0 0.8" extent="1.2"/>
+
+  <!-- Thesis Table 3.1: physics timestep 0.002s (500Hz), gravity 9.8 m/s^2 -->
+  <option timestep="0.002" gravity="0 0 -9.8"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.1 0.1 0.1" specular="0.9 0.9 0.9"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <!-- Default free-camera view: behind the robot looking forward (+x) toward
+         the pickup/goal platforms. offwidth/offheight enlarge the offscreen
+         framebuffer so run_teleop_combined.py can render at higher resolution. -->
+    <!-- offsamples enables multisample anti-aliasing for the offscreen renderer.
+         4x smooths edges well at much lower cost than 8x. Raise to 8 only if
+         your fps counter stays near 30. -->
+    <quality offsamples="4"/>
+    <global azimuth="0" elevation="-15" offwidth="1280" offheight="960"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+
+    <!-- ── Platform 1: pickup platform (floating table, box starts here) ──
+         Thin slab, NOT touching the ground — floats at waist height so the
+         robot doesn't have to bend or squat to reach it.
+         Top surface at z = 0.45 (pos z) + 0.02 (half-thickness) = 0.47 -->
+    <body name="platform_pickup" pos="1.8 1.5 0.45">
+      <geom name="platform_pickup_geom" type="box" size="0.18 0.18 0.02"
+            rgba="0.55 0.2 0.75 1"/>
+    </body>
+
+    <!-- ── Platform 2: goal platform (floating table, box is placed here) ── -->
+    <body name="platform_goal" pos="1.8 -1.5 0.45">
+      <geom name="platform_goal_geom" type="box" size="0.18 0.18 0.02"
+            rgba="0.55 0.2 0.75 1"/>
+    </body>
+
+    <!-- ── Goal marker: visual only, non-colliding (contype/conaffinity 0) ─
+         Used to measure placement success (Eq 3.11): ||p_box - p_goal|| < d_place -->
+    <body name="goal_marker" pos="1.8 -1.5 0.471">
+      <geom name="goal_marker_geom" type="cylinder" size="0.06 0.001"
+            rgba="0.1 0.9 0.1 0.6" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- ── Box: the manipulation target ────────────────────────────────
+         freejoint is required — without it the box is welded to the world
+         and cannot be picked up, dropped, or fall under gravity.
+
+         Sized at 18cm (size = 0.09 half-extent) so both G1 hands can press
+         opposite faces for a bimanual force-closure grasp.
+         Spawn z = pickup platform top (0.47) + box half-height (0.09) = 0.56.
+
+         PHYSICS for graspability:
+         - mass 0.4kg: light enough that friction from the inward press holds it
+         - diaginertia = m/12*(w^2+h^2) for a solid 0.18m cube = 0.00216
+         - friction "1.5 0.05 0.001": high tangential grip so it doesn't slip
+           out of the press; small torsional/rolling terms keep it from spinning
+         - solref/solimp: stiff, well-damped contact for a clean rest + grasp
+
+         NOTE: the box is NOT in g1.xml's keyframe, so mj_resetDataKeyframe
+         dumps it at the origin. Call reset_box() in Python AFTER any keyframe
+         reset to place it on the platform. -->
+    <body name="box1" pos="1.8 1.5 0.56">
+      <freejoint name="box1_joint"/>
+      <inertial pos="0 0 0" mass="0.4" diaginertia="0.00216 0.00216 0.00216"/>
+      <geom name="box1_geom" type="box" size="0.09 0.09 0.09"
+            rgba="1 0 0 1" friction="1.5 0.05 0.001"
+            solref="0.004 1" solimp="0.9 0.95 0.001"/>
+    </body>
+  </worldbody>
+</mujoco>
