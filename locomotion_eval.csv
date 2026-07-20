@@ -1,0 +1,340 @@
+t,strategy,scenario,vx,vy,wz,diag_key_values
+0.288,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.396,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.460,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.532,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.602,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.686,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.759,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.850,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.922,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+0.988,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.058,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.125,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.187,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.250,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.327,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.390,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.443,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.499,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.556,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.609,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.667,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.723,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.777,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.832,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.885,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.938,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+1.989,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.043,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.097,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.148,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.200,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.255,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.304,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.356,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.410,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.468,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.520,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.571,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.625,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.677,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.731,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.783,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.832,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.884,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.937,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+2.986,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.036,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.084,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.134,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.184,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.234,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.281,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.330,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.379,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.429,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.479,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.526,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.573,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.622,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.672,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.721,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.770,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.819,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.869,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.920,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+3.972,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.021,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.072,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.124,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.172,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.222,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.276,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.328,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.382,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.434,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.486,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.536,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.591,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.642,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.695,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.748,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.811,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.859,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.905,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.954,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+4.998,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.048,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.096,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.141,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.188,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.233,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.278,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.322,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.369,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.416,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.462,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.531,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.586,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.636,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.688,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.739,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.790,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.848,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.903,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+5.959,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+6.013,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+6.067,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+6.121,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+6.173,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+6.228,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.0 sustained=0.0 would_trigger=False
+6.278,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.23342627493807527 sustained=0.0 would_trigger=False
+6.329,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.1934585598337106 sustained=0.052240848541259766 would_trigger=False
+6.377,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+6.428,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.23105443522739147 sustained=0.15079569816589355 would_trigger=False
+6.482,pelvis_velocity,stand_still,-0.4982,-0.3347,0.0000,pelvis_visible=True vel_mag=0.3001053901987422 sustained=0.20431852340698242 would_trigger=True
+6.536,pelvis_velocity,stand_still,-0.4824,-0.3609,0.0000,pelvis_visible=True vel_mag=0.30122280829162396 sustained=0.25932836532592773 would_trigger=True
+6.589,pelvis_velocity,stand_still,-0.5620,-0.3722,0.0000,pelvis_visible=True vel_mag=0.33702317103392027 sustained=0.3118572235107422 would_trigger=True
+6.639,pelvis_velocity,stand_still,-0.5052,-0.3782,0.0000,pelvis_visible=True vel_mag=0.3155131328791691 sustained=0.36191821098327637 would_trigger=True
+6.694,pelvis_velocity,stand_still,-0.4569,-0.3195,0.0000,pelvis_visible=True vel_mag=0.2787718109526248 sustained=0.4174234867095947 would_trigger=True
+6.746,pelvis_velocity,stand_still,-0.2515,-0.1817,0.0000,pelvis_visible=True vel_mag=0.15516008249634627 sustained=0.4694225788116455 would_trigger=True
+6.798,pelvis_velocity,stand_still,-0.2655,-0.2489,0.0000,pelvis_visible=True vel_mag=0.18198755991117854 sustained=0.5209629535675049 would_trigger=True
+6.849,pelvis_velocity,stand_still,-0.1779,-0.2669,0.0000,pelvis_visible=True vel_mag=0.16040290484854314 sustained=0.5719599723815918 would_trigger=True
+6.901,pelvis_velocity,stand_still,-0.1483,-0.3341,0.0000,pelvis_visible=True vel_mag=0.18277615524687005 sustained=0.6234805583953857 would_trigger=True
+6.950,pelvis_velocity,stand_still,-0.1548,-0.4000,0.0000,pelvis_visible=True vel_mag=0.2468323996041199 sustained=0.6724817752838135 would_trigger=True
+6.997,pelvis_velocity,stand_still,-0.2158,-0.4000,0.0000,pelvis_visible=True vel_mag=0.2932992963069137 sustained=0.7200040817260742 would_trigger=True
+7.046,pelvis_velocity,stand_still,-0.1975,-0.4000,0.0000,pelvis_visible=True vel_mag=0.25852579242660306 sustained=0.7690038681030273 would_trigger=True
+7.095,pelvis_velocity,stand_still,-0.1308,-0.4000,0.0000,pelvis_visible=True vel_mag=0.22909882115538166 sustained=0.8165466785430908 would_trigger=True
+7.141,pelvis_velocity,stand_still,-0.0986,-0.3846,0.0000,pelvis_visible=True vel_mag=0.19849917536413858 sustained=0.8635561466217041 would_trigger=True
+7.187,pelvis_velocity,stand_still,-0.1776,-0.3406,0.0000,pelvis_visible=True vel_mag=0.19206629243792608 sustained=0.9100687503814697 would_trigger=True
+7.236,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.1488305718813147 sustained=0.0 would_trigger=False
+7.286,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.14502688145283857 sustained=0.0 would_trigger=False
+7.333,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.13858669189320805 sustained=0.0 would_trigger=False
+7.381,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.13241361452269398 sustained=0.0 would_trigger=False
+7.428,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.13225619776612133 sustained=0.0 would_trigger=False
+7.478,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.10349785413121208 sustained=0.0 would_trigger=False
+7.529,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.09564502920646556 sustained=0.0 would_trigger=False
+7.581,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.07541634009563088 sustained=0.0 would_trigger=False
+7.630,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.07103174435530132 sustained=0.0 would_trigger=False
+7.679,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.06152073068345304 sustained=0.0 would_trigger=False
+7.734,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.046177560033098204 sustained=0.0 would_trigger=False
+7.795,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.022295752376086785 sustained=0.0 would_trigger=False
+7.847,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.013953364338326012 sustained=0.0 would_trigger=False
+7.896,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.008875274639351796 sustained=0.0 would_trigger=False
+7.947,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.012177531582911313 sustained=0.0 would_trigger=False
+7.998,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.036267145020741964 sustained=0.0 would_trigger=False
+8.044,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.04400952319216973 sustained=0.0 would_trigger=False
+8.093,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.03669073434928542 sustained=0.0 would_trigger=False
+8.141,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.043736105854152545 sustained=0.0 would_trigger=False
+8.186,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.03906695440598939 sustained=0.0 would_trigger=False
+8.232,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.04449103105738973 sustained=0.0 would_trigger=False
+8.280,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.0016697472820560084 sustained=0.0 would_trigger=False
+8.325,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.011904724039538364 sustained=0.0 would_trigger=False
+8.370,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.015415558976403381 sustained=0.0 would_trigger=False
+8.430,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.025152820194640702 sustained=0.0 would_trigger=False
+8.489,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.04622422912745807 sustained=0.0 would_trigger=False
+8.535,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.05796112911714243 sustained=0.0 would_trigger=False
+8.583,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.1502270519637986 sustained=0.0 would_trigger=False
+8.630,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.16958653361508658 sustained=0.04700040817260742 would_trigger=False
+8.679,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.2103883203759431 sustained=0.09600019454956055 would_trigger=False
+8.726,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.2552595416675784 sustained=0.1429917812347412 would_trigger=False
+8.776,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.25456954037359497 sustained=0.19299602508544922 would_trigger=False
+8.827,pelvis_velocity,stand_still,0.4740,0.1438,0.0000,pelvis_visible=True vel_mag=0.24767577383617842 sustained=0.24400067329406738 would_trigger=True
+8.876,pelvis_velocity,stand_still,0.3398,0.0699,0.0000,pelvis_visible=True vel_mag=0.1734324854953623 sustained=0.2930030822753906 would_trigger=True
+8.926,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+8.973,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.024,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.070,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.120,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.167,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.214,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.260,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.307,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.359,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.406,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.454,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.505,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.567,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.627,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.684,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.737,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.791,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.845,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.895,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+9.949,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.001,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.052,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.102,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.155,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.209,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.278,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.344,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.410,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.477,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.542,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.606,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.675,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.744,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.807,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.873,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+10.939,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.000,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.063,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.123,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.180,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.238,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.295,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.358,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.424,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.484,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.544,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+11.606,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.0 sustained=0.0 would_trigger=False
+11.663,pelvis_velocity,stand_still,-0.8000,-0.4000,0.0000,pelvis_visible=True vel_mag=1.2167400328171438 sustained=3.0800018310546875 would_trigger=True
+11.716,pelvis_velocity,stand_still,-0.8000,-0.4000,0.0000,pelvis_visible=True vel_mag=0.843169379147287 sustained=3.132993221282959 would_trigger=True
+11.774,pelvis_velocity,stand_still,-0.8000,-0.4000,0.0000,pelvis_visible=True vel_mag=0.7292183022014106 sustained=3.1909918785095215 would_trigger=True
+11.829,pelvis_velocity,stand_still,-0.8000,-0.4000,0.0000,pelvis_visible=True vel_mag=0.596724484364344 sustained=3.2460007667541504 would_trigger=True
+11.880,pelvis_velocity,stand_still,-0.7756,-0.4000,0.0000,pelvis_visible=True vel_mag=0.49813353016460554 sustained=3.296999931335449 would_trigger=True
+11.937,pelvis_velocity,stand_still,-0.4340,-0.4000,0.0000,pelvis_visible=True vel_mag=0.30592822522423974 sustained=3.3539984226226807 would_trigger=True
+11.987,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+12.039,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+12.094,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.12978734919966517 sustained=0.0 would_trigger=False
+12.143,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.11487147055958291 sustained=0.0 would_trigger=False
+12.196,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.03878835553040788 sustained=0.0 would_trigger=False
+12.246,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.05909018699101562 sustained=0.0 would_trigger=False
+12.299,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.05847420754152436 sustained=0.0 would_trigger=False
+12.352,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.07431591416100893 sustained=0.0 would_trigger=False
+12.404,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.12262076571275105 sustained=0.0 would_trigger=False
+12.458,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.06592442064280843 sustained=0.0 would_trigger=False
+12.509,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.05987977126215294 sustained=0.0 would_trigger=False
+12.565,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.06768538736113312 sustained=0.0 would_trigger=False
+12.615,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.09754151126605178 sustained=0.0 would_trigger=False
+12.665,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.14001564049258963 sustained=0.0 would_trigger=False
+12.713,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.07883365299640302 sustained=0.0 would_trigger=False
+12.763,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.0723487551367524 sustained=0.0 would_trigger=False
+12.812,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.05552451738845743 sustained=0.0 would_trigger=False
+12.864,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.0480794465040891 sustained=0.0 would_trigger=False
+12.914,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.04188588726776586 sustained=0.0 would_trigger=False
+12.967,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.030066596121025482 sustained=0.0 would_trigger=False
+13.019,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.03078768461488685 sustained=0.0 would_trigger=False
+13.069,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.04658794143784601 sustained=0.0 would_trigger=False
+13.114,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.05486617422690725 sustained=0.0 would_trigger=False
+13.161,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.04409960585823838 sustained=0.0 would_trigger=False
+13.208,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.040669936189642215 sustained=0.0 would_trigger=False
+13.256,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.03176027050132591 sustained=0.0 would_trigger=False
+13.302,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.029468338743837377 sustained=0.0 would_trigger=False
+13.349,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.08615820947895705 sustained=0.0 would_trigger=False
+13.395,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.10841024801014679 sustained=0.0 would_trigger=False
+13.444,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.13963671819589082 sustained=0.0 would_trigger=False
+13.492,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.17067026396018717 sustained=0.0 would_trigger=False
+13.538,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.1699273029998893 sustained=0.046000003814697266 would_trigger=False
+13.586,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.21132934864183772 sustained=0.09399962425231934 would_trigger=False
+13.631,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.1583229058630906 sustained=0.13899970054626465 would_trigger=False
+13.678,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,pelvis_visible=True vel_mag=0.18628802754299925 sustained=0.18600106239318848 would_trigger=False
+13.727,pelvis_velocity,stand_still,0.3962,0.3723,0.0000,pelvis_visible=True vel_mag=0.27181878381474894 sustained=0.2350001335144043 would_trigger=True
+13.774,pelvis_velocity,stand_still,0.4258,0.4000,0.0000,pelvis_visible=True vel_mag=0.3186231241700026 sustained=0.2820000648498535 would_trigger=True
+13.822,pelvis_velocity,stand_still,0.6639,0.4000,0.0000,pelvis_visible=True vel_mag=0.4460719655731938 sustained=0.3299996852874756 would_trigger=True
+13.868,pelvis_velocity,stand_still,0.6413,0.4000,0.0000,pelvis_visible=True vel_mag=0.4238709504871271 sustained=0.37600016593933105 would_trigger=True
+13.915,pelvis_velocity,stand_still,0.8000,0.4000,0.0000,pelvis_visible=True vel_mag=0.5308917885522152 sustained=0.4219996929168701 would_trigger=True
+13.961,pelvis_velocity,stand_still,0.8000,0.4000,0.0000,pelvis_visible=True vel_mag=0.5358075611023266 sustained=0.46899962425231934 would_trigger=True
+14.011,pelvis_velocity,stand_still,0.7880,0.4000,0.0000,pelvis_visible=True vel_mag=0.4717455427602241 sustained=0.5190012454986572 would_trigger=True
+14.060,pelvis_velocity,stand_still,0.7167,0.4000,0.0000,pelvis_visible=True vel_mag=0.42079000055378474 sustained=0.568000316619873 would_trigger=True
+14.106,pelvis_velocity,stand_still,0.5778,0.3984,0.0000,pelvis_visible=True vel_mag=0.35090386829562303 sustained=0.6140005588531494 would_trigger=True
+14.157,pelvis_velocity,stand_still,0.5747,0.4000,0.0000,pelvis_visible=True vel_mag=0.3553171978087329 sustained=0.6649999618530273 would_trigger=True
+14.205,pelvis_velocity,stand_still,0.4556,0.3195,0.0000,pelvis_visible=True vel_mag=0.27820896369853 sustained=0.7130000591278076 would_trigger=True
+14.255,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.302,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.352,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.400,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.451,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.499,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.550,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.600,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.654,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.704,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.758,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.811,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.869,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.922,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+14.977,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.035,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.088,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.139,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.191,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.239,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.287,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.333,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.380,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.425,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.470,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.515,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.560,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.605,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.649,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.687,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.725,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.765,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.809,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.853,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.895,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.936,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+15.984,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.028,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.069,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.113,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.156,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.201,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.249,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.300,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.341,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.381,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.422,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.462,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.503,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.543,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.582,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.621,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.661,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.706,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.750,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.791,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.834,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.881,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.928,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+16.973,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.019,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.063,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.122,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.172,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.221,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.267,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.316,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.361,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.407,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.456,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.504,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.547,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.589,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.630,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.671,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True
+17.715,pelvis_velocity,stand_still,0.0000,0.0000,0.0000,no_body_detected=True

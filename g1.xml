@@ -300,19 +300,19 @@
   </worldbody>
 
   <actuator>
-    <position class="g1" name="left_hip_pitch_joint" joint="left_hip_pitch_joint"/>
-    <position class="g1" name="left_hip_roll_joint" joint="left_hip_roll_joint"/>
-    <position class="g1" name="left_hip_yaw_joint" joint="left_hip_yaw_joint"/>
-    <position class="g1" name="left_knee_joint" joint="left_knee_joint"/>
-    <position class="g1" name="left_ankle_pitch_joint" joint="left_ankle_pitch_joint"/>
-    <position class="g1" name="left_ankle_roll_joint" joint="left_ankle_roll_joint"/>
+    <motor name="left_hip_pitch_joint" joint="left_hip_pitch_joint"/>
+    <motor name="left_hip_roll_joint" joint="left_hip_roll_joint"/>
+    <motor name="left_hip_yaw_joint" joint="left_hip_yaw_joint"/>
+    <motor name="left_knee_joint" joint="left_knee_joint"/>
+    <motor name="left_ankle_pitch_joint" joint="left_ankle_pitch_joint"/>
+    <motor name="left_ankle_roll_joint" joint="left_ankle_roll_joint"/>
 
-    <position class="g1" name="right_hip_pitch_joint" joint="right_hip_pitch_joint"/>
-    <position class="g1" name="right_hip_roll_joint" joint="right_hip_roll_joint"/>
-    <position class="g1" name="right_hip_yaw_joint" joint="right_hip_yaw_joint"/>
-    <position class="g1" name="right_knee_joint" joint="right_knee_joint"/>
-    <position class="g1" name="right_ankle_pitch_joint" joint="right_ankle_pitch_joint"/>
-    <position class="g1" name="right_ankle_roll_joint" joint="right_ankle_roll_joint"/>
+    <motor name="right_hip_pitch_joint" joint="right_hip_pitch_joint"/>
+    <motor name="right_hip_roll_joint" joint="right_hip_roll_joint"/>
+    <motor name="right_hip_yaw_joint" joint="right_hip_yaw_joint"/>
+    <motor name="right_knee_joint" joint="right_knee_joint"/>
+    <motor name="right_ankle_pitch_joint" joint="right_ankle_pitch_joint"/>
+    <motor name="right_ankle_roll_joint" joint="right_ankle_roll_joint"/>
 
     <position class="g1" name="waist_yaw_joint" joint="waist_yaw_joint"/>
     <position class="g1" name="waist_roll_joint" joint="waist_roll_joint"/>
@@ -352,7 +352,7 @@
       0 0 0
       0.2 0.2 0 1.28 0 0 0
       0.2 -0.2 0 1.28 0 0 0
-      1.8 1.5 0.56 1 0 0 0
+      1.5 0 0.84 1 0 0 0
       "
       ctrl="
       0 0 0 0 0 0

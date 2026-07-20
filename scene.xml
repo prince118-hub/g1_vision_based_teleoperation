@@ -33,20 +33,20 @@
          Thin slab, NOT touching the ground — floats at waist height so the
          robot doesn't have to bend or squat to reach it.
          Top surface at z = 0.45 (pos z) + 0.02 (half-thickness) = 0.47 -->
-    <body name="platform_pickup" pos="1.8 1.5 0.45">
+    <body name="platform_pickup" pos="1.5 0 0.73">
       <geom name="platform_pickup_geom" type="box" size="0.18 0.18 0.02"
             rgba="0.55 0.2 0.75 1"/>
     </body>
 
     <!-- ── Platform 2: goal platform (floating table, box is placed here) ── -->
-    <body name="platform_goal" pos="1.8 -1.5 0.45">
+    <body name="platform_goal" pos="1.5 -1.5 0.73">
       <geom name="platform_goal_geom" type="box" size="0.18 0.18 0.02"
             rgba="0.55 0.2 0.75 1"/>
     </body>
 
     <!-- ── Goal marker: visual only, non-colliding (contype/conaffinity 0) ─
          Used to measure placement success (Eq 3.11): ||p_box - p_goal|| < d_place -->
-    <body name="goal_marker" pos="1.8 -1.5 0.471">
+    <body name="goal_marker" pos="1.5 -1.5 0.751">
       <geom name="goal_marker_geom" type="cylinder" size="0.06 0.001"
             rgba="0.1 0.9 0.1 0.6" contype="0" conaffinity="0"/>
     </body>
@@ -69,7 +69,7 @@
          NOTE: the box is NOT in g1.xml's keyframe, so mj_resetDataKeyframe
          dumps it at the origin. Call reset_box() in Python AFTER any keyframe
          reset to place it on the platform. -->
-    <body name="box1" pos="1.8 1.5 0.56">
+    <body name="box1" pos="1.5 0 0.84">
       <freejoint name="box1_joint"/>
       <inertial pos="0 0 0" mass="0.4" diaginertia="0.00216 0.00216 0.00216"/>
       <geom name="box1_geom" type="box" size="0.09 0.09 0.09"

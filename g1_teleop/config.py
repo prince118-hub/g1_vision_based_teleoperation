@@ -7,11 +7,16 @@ limits, torso yaw, validity gating, and box spawning.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List
 
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-MODEL_PATH: str = r"D:\Charles_Aninon\Thesis Project\g1_vision_teleop\scene.xml"
+# scene.xml sits one level above this package, next to run_teleop.py. Resolving
+# it relative to this file means the path does not break when the project is
+# moved or run from a different working directory.
+_PACKAGE_DIR = Path(__file__).resolve().parent
+MODEL_PATH: str = str(_PACKAGE_DIR.parent / "scene.xml")
 
 
 # ─── ZED BODY_38 keypoint indices ─────────────────────────────────────────────
@@ -176,9 +181,9 @@ class GatingConfig:
 @dataclass(frozen=True)
 class BoxConfig:
     """Box spawn parameters. Must match scene.xml platform_pickup position."""
-    pickup_center: tuple = (1.8, 1.5)   # platform_pickup x, y (world frame)
+    pickup_center: tuple = (1.5, 0.0)   # platform_pickup x, y (directly ahead of the robot)
     pickup_half: float = 0.13           # uniform sampling half-range on platform
-    spawn_z: float = 0.56               # platform top (0.47) + box half-height (0.09)
+    spawn_z: float = 0.84               # platform top (0.75) + box half-height (0.09)
     body_name: str = "box1"
 
 
@@ -188,6 +193,9 @@ class ZEDConfig:
     resolution: str = "HD720"
     depth_mode: str = "NEURAL"
     confidence_threshold: int = 50
+    body_model: str = "HUMAN_BODY_ACCURATE"
+    body_fitting: bool = True
+    camera_fps: int = 30
 
 
 @dataclass(frozen=True)

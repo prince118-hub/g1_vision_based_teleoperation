@@ -13,3 +13,5 @@ env/
 demonstrations/
 *.npz
 *.hdf5
+test_locomotion_input.py
+summarise_locomotion_eval.py
