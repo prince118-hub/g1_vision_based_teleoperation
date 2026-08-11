@@ -1,17 +1,9 @@
-"""Tracking-validity gating.
+"""Tracking-validity gating."""
 
-Rejects unreliable frames so self-occlusion, low-confidence keypoints, and
-physically implausible poses never reach the IK solver. When a frame is
-rejected the caller freezes the robot at its last good pose instead of
-following corrupted tracking data. This is the Stage 1 robustness layer that
-protects demonstration quality.
-"""
 from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence
-
 import numpy as np
 
 from .config import GatingConfig
@@ -51,12 +43,6 @@ def evaluate_frame(
     right_wrist: int,
     depth_scale: float,
 ) -> GateResult:
-    """Return whether this frame's tracking is trustworthy enough to drive IK.
-
-    Checks, in order: NaN keypoints, per-keypoint confidence, plausible limb
-    segment lengths, and demonstrator facing angle (rejects large torso yaw
-    where self-occlusion swaps or drops arm keypoints).
-    """
     for idx in required:
         if np.any(np.isnan(keypoints[idx])):
             return GateResult(False, RejectReason.NAN)

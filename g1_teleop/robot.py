@@ -1,13 +1,7 @@
-"""G1 robot model wrapper.
+"""G1 robot model wrapper."""
 
-Encapsulates the MuJoCo model/data, resolves joint and body IDs once, exposes
-link lengths, and provides box spawning and waist-yaw control. Keeps MuJoCo
-index bookkeeping out of the main loop.
-"""
 from __future__ import annotations
-
 from typing import List
-
 import numpy as np
 import mujoco
 
@@ -29,8 +23,6 @@ def _body_id(model, name: str) -> int:
 
 
 class G1Robot:
-    """Wrapper resolving all indices and exposing teleop-relevant operations."""
-
     def __init__(self, cfg: C.TeleopConfig):
         self.cfg = cfg
         self.model = mujoco.MjModel.from_xml_path(cfg.model_path)
@@ -48,7 +40,6 @@ class G1Robot:
 
         self.reset_box(randomize=False)
 
-    # ── setup ──────────────────────────────────────────────────────────────
     def _apply_wrist_natural(self) -> None:
         for name, angle in C.WRIST_NATURAL.items():
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -77,9 +68,6 @@ class G1Robot:
         rdof, rqpos, rlim = self._arm_arrays(C.RIGHT_ARM_JOINTS)
         self.ik_left_dof, self.ik_left_qpos, self.ik_left_lim = ldof[:n], lqpos[:n], llim[:n]
         self.ik_right_dof, self.ik_right_qpos, self.ik_right_lim = rdof[:n], rqpos[:n], rlim[:n]
-        # Seed poses for the IK nullspace (elbow-out forward reach), clamped to
-        # each joint's limit. These, not the all-zeros keyframe, are what the
-        # nullspace pulls toward to keep the arm from folding across the chest.
         self.neutral_left = np.clip(np.array(C.IK_SEED_LEFT),
                                     [l[0] for l in self.ik_left_lim],
                                     [l[1] for l in self.ik_left_lim])
@@ -105,14 +93,12 @@ class G1Robot:
         self.upper_arm_right = np.linalg.norm(x[self.right_elbow_body] - x[self.right_shoulder_body])
         self.forearm_right = np.linalg.norm(x[self.right_wrist_body] - x[self.right_elbow_body])
 
-    # ── live accessors ─────────────────────────────────────────────────────
     def left_shoulder_world(self) -> np.ndarray:
         return self.data.xpos[self.left_shoulder_body].copy()
 
     def right_shoulder_world(self) -> np.ndarray:
         return self.data.xpos[self.right_shoulder_body].copy()
 
-    # ── control ────────────────────────────────────────────────────────────
     def set_arm_qpos(self, qpos_ids, values) -> None:
         for qid, v in zip(qpos_ids, values):
             self.data.qpos[qid] = v

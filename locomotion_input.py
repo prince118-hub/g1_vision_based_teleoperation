@@ -232,10 +232,16 @@ class KeyboardCommand:
     PRECISION MODE
     The final approach to the platform needs finer control than crossing the
     room. Press 'p' to halve the speeds for accurate positioning.
+
+    TURNING RADIUS
+    Radius is forward_speed / turn_speed, so a gentler turn_speed at the same
+    forward_speed sweeps a wider arc. At 0.35 m/s and 0.25 rad/s the radius is
+    about 1.4 m, which is controllable; the previous 0.5 rad/s gave 1.1 m and
+    felt sharp. Raising forward_speed also widens the radius.
     """
 
-    def __init__(self, forward_speed=0.55, turn_speed=0.5, release_sec=0.25,
-                 precision_scale=0.4):
+    def __init__(self, forward_speed=0.35, turn_speed=0.25, release_sec=0.25,
+                 precision_scale=0.5):
         self.forward_speed = forward_speed
         self.turn_speed = turn_speed
         self.release_sec = release_sec

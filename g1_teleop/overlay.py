@@ -1,8 +1,7 @@
 """OpenCV debug overlay for the camera view."""
+
 from __future__ import annotations
-
 from typing import List, Optional, Sequence
-
 import cv2
 
 from .config import SKELETON_PAIRS
@@ -20,7 +19,6 @@ def draw_skeleton(frame, kp_2d: Sequence[Optional[tuple]],
 
 
 def draw_status(frame, lines: List[tuple]) -> None:
-    """lines: list of (text, (b, g, r)) drawn top-down."""
     y = 30
     for text, color in lines:
         cv2.putText(frame, text, (10, y),

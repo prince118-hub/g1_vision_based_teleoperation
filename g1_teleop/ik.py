@@ -1,8 +1,7 @@
 """Damped least-squares inverse kinematics for the G1 arms."""
+
 from __future__ import annotations
-
 from typing import Sequence
-
 import numpy as np
 import mujoco
 
@@ -48,10 +47,6 @@ def solve_arm_ik(
         jac_pinv = jac.T @ np.linalg.solve(jjt, np.eye(6))
         dq_task = jac_pinv @ err
 
-        # Nullspace projection: push toward the seed pose WITHOUT disturbing the
-        # end-effector target. This resolves the redundant DOF consistently to
-        # the natural (elbow-out) solution instead of flipping between elbow-in
-        # and elbow-out frame to frame. (ExtremControl-style joint seeding.)
         current_q = np.array([data.qpos[qid] for qid in qpos_ids])
         seed_pull = cfg.nullspace_weight * (neutral_q - current_q)
         nullspace = (eye_n - jac_pinv @ jac) @ seed_pull

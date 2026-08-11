@@ -28,6 +28,7 @@ Camera (click the window first):
   q      quit
 """
 import sys
+import threading
 import time
 
 import cv2
@@ -68,7 +69,7 @@ DEFAULT_ANGLES = np.array([-0.1, 0.0, 0.0, 0.3, -0.2, 0.0,
                            -0.1, 0.0, 0.0, 0.3, -0.2, 0.0], dtype=np.float32)
 ANG_VEL_SCALE, DOF_POS_SCALE, DOF_VEL_SCALE, ACTION_SCALE = 0.25, 1.0, 0.05, 0.25
 CMD_SCALE = np.array([2.0, 2.0, 0.25], dtype=np.float32)
-NUM_ACTIONS, NUM_OBS, GAIT_PERIOD = 12, 47, 0.8
+NUM_ACTIONS, NUM_OBS = 12, 47
 
 IDLE_THRESHOLD, HOLD_KP, HOLD_MAX, HOLD_DEADBAND = 0.05, 0.8, 0.25, 0.02
 
@@ -78,6 +79,37 @@ IDLE_THRESHOLD, HOLD_KP, HOLD_MAX, HOLD_DEADBAND = 0.05, 0.8, 0.25, 0.02
 # 0.33 m of horizontal reach, so the base has to stop within this band of the
 # box or the arms cannot get to it.
 GRASP_MIN, GRASP_MAX = 0.20, 0.34
+
+# ── Heading hold ──────────────────────────────────────────────────────────────
+# The position-hold loop corrects x and y but nothing corrected yaw, so while
+# the robot marched in place its facing drifted freely and never came back.
+# These close that loop: capture the heading when the operator stops commanding
+# motion, and feed a small corrective turn to hold it.
+HOLD_YAW_KP = 1.2         # rad/s per radian of heading error
+HOLD_YAW_MAX = 0.25       # cap on corrective turn rate
+HOLD_YAW_DEADBAND = 0.03  # ignore errors under ~1.7 degrees
+
+# ── Why the robot always marches in place ────────────────────────────────────
+# The policy's observation includes a gait phase as sin/cos of a clock that runs
+# unconditionally. It was trained with that clock always cycling, including at
+# zero velocity command, so it learned that "no velocity" means "step in place".
+# There is no standstill behaviour inside the network, because balance IS the
+# stepping — the gait continuously repositions the support polygon under the
+# centre of mass.
+#
+# Two mitigations were implemented and rejected:
+#   - Freezing the leg targets removes the balance controller entirely; the
+#     robot topples within seconds.
+#   - Freezing the phase input while still querying the policy preserves balance
+#     but puts the network outside its training distribution, producing an
+#     unnatural stance and unstable walk/stop transitions.
+# Both are documented as a limitation rather than worked around further.
+
+# Gait cadence. This is the value the policy was trained with. It is not
+# adjustable from here: attempts to slow it (constant slower period, and an
+# idle/moving blend) destabilised the gait, and the measured leg cadence did
+# not follow the commanded clock. Stepping rate is fixed inside the network.
+GAIT_PERIOD = 0.8
 
 LEG_QPOS, LEG_QVEL = slice(7, 19), slice(6, 18)
 LEG_CTRL, ARM_CTRL = slice(0, 12), slice(12, 29)
@@ -125,6 +157,48 @@ def text(img, s, org, scale=0.55, color=(255, 255, 255)):
     cv2.putText(img, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
 
+
+# Display refresh rate. Rendering and key polling are decoupled from both the
+# physics rate and the camera rate so neither can stall the other.
+# Must be a multiple of CONTROL_DECIMATION, because the render check is only
+# reached on control ticks. 20 steps x 0.002 s = 40 ms => 25 Hz display.
+RENDER_DECIMATION = 20
+
+
+class FrameGrabber(threading.Thread):
+    """Pulls ZED frames on a background thread.
+
+    zed.grab() blocks for 35-50 ms. Calling it inside the physics loop meant ten
+    physics steps (20 ms of simulated time) cost ~50 ms of wall time, so the
+    simulation ran at roughly 40% of real time and every control input felt
+    delayed. Grabbing off-thread lets physics run at full rate; the main loop
+    simply reads whatever the most recent frame is.
+    """
+
+    def __init__(self, zed):
+        super().__init__(daemon=True)
+        self.zed = zed
+        self._lock = threading.Lock()
+        self._frame = None
+        self._seq = 0
+        self._running = True
+
+    def run(self):
+        while self._running:
+            frame = self.zed.grab()
+            if frame is not None:
+                with self._lock:
+                    self._frame = frame
+                    self._seq += 1
+
+    def latest(self):
+        with self._lock:
+            return self._frame, self._seq
+
+    def stop(self):
+        self._running = False
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "pelvis"
     if which.startswith("p"):
@@ -147,6 +221,8 @@ def main():
     twin = G1Robot(cfg)
     controller = TeleopController(twin, cfg)
     zed = ZEDSource(cfg.zed)
+    grabber = FrameGrabber(zed)
+    grabber.start()
 
     twin_upper_qpos = []
     for name in UPPER_BODY_JOINTS:
@@ -180,11 +256,15 @@ def main():
     obs = np.zeros(NUM_OBS, dtype=np.float32)
     cmd = np.zeros(3, dtype=np.float32)
     hold_target = np.array(data.qpos[0:2], dtype=np.float64)
+    hold_yaw = yaw_from_quat(data.qpos[3:7])
     arm_targets = np.array(data.ctrl[ARM_CTRL], dtype=np.float32)
     counter = 0
     status_text, status_color = "waiting for ZED", (0, 100, 255)
     loco_diag = {}
     last_disp = None
+    last_seq = -1
+    frame = None
+    wall_start = time.time()
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, ZED_PANEL_W + MJ_PANEL_W, PANEL_H)
@@ -205,18 +285,35 @@ def main():
             if counter % CONTROL_DECIMATION:
                 continue
 
+            # Pace the simulation to wall time. Without the blocking camera call
+            # physics would free-run and the robot would move faster than real
+            # time, which is unusable for teleoperation.
+            sim_elapsed = counter * SIM_DT
+            wall_elapsed = time.time() - wall_start
+            if sim_elapsed > wall_elapsed:
+                time.sleep(sim_elapsed - wall_elapsed)
+
             # ── Velocity command: hold station when nothing is commanded ────
             if np.linalg.norm(cmd) < IDLE_THRESHOLD:
+                active_cmd = np.zeros(3, dtype=np.float32)
+                yaw_now = yaw_from_quat(data.qpos[3:7])
+
+                # Position hold.
                 err_world = hold_target - data.qpos[0:2]
-                if np.linalg.norm(err_world) < HOLD_DEADBAND:
-                    active_cmd = np.zeros(3, dtype=np.float32)
-                else:
-                    err_body = world_to_body(err_world, yaw_from_quat(data.qpos[3:7]))
-                    active_cmd = np.zeros(3, dtype=np.float32)
-                    active_cmd[0:2] = np.clip(HOLD_KP * err_body, -HOLD_MAX, HOLD_MAX)
+                if np.linalg.norm(err_world) >= HOLD_DEADBAND:
+                    err_body = world_to_body(err_world, yaw_now)
+                    active_cmd[0:2] = np.clip(HOLD_KP * err_body,
+                                              -HOLD_MAX, HOLD_MAX)
+
+                # Heading hold, so the facing does not drift while marching.
+                yaw_err = (hold_yaw - yaw_now + np.pi) % (2 * np.pi) - np.pi
+                if abs(yaw_err) >= HOLD_YAW_DEADBAND:
+                    active_cmd[2] = float(np.clip(HOLD_YAW_KP * yaw_err,
+                                                  -HOLD_YAW_MAX, HOLD_YAW_MAX))
             else:
                 active_cmd = cmd.astype(np.float32)
                 hold_target[:] = data.qpos[0:2]
+                hold_yaw = yaw_from_quat(data.qpos[3:7])
 
             qj = (data.qpos[LEG_QPOS] - DEFAULT_ANGLES) * DOF_POS_SCALE
             dqj = data.qvel[LEG_QVEL] * DOF_VEL_SCALE
@@ -234,37 +331,38 @@ def main():
             action = policy(torch.from_numpy(obs).unsqueeze(0)).detach().numpy().squeeze()
             target_leg_pos = action * ACTION_SCALE + DEFAULT_ANGLES
 
-            # ── ZED: locomotion command + arm IK ────────────────────────────
-            frame = zed.grab()
+            # ── ZED: non-blocking read of the newest frame ──────────────────
+            # The grabber thread owns zed.grab(). We only process a frame when
+            # its sequence number changes, so the physics loop never waits on
+            # the camera.
+            new_frame, seq = grabber.latest()
+            if new_frame is not None and seq != last_seq:
+                last_seq = seq
+                frame = new_frame
+                if frame.keypoints_3d:
+                    outcome = controller.step(frame)
+                    status_text = ("IK OK" if outcome.applied
+                                   else f"HOLD: {outcome.reason.value}")
+                    status_color = (0, 255, 0) if outcome.applied else (0, 100, 255)
+                    arm_targets = np.array(
+                        [twin.data.qpos[a] for a in twin_upper_qpos],
+                        dtype=np.float32)
+                    draw_skeleton(frame.image, frame.keypoints_2d,
+                                  frame.confidences, C.REQUIRED_KEYPOINTS)
+                    if not isinstance(loco, KeyboardCommand):
+                        cmd[:] = loco(frame.keypoints_3d)
+                        loco_diag = getattr(loco, "diag", {})
+                else:
+                    status_text, status_color = "no body detected", (0, 100, 255)
 
-            if frame is not None and frame.keypoints_3d:
-                outcome = controller.step(frame)
-                status_text = ("IK OK" if outcome.applied
-                               else f"HOLD: {outcome.reason.value}")
-                status_color = (0, 255, 0) if outcome.applied else (0, 100, 255)
-                arm_targets = np.array([twin.data.qpos[a] for a in twin_upper_qpos],
-                                       dtype=np.float32)
-                draw_skeleton(frame.image, frame.keypoints_2d,
-                              frame.confidences, C.REQUIRED_KEYPOINTS)
-            elif frame is not None:
-                status_text, status_color = "no body detected", (0, 100, 255)
-
-            # The command source is updated every tick regardless of tracking.
-            # KeyboardCommand ignores keypoints entirely, so gating this on body
-            # detection would make the arrow keys dead whenever you step out of
-            # frame. Vision strategies handle missing keypoints internally.
+            # KeyboardCommand ignores keypoints, so it updates every control
+            # tick rather than only when the camera delivers a frame.
             if isinstance(loco, KeyboardCommand):
                 cmd[:] = loco()
-            elif frame is not None and frame.keypoints_3d:
-                cmd[:] = loco(frame.keypoints_3d)
                 loco_diag = getattr(loco, "diag", {})
 
-            if frame is None:
-                # No new camera frame: still service the window so keyboard and
-                # camera controls stay responsive between ZED frames.
-                key_raw = cv2.waitKeyEx(1)
-                if key_raw != -1 and (key_raw & 0xFF) == ord("q"):
-                    break
+            # ── Render and input on their own cadence ───────────────────────
+            if counter % RENDER_DECIMATION or frame is None:
                 continue
 
             # ── Left panel: camera ──────────────────────────────────────────
@@ -311,12 +409,17 @@ def main():
 
             if isinstance(loco, KeyboardCommand) and loco.precision:
                 text(right, "PRECISION", (10, 182), 0.6, (255, 200, 0))
+            hd = np.degrees((hold_yaw - yaw_from_quat(data.qpos[3:7]) + np.pi)
+                            % (2 * np.pi) - np.pi)
+            text(right, f"HEADING  now {np.degrees(yaw_from_quat(data.qpos[3:7])):+6.1f}"
+                        f"   target {np.degrees(hold_yaw):+6.1f}   err {hd:+5.1f}",
+                 (10, 210), 0.5, (255, 255, 255))
 
             # Flag motion that the demonstrator did not ask for.
             moving = last_disp is not None and abs(travelled - last_disp) > 0.004
             commanded = np.linalg.norm(cmd) > IDLE_THRESHOLD
             if moving and not commanded:
-                text(right, "UNCOMMANDED MOTION", (10, 118), 0.75, (0, 80, 255))
+                text(right, "UNCOMMANDED MOTION", (10, 242), 0.7, (0, 80, 255))
             last_disp = travelled
 
             hint = "a/d rot  w/s tilt  +/- zoom  r reset  space stop  q quit"
@@ -326,10 +429,27 @@ def main():
 
             cv2.imshow(WINDOW, np.hstack([left, right]))
 
-            # waitKeyEx reports extended codes, so real arrow keys come through.
-            # Plain waitKey masks them off, which is why arrows appeared dead.
-            raw = cv2.waitKeyEx(1)
-            key = raw & 0xFF if raw != -1 else 255
+            # DRAIN the key queue rather than taking one event per poll.
+            #
+            # Holding a key triggers keyboard auto-repeat at roughly 30 events
+            # per second. OpenCV queues them. Consuming one per render tick
+            # (~25 Hz) means the queue grows while a key is held, so input is
+            # processed seconds after it happened and keeps arriving after
+            # release. Tapping never builds a backlog, which is why tapping
+            # felt responsive and holding did not.
+            #
+            # Draining to empty each tick keeps latency bounded: we always act
+            # on the freshest input and the queue can never accumulate.
+            # waitKeyEx also reports extended codes, so arrow keys survive
+            # (plain waitKey masks them off).
+            drained = []
+            while True:
+                k = cv2.waitKeyEx(1)
+                if k == -1:
+                    break
+                drained.append(k)
+                if len(drained) > 64:      # pathological flood guard
+                    break
 
             # Arrow key codes differ by platform; accept the common ones plus
             # i/j/k/l as a guaranteed fallback.
@@ -337,6 +457,24 @@ def main():
             ARROW_DOWN = {2621440, 65364, 84}
             ARROW_LEFT = {2424832, 65361, 81}
             ARROW_RIGHT = {2555904, 65363, 83}
+
+            # Feed EVERY drained event to the walking handler, not just the
+            # last one, so pressing forward and turn together registers both.
+            if isinstance(loco, KeyboardCommand):
+                for ev in drained:
+                    low = ev & 0xFF
+                    if ev in ARROW_UP or low == ord("i"):
+                        loco.on_key(265)
+                    elif ev in ARROW_DOWN or low == ord("k"):
+                        loco.on_key(264)
+                    elif ev in ARROW_LEFT or low == ord("j"):
+                        loco.on_key(263)
+                    elif ev in ARROW_RIGHT or low == ord("l"):
+                        loco.on_key(262)
+
+            # Single-shot keys act on the most recent event only.
+            raw = drained[-1] if drained else -1
+            key = raw & 0xFF if raw != -1 else 255
 
             if key == ord("q"):
                 break
@@ -361,23 +499,13 @@ def main():
             elif key == 32:
                 cmd[:] = 0.0
                 hold_target[:] = data.qpos[0:2]
+                hold_yaw = yaw_from_quat(data.qpos[3:7])
                 if isinstance(loco, KeyboardCommand):
                     loco.cmd[:] = 0.0
                 print("stopped and anchored")
-            elif isinstance(loco, KeyboardCommand):
-                # Walking: arrow keys or i/j/k/l.
-                if raw in ARROW_UP or key == ord("i"):
-                    loco.on_key(265)
-                elif raw in ARROW_DOWN or key == ord("k"):
-                    loco.on_key(264)
-                elif raw in ARROW_LEFT or key == ord("j"):
-                    loco.on_key(263)
-                elif raw in ARROW_RIGHT or key == ord("l"):
-                    loco.on_key(262)
-                else:
-                    continue
-                print(f"cmd = forward {loco.cmd[0]:+.2f}  turn {loco.cmd[2]:+.2f}")
     finally:
+        grabber.stop()
+        grabber.join(timeout=1.0)
         renderer.close()
         cv2.destroyAllWindows()
         zed.close()

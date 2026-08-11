@@ -1,14 +1,8 @@
-"""ZED camera body-tracking source.
+"""ZED camera body-tracking source."""
 
-Wraps the ZED SDK so the rest of the pipeline depends only on plain numpy
-keypoint arrays, not on pyzed. Importing pyzed is deferred to construction so
-the other modules can be imported and unit-tested without the SDK installed.
-"""
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import List, Optional
-
 import numpy as np
 
 from .config import ZEDConfig
@@ -16,7 +10,6 @@ from .config import ZEDConfig
 
 @dataclass
 class BodyFrame:
-    """One tracked body: 3D keypoints, 2D image points, per-keypoint confidence."""
     keypoints_3d: List[np.ndarray]
     keypoints_2d: List[Optional[tuple]]
     confidences: List[float]
@@ -49,7 +42,6 @@ class ZEDSource:
         self._image = sl.Mat()
 
     def grab(self) -> Optional[BodyFrame]:
-        """Return the first tracked body this frame, or None if none/failed."""
         sl = self._sl
         if self.camera.grab() != sl.ERROR_CODE.SUCCESS:
             return None
@@ -78,14 +70,7 @@ class ZEDSource:
 
     @staticmethod
     def _select_best_body(body_list):
-        """Pick the most reliable body when the ZED reports several.
-
-        A spurious second detection (reflection, background) often has NaN or
-        low-confidence arm keypoints. Blindly taking body_list[0] can grab it,
-        so choose the body whose upper-body keypoints are all finite with the
-        highest mean confidence.
-        """
-        arm_ids = [12, 13, 14, 15, 16, 17]  # shoulders, elbows, wrists
+        arm_ids = [12, 13, 14, 15, 16, 17]
         best, best_score = None, -1.0
         for b in body_list:
             kp = b.keypoint
