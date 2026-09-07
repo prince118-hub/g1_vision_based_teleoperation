@@ -1,0 +1,5 @@
+mujoco>=3.7.0
+numpy>=1.24
+opencv-python>=4.8
+# pyzed is installed via the Stereolabs ZED SDK, not pip.
+# See: https://www.stereolabs.com/docs/app-development/python/install

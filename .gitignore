@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+*.log
+demonstrations/
+*.npz
+*.hdf5
+test_locomotion_input.py
+summarise_locomotion_eval.py
