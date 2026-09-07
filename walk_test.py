@@ -36,7 +36,7 @@ import torch
 
 # ── Paths (EDIT THESE) ────────────────────────────────────────────────────────
 POLICY_PATH = r"D:\Charles_Aninon\Thesis Project\unitree_rl_gym\deploy\pre_train\g1\motion.pt"
-SCENE_PATH = r"D:\Charles_Aninon\Thesis Project\g1_vision_teleop\scene.xml"
+SCENE_PATH = r"D:\Charles_Aninon\Thesis Project\scene.xml"
 
 # ── Policy config (from unitree_rl_gym deploy/deploy_mujoco/configs/g1.yaml) ──
 SIM_DT = 0.002

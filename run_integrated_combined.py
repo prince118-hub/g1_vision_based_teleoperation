@@ -46,7 +46,7 @@ from locomotion_input import PelvisVelocity, LeanJoystick, KeyboardCommand
 
 # ── Paths (EDIT THESE) ────────────────────────────────────────────────────────
 POLICY_PATH = r"D:\Charles_Aninon\Thesis Project\unitree_rl_gym\deploy\pre_train\g1\motion.pt"
-SCENE_PATH = r"D:\Charles_Aninon\Thesis Project\g1_vision_teleop\scene.xml"
+SCENE_PATH = r"D:\Charles_Aninon\Thesis Project\scene.xml"
 
 # ── Display ───────────────────────────────────────────────────────────────────
 PANEL_H = 620
