@@ -1,0 +1,186 @@
+{
+ "config": {
+  "epochs": 300,
+  "batch_size": 256,
+  "lr": 0.001,
+  "weight_decay": 0.0,
+  "optimizer": "adamw",
+  "grad_clip": 1.0,
+  "seed": 0,
+  "num_workers": 0,
+  "prefer_cuda": true,
+  "strict_determinism": true,
+  "log_every": 15,
+  "checkpoint_every": 0,
+  "run_name": "bc_overfit10_K1_W12",
+  "notes": {
+   "gate": "overfit-10",
+   "chunk_size": 1,
+   "model": "bc",
+   "criterion": "train error < neighbour-ambiguity reference for this loader configuration (NOTES.md 2026-09-21)",
+   "ambiguity_reference": {
+    "mean": 0.015836349787609578,
+    "median": 0.005740087479352951,
+    "p90": 0.039851732552051565,
+    "samples": 7628,
+    "elements": 122048,
+    "obs_window": 12,
+    "chunk_size": 1,
+    "episodes": 10,
+    "seeds": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     8,
+     9,
+     10
+    ],
+    "sources": [
+     "scripted"
+    ],
+    "neighbour_distance": {
+     "p50": 1.1821553707122803,
+     "p90": 3.2104366779327402,
+     "max": 24.150190353393555
+    },
+    "exclude_same_episode": false,
+    "subsampled_to": null,
+    "metric": "euclidean on normalized observation window (564 dims)",
+    "units": "masked_l1_reconstruction",
+    "citation": "neighbour ambiguity 0.015836 (normalized L1, 16 trainable dims; W_o=12, K=1; 10 episodes / 7628 samples from scripted)"
+   },
+   "provisional_hyperparameters": "PROVISIONAL HYPERPARAMETERS, NOT TUNED. Chosen on SCRIPTED demonstrator data, whose action distribution differs from piloted teleoperation. No sweep or search was run, deliberately. Every value is re-opened when piloted data exists; no result obtained with them may be cited as tuned.",
+   "data_caveat": "SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.",
+   "regularization": "NONE: dropout 0, weight_decay 0, no augmentation",
+   "epoch_budget": 300,
+   "steps_per_epoch": 30,
+   "optimizer_steps": 9000,
+   "epoch_budget_reason": "Same as the W_o=1 BC gate (300 epochs, batch 256); only W_o changes"
+  },
+  "max_steps": null,
+  "stop_rule": null,
+  "window_steps": null,
+  "state_every_windows": 1
+ },
+ "device": {
+  "device": "cuda",
+  "torch": "2.11.0+cu126",
+  "cuda_available": true,
+  "cuda_version": "12.6",
+  "python": "3.10.11",
+  "name": "NVIDIA GeForce RTX 3050 Laptop GPU",
+  "total_vram_gb": 4.0,
+  "capability": "8.6",
+  "multiprocessors": 16
+ },
+ "determinism": {
+  "seed": 0,
+  "deterministic_algorithms": true,
+  "cudnn_deterministic": true,
+  "cudnn_benchmark": false,
+  "tf32": false,
+  "cublas_workspace": ":4096:8",
+  "notes": []
+ },
+ "git_commit": "ab257e571d46c83406bdf0ec80cc534eb4573b88",
+ "spec_version": "g1-spec-1.1.0",
+ "started_utc": "2026-09-28T14:14:50+00:00",
+ "model": {
+  "cls": "BCPolicy",
+  "parameters": 563222,
+  "trainable": 563222,
+  "repr": "BCPolicy(\n  (net): Sequential(\n    (0): Linear(in_features=564, out_features=512, bias=True)\n    (1): ReLU()\n    (2): Linear(in_features=512, out_features=512, bias=True)\n    (3): ReLU()\n    (4): Linear(in_features=512, out_features=22, bias=True)\n  )\n)"
+ },
+ "loader": {
+  "chunk_size": 1,
+  "obs_window": 12,
+  "tracking": {
+   "exclude_overlapping_chunks": false,
+   "max_degraded_fraction": null
+  }
+ },
+ "data": {
+  "episode_sources": [
+   "scripted"
+  ],
+  "episodes": 10,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   8,
+   9,
+   10
+  ],
+  "ticks": 7628,
+  "samples": 7628,
+  "tracking_measured_episodes": 0,
+  "real_demonstrations": false,
+  "caveat": "SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data."
+ },
+ "baselines": {
+  "zero": 0.6959398986784401,
+  "copy": 0.0164833312642218,
+  "elements": 122048,
+  "samples": 7628
+ },
+ "val": null,
+ "training_hyperparameters": {
+  "source": "declared by the model (optimizer_config); checked against the TrainConfig by assert_optimizer_source before the first step",
+  "declared": {
+   "lr": 0.001,
+   "weight_decay": 0.0,
+   "optimizer": "adamw",
+   "grad_clip": 1.0
+  },
+  "ladder_invariants": {
+   "grad_clip": 1.0
+  },
+  "optimizer_defaults": {
+   "betas": [
+    0.9,
+    0.999
+   ],
+   "eps": 1e-08,
+   "amsgrad": false,
+   "maximize": false,
+   "foreach": null,
+   "capturable": false,
+   "differentiable": false,
+   "fused": null,
+   "decoupled_weight_decay": true
+  },
+  "field_policy": {
+   "lr": "model",
+   "weight_decay": "model",
+   "optimizer": "model",
+   "grad_clip": "model",
+   "epochs": "run",
+   "max_steps": "run",
+   "batch_size": "run",
+   "seed": "run",
+   "stop_rule": "run",
+   "window_steps": "run",
+   "num_workers": "environment",
+   "prefer_cuda": "environment",
+   "strict_determinism": "environment",
+   "log_every": "plumbing",
+   "checkpoint_every": "plumbing",
+   "run_name": "plumbing",
+   "notes": "plumbing",
+   "state_every_windows": "plumbing"
+  },
+  "disclosed_deviations": {
+   "grad_clip": "DISCLOSED DEVIATION FROM THE ACT REFERENCE: every model clips gradients to a global L2 norm of 1.0. The reference never clips: `--clip_max_norm 0.1` is marked '# not used' (reference/act/detr/main.py:20) and reference/act contains no clip_grad_norm_ call. MEASURED (docs/ACT_AUDIT_REPORT.md R1): the norm is ~678 at ACT's initialisation and median 1.35 at the converged ACT gate weights, above the threshold on 19 of 20 batches - the clip is active throughout training, not a safety net. KEPT, identically for every model, because (1) ACT's passing overfit-10 gate already used it, (2) recurrent models are where clipping matters most, and (3) a clip that differed between ACT and ACT-LSTM would sit inside the headline RQ3 comparison: identical-across-models matters more here than matching the reference."
+  }
+ },
+ "selection": "deployment reconstruction (score_deployment): validation set if given, else the training set"
+}

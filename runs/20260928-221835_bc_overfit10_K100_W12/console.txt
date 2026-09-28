@@ -1,0 +1,60 @@
+==============================================================================
+OVERFIT-10 GATE: CHUNKED BC (K=100) on 10 episodes, seeds [0, 1, 2, 3, 4, 5, 6, 8, 9, 10]
+  DATA SOURCE : scripted
+  REAL DEMOS  : False
+  SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.
+  HYPERPARAMS : PROVISIONAL HYPERPARAMETERS, NOT TUNED. Chosen on SCRIPTED demonstrator data, whose action distribution differs from piloted teleoperation. No sweep or search was run, deliberately. Every value is re-opened when piloted data exists; no result obtained with them may be cited as tuned.
+==============================================================================
+  K=100 is PROVISIONAL and was NOT swept: 100 ticks = 4.0 s at 25 Hz, the value ACT uses.
+  No temporal ensembling (C2) - that is Stage 4. Deployment takes the chunk's first action.
+
+  computing the neighbour-ambiguity reference for W_o=12, K=100 ...
+  neighbour ambiguity 0.054265 (normalized L1, 16 trainable dims; W_o=12, K=100; 10 episodes / 7628 samples from scripted)
+run           runs\20260928-221835_bc_overfit10_K100_W12
+device        cuda  NVIDIA GeForce RTX 3050 Laptop GPU, 4.00 GB VRAM
+determinism   seed 0, deterministic_algorithms=True
+model         BCPolicy, 1680536 parameters
+data          10 episodes, 7628 samples, K=100 W_o=12
+              SOURCE: scripted
+              SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.
+baselines     zero 0.640193   copy 0.409793   (normalized L1, trainable dims)
+  epoch   15  train 0.096186  (0.150x zero, 0.235x copy)  0.6s
+  epoch   30  train 0.076012  (0.119x zero, 0.185x copy)  0.7s
+  epoch   45  train 0.063847  (0.100x zero, 0.156x copy)  0.7s
+  epoch   60  train 0.058831  (0.092x zero, 0.144x copy)  0.7s
+  epoch   75  train 0.054430  (0.085x zero, 0.133x copy)  0.7s
+  epoch   90  train 0.049726  (0.078x zero, 0.121x copy)  0.9s
+  epoch  105  train 0.048279  (0.075x zero, 0.118x copy)  0.7s
+  epoch  120  train 0.045959  (0.072x zero, 0.112x copy)  0.8s
+  epoch  135  train 0.045146  (0.071x zero, 0.110x copy)  0.7s
+  epoch  150  train 0.044524  (0.070x zero, 0.109x copy)  0.7s
+  epoch  165  train 0.043624  (0.068x zero, 0.106x copy)  0.8s
+  epoch  180  train 0.040584  (0.063x zero, 0.099x copy)  0.7s
+  epoch  195  train 0.041872  (0.065x zero, 0.102x copy)  0.8s
+  epoch  210  train 0.038321  (0.060x zero, 0.094x copy)  0.8s
+  epoch  225  train 0.039497  (0.062x zero, 0.096x copy)  0.7s
+  epoch  240  train 0.038060  (0.059x zero, 0.093x copy)  0.7s
+  epoch  255  train 0.039006  (0.061x zero, 0.095x copy)  0.8s
+  epoch  270  train 0.037169  (0.058x zero, 0.091x copy)  0.7s
+  epoch  285  train 0.038327  (0.060x zero, 0.094x copy)  0.7s
+  epoch  300  train 0.036148  (0.056x zero, 0.088x copy)  0.8s
+
+OVERFIT-10 RESULT (CHUNKED BC (K=100))
+  optimizer steps   9000   (40.64 steps/s)
+  wall              221.5 s
+  deployment recon  0.038959   (THE GATED QUANTITY: final weights, eval mode, model(obs) only)
+  train-mode recon  0.036148   (window mean, dropout on; NOT gated)
+  final total loss  0.036148   (recon + any KL term; NOT gated)
+  reconstruction as a FRACTION of the baselines:
+    of ZERO  0.06086  (16.4x better)
+    of COPY  0.09507  (10.5x better)
+  run dir           runs\20260928-221835_bc_overfit10_K100_W12
+
+GATE (neighbour-ambiguity criterion)
+  train error       0.038959
+  ambiguity ref     0.054265   (W_o=12, K=100, 10 episodes)
+  ratio             0.7179   (< 1.0 passes)
+  VERDICT: PASS - training error is below what the observation can determine.
+  reference: neighbour ambiguity 0.054265 (normalized L1, 16 trainable dims; W_o=12, K=100; 10 episodes / 7628 samples from scripted)
+  gate.json    runs\20260928-221835_bc_overfit10_K100_W12\gate.json
+  This gate ran on SCRIPTED data and must be re-run on piloted data before it is cited.

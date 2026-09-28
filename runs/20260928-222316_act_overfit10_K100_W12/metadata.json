@@ -1,0 +1,204 @@
+{
+ "config": {
+  "epochs": null,
+  "batch_size": 8,
+  "lr": 1e-05,
+  "weight_decay": 0.0,
+  "optimizer": "adamw",
+  "grad_clip": 1.0,
+  "seed": 0,
+  "num_workers": 0,
+  "prefer_cuda": true,
+  "strict_determinism": true,
+  "log_every": 1,
+  "checkpoint_every": 0,
+  "run_name": "act_overfit10_K100_W12",
+  "notes": {
+   "gate": "overfit-10",
+   "chunk_size": 100,
+   "model": "act",
+   "kl_weight_used": 10.0,
+   "kl_weight_reference": "reference/act README.md:76 --kl_weight 10; paper Table III beta 10",
+   "kl_weight_balance_matched": 14.7,
+   "kl_weight_note": "Our masked_l1 reduces over CONTRIBUTING elements (16 of 22 dims, padding excluded); the reference divides by the full element count (policy.py:31). MEASURED 2026-09-21 on 7,628 real samples at K=100: our reconstruction term is 1.4704x the reference's scale, so preserving the reference's L1:KL balance needs beta'=14.70. beta=10 is used here because the overfit-10 gate cannot discriminate between them; the choice is DEFERRED to a validation signal. NOT rescaled silently.",
+   "criterion": "train error < neighbour-ambiguity reference for this loader configuration (NOTES.md 2026-09-21)",
+   "ambiguity_reference": {
+    "mean": 0.05426502055262447,
+    "median": 0.016877200454473495,
+    "p90": 0.1238193862140179,
+    "samples": 7628,
+    "elements": 11356480,
+    "obs_window": 12,
+    "chunk_size": 100,
+    "episodes": 10,
+    "seeds": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     8,
+     9,
+     10
+    ],
+    "sources": [
+     "scripted"
+    ],
+    "neighbour_distance": {
+     "p50": 1.1821553707122803,
+     "p90": 3.2104366779327402,
+     "max": 24.150190353393555
+    },
+    "exclude_same_episode": false,
+    "subsampled_to": null,
+    "metric": "euclidean on normalized observation window (564 dims)",
+    "units": "masked_l1_reconstruction",
+    "citation": "neighbour ambiguity 0.054265 (normalized L1, 16 trainable dims; W_o=12, K=100; 10 episodes / 7628 samples from scripted)"
+   },
+   "provisional_hyperparameters": "PROVISIONAL HYPERPARAMETERS, NOT TUNED. Chosen on SCRIPTED demonstrator data, whose action distribution differs from piloted teleoperation. No sweep or search was run, deliberately. Every value is re-opened when piloted data exists; no result obtained with them may be cited as tuned.",
+   "data_caveat": "SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.",
+   "regularization": "dropout 0.1 (active in TRAINING; the gate scores eval mode, where it is off), weight_decay 0, no augmentation",
+   "budget_unit": "optimizer_steps",
+   "max_steps": 200000,
+   "steps_per_epoch": 954,
+   "max_steps_in_epochs": 209.64,
+   "budget_reason": "Same as the converged W_o=1 ACT gate (200k-step cap, stop rule 10 x 1000-step windows at 1% relative, batch 8); identical for ACT and ACT-LSTM"
+  },
+  "max_steps": 200000,
+  "stop_rule": {
+   "patience_windows": 10,
+   "min_rel_improvement": 0.01,
+   "monitor": [
+    "recon_l1",
+    "train_loss"
+   ]
+  },
+  "window_steps": 1000,
+  "state_every_windows": 1
+ },
+ "device": {
+  "device": "cuda",
+  "torch": "2.11.0+cu126",
+  "cuda_available": true,
+  "cuda_version": "12.6",
+  "python": "3.10.11",
+  "name": "NVIDIA GeForce RTX 3050 Laptop GPU",
+  "total_vram_gb": 4.0,
+  "capability": "8.6",
+  "multiprocessors": 16
+ },
+ "determinism": {
+  "seed": 0,
+  "deterministic_algorithms": true,
+  "cudnn_deterministic": true,
+  "cudnn_benchmark": false,
+  "tf32": false,
+  "cublas_workspace": ":4096:8",
+  "notes": []
+ },
+ "git_commit": "ab257e571d46c83406bdf0ec80cc534eb4573b88",
+ "spec_version": "g1-spec-1.1.0",
+ "started_utc": "2026-09-28T14:23:17+00:00",
+ "model": {
+  "cls": "ACTPolicy",
+  "parameters": 40755414,
+  "trainable": 40755414,
+  "repr": "ACTPolicy(\n  (cls_embed): Embedding(1, 512)\n  (encoder_action_proj): Linear(in_features=22, out_features=512, bias=True)\n  (encoder_joint_proj): Linear(in_features=564, out_features=512, bias=True)\n  (latent_proj): Linear(in_features=512, out_features=64, bias=True)\n  (encoder): _Encoder(\n    (layers): ModuleList(\n      (0-3): 4 x _EncoderLayer(\n        (self_attn): MultiheadAttention(\n          (out_proj): NonDynamicallyQuantizableLinear(in_features=512, out_features=512, bias=True)\n        )\n        (linear1): Linear(in_features=512, out_features=3200, bias=True)\n        (dropout): Dropout(p=0.1, inplace=False)\n        (linear2): Linear(in_features=3200, out_features=512, bias=True)\n        (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n        (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n        (dropout1): Dropout(p=0.1, inplace=False)\n        (dropout2): Dropout(p=0.1, inplace=False)\n      )\n    )\n  )\n  (latent_out_proj): Linear(in_features=32, out_features=512, bias=True)\n  (additional_pos_embed): Embedding(2, 512)\n  (input_proj_robot_state): Linear(in_features=564, out_features=512, bias=True)\n  (t_encoder): _Encoder(\n    (layers): ModuleList(\n      (0-3): 4 x _EncoderLayer(\n        (self_attn): MultiheadAttention(\n          (out_proj): NonDynamicallyQuantizableLinear(in_features=512, out_features=512, bias=True)\n        )\n        (linear1): Linear(in_features=512, out_features=3200, bias=True)\n        (dropout): Dropout(p=0.1, inplace=False)\n        (linear2): Linear(in_features=3200, out_features=512, bias=True)\n        (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n        (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n        (dropout1): Dropout(p=0.1, inplace=False)\n        (dropout2): Dropout(p=0.1, inplace=False)\n      )\n    )\n  )\n  (t_decoder): _Decoder(\n    (layers): ModuleList(\n      (0): _DecoderLayer(\n        (self_attn): MultiheadAttention(\n          (out_proj): NonDynamicallyQuantizableLinear(in_features=512, out_features=512, bias=True)\n        )\n        (multihead_attn): MultiheadAttention(\n          (out_proj): NonDynamicallyQuantizableLinear(in_features=512, out_features=512, bias=True)\n        )\n        (linear1): Linear(in_features=512, out_features=3200, bias=True)\n        (dropout): Dropout(p=0.1, inplace=False)\n        (linear2): Linear(in_features=3200, out_features=512, bias=True)\n        (norm1): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n        (norm2): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n        (norm3): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n        (dropout1): Dropout(p=0.1, inplace=False)\n        (dropout2): Dropout(p=0.1, inplace=False)\n        (dropout3): Dropout(p=0.1, inplace=False)\n      )\n    )\n    (norm): LayerNorm((512,), eps=1e-05, elementwise_affine=True)\n  )\n  (query_embed): Embedding(100, 512)\n  (action_head): Linear(in_features=512, out_features=22, bias=True)\n)"
+ },
+ "loader": {
+  "chunk_size": 100,
+  "obs_window": 12,
+  "tracking": {
+   "exclude_overlapping_chunks": false,
+   "max_degraded_fraction": null
+  }
+ },
+ "data": {
+  "episode_sources": [
+   "scripted"
+  ],
+  "episodes": 10,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   8,
+   9,
+   10
+  ],
+  "ticks": 7628,
+  "samples": 7628,
+  "tracking_measured_episodes": 0,
+  "real_demonstrations": false,
+  "caveat": "SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data."
+ },
+ "baselines": {
+  "zero": 0.6401933738872143,
+  "copy": 0.4097928518308391,
+  "elements": 11412800,
+  "samples": 7628
+ },
+ "val": null,
+ "training_hyperparameters": {
+  "source": "declared by the model (optimizer_config); checked against the TrainConfig by assert_optimizer_source before the first step",
+  "declared": {
+   "lr": 1e-05,
+   "weight_decay": 0.0,
+   "optimizer": "adamw",
+   "grad_clip": 1.0
+  },
+  "ladder_invariants": {
+   "grad_clip": 1.0
+  },
+  "optimizer_defaults": {
+   "betas": [
+    0.9,
+    0.999
+   ],
+   "eps": 1e-08,
+   "amsgrad": false,
+   "maximize": false,
+   "foreach": null,
+   "capturable": false,
+   "differentiable": false,
+   "fused": null,
+   "decoupled_weight_decay": true
+  },
+  "field_policy": {
+   "lr": "model",
+   "weight_decay": "model",
+   "optimizer": "model",
+   "grad_clip": "model",
+   "epochs": "run",
+   "max_steps": "run",
+   "batch_size": "run",
+   "seed": "run",
+   "stop_rule": "run",
+   "window_steps": "run",
+   "num_workers": "environment",
+   "prefer_cuda": "environment",
+   "strict_determinism": "environment",
+   "log_every": "plumbing",
+   "checkpoint_every": "plumbing",
+   "run_name": "plumbing",
+   "notes": "plumbing",
+   "state_every_windows": "plumbing"
+  },
+  "disclosed_deviations": {
+   "grad_clip": "DISCLOSED DEVIATION FROM THE ACT REFERENCE: every model clips gradients to a global L2 norm of 1.0. The reference never clips: `--clip_max_norm 0.1` is marked '# not used' (reference/act/detr/main.py:20) and reference/act contains no clip_grad_norm_ call. MEASURED (docs/ACT_AUDIT_REPORT.md R1): the norm is ~678 at ACT's initialisation and median 1.35 at the converged ACT gate weights, above the threshold on 19 of 20 batches - the clip is active throughout training, not a safety net. KEPT, identically for every model, because (1) ACT's passing overfit-10 gate already used it, (2) recurrent models are where clipping matters most, and (3) a clip that differed between ACT and ACT-LSTM would sit inside the headline RQ3 comparison: identical-across-models matters more here than matching the reference."
+  }
+ },
+ "budget": {
+  "unit": "optimizer_steps",
+  "max_steps": 200000,
+  "window_steps": 1000,
+  "stop_rule": "stop when, for EVERY one of ['recon_l1', 'train_loss'], the best windowed mean over the last 10 windows (10000 optimizer steps) improves on the best before them by less than 1.00% relative; windows of 1000 steps"
+ },
+ "selection": "deployment reconstruction (score_deployment): validation set if given, else the training set"
+}

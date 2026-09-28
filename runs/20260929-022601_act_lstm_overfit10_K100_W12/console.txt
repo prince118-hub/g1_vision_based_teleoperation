@@ -1,0 +1,242 @@
+==============================================================================
+OVERFIT-10 GATE: ACT-LSTM (K=100) on 10 episodes, seeds [0, 1, 2, 3, 4, 5, 6, 8, 9, 10]
+  DATA SOURCE : scripted
+  REAL DEMOS  : False
+  SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.
+  HYPERPARAMS : PROVISIONAL HYPERPARAMETERS, NOT TUNED. Chosen on SCRIPTED demonstrator data, whose action distribution differs from piloted teleoperation. No sweep or search was run, deliberately. Every value is re-opened when piloted data exists; no result obtained with them may be cited as tuned.
+==============================================================================
+  K=100 is PROVISIONAL and was NOT swept: 100 ticks = 4.0 s at 25 Hz, the value ACT uses.
+  No temporal ensembling (C2) - that is Stage 4. Deployment takes the chunk's first action.
+
+  computing the neighbour-ambiguity reference for W_o=12, K=100 ...
+  neighbour ambiguity 0.054265 (normalized L1, 16 trainable dims; W_o=12, K=100; 10 episodes / 7628 samples from scripted)
+run           runs\20260929-022601_act_lstm_overfit10_K100_W12
+device        cuda  NVIDIA GeForce RTX 3050 Laptop GPU, 4.00 GB VRAM
+determinism   seed 0, deterministic_algorithms=True
+model         ACTPolicy, 41726166 parameters
+data          10 episodes, 7628 samples, K=100 W_o=12
+              SOURCE: scripted
+              SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.
+baselines     zero 0.640193   copy 0.409793   (normalized L1, trainable dims)
+budget        200000 optimizer steps (hard cap); stop when, for EVERY one of ['recon_l1', 'train_loss'], the best windowed mean over the last 10 windows (10000 optimizer steps) improves on the best before them by less than 1.00% relative; windows of 1000 steps
+  step     1000  recon 0.362014  total 5.166680  kl 0.48047  73.5s
+  step     2000  recon 0.254092  total 2.474905  kl 0.22208  75.9s
+  step     3000  recon 0.209123  total 1.646250  kl 0.14371  77.5s
+  step     4000  recon 0.185081  total 1.124744  kl 0.09397  76.5s
+  step     5000  recon 0.164448  total 0.793665  kl 0.06292  76.1s
+  step     6000  recon 0.150957  total 0.602379  kl 0.04514  75.1s
+  step     7000  recon 0.138525  total 0.485728  kl 0.03472  77.2s
+  step     8000  recon 0.130836  total 0.408921  kl 0.02781  76.5s
+  step     9000  recon 0.123242  total 0.353697  kl 0.02305  75.7s
+  step    10000  recon 0.119775  total 0.313185  kl 0.01934  75.1s
+  step    11000  recon 0.112244  total 0.277833  kl 0.01656  75.4s
+  step    12000  recon 0.110076  total 0.254700  kl 0.01446  73.0s
+  step    13000  recon 0.106034  total 0.232658  kl 0.01266  74.0s
+  step    14000  recon 0.102711  total 0.214273  kl 0.01116  74.4s
+  step    15000  recon 0.098903  total 0.199308  kl 0.01004  73.2s
+  step    16000  recon 0.098489  total 0.188288  kl 0.00898  73.1s
+  step    17000  recon 0.094271  total 0.174710  kl 0.00804  72.4s
+  step    18000  recon 0.092914  total 0.166399  kl 0.00735  72.5s
+  step    19000  recon 0.088922  total 0.155419  kl 0.00665  73.3s
+  step    20000  recon 0.089013  total 0.149360  kl 0.00603  72.7s
+  step    21000  recon 0.086200  total 0.141837  kl 0.00556  73.5s
+  step    22000  recon 0.084604  total 0.135157  kl 0.00506  78.3s
+  step    23000  recon 0.083522  total 0.129774  kl 0.00463  78.9s
+  step    24000  recon 0.081849  total 0.124420  kl 0.00426  78.1s
+  step    25000  recon 0.080514  total 0.119302  kl 0.00388  76.0s
+  step    26000  recon 0.078537  total 0.114642  kl 0.00361  75.6s
+  step    27000  recon 0.078427  total 0.111273  kl 0.00328  77.3s
+  step    28000  recon 0.075982  total 0.106160  kl 0.00302  77.7s
+  step    29000  recon 0.076708  total 0.104443  kl 0.00277  76.8s
+  step    30000  recon 0.075329  total 0.100966  kl 0.00256  75.3s
+  step    31000  recon 0.073162  total 0.096858  kl 0.00237  75.7s
+  step    32000  recon 0.073784  total 0.095414  kl 0.00216  76.2s
+  step    33000  recon 0.071744  total 0.091622  kl 0.00199  74.0s
+  step    34000  recon 0.070884  total 0.089526  kl 0.00186  80.0s
+  step    35000  recon 0.070074  total 0.086999  kl 0.00169  75.4s
+  step    36000  recon 0.070284  total 0.086021  kl 0.00157  74.5s
+  step    37000  recon 0.069114  total 0.083626  kl 0.00145  78.6s
+  step    38000  recon 0.069579  total 0.082856  kl 0.00133  77.1s
+  step    39000  recon 0.067983  total 0.080462  kl 0.00125  72.6s
+  step    40000  recon 0.067080  total 0.078409  kl 0.00113  74.0s
+  step    41000  recon 0.066548  total 0.077156  kl 0.00106  76.5s
+  step    42000  recon 0.066737  total 0.076676  kl 0.00099  75.0s
+  step    43000  recon 0.066468  total 0.075739  kl 0.00093  74.2s
+  step    44000  recon 0.065338  total 0.073946  kl 0.00086  74.5s
+  step    45000  recon 0.064391  total 0.072469  kl 0.00081  74.1s
+  step    46000  recon 0.064092  total 0.071512  kl 0.00074  74.9s
+  step    47000  recon 0.063222  total 0.070171  kl 0.00069  76.0s
+  step    48000  recon 0.062513  total 0.068920  kl 0.00064  74.9s
+  step    49000  recon 0.062651  total 0.068602  kl 0.00060  75.0s
+  step    50000  recon 0.061829  total 0.067422  kl 0.00056  75.8s
+  step    51000  recon 0.061847  total 0.067071  kl 0.00052  73.9s
+  step    52000  recon 0.061918  total 0.066890  kl 0.00050  73.2s
+  step    53000  recon 0.060524  total 0.065210  kl 0.00047  72.8s
+  step    54000  recon 0.060316  total 0.064669  kl 0.00044  77.1s
+  step    55000  recon 0.059250  total 0.063416  kl 0.00042  75.2s
+  step    56000  recon 0.060917  total 0.064796  kl 0.00039  74.8s
+  step    57000  recon 0.059169  total 0.062874  kl 0.00037  74.9s
+  step    58000  recon 0.059339  total 0.062833  kl 0.00035  73.0s
+  step    59000  recon 0.058403  total 0.061594  kl 0.00032  73.1s
+  step    60000  recon 0.058715  total 0.061734  kl 0.00030  76.1s
+  step    61000  recon 0.057108  total 0.059984  kl 0.00029  76.9s
+  step    62000  recon 0.058351  total 0.060979  kl 0.00026  74.5s
+  step    63000  recon 0.056748  total 0.059457  kl 0.00027  73.0s
+  step    64000  recon 0.057172  total 0.059669  kl 0.00025  73.0s
+  step    65000  recon 0.057439  total 0.059752  kl 0.00023  74.2s
+  step    66000  recon 0.057470  total 0.059788  kl 0.00023  74.7s
+  step    67000  recon 0.056266  total 0.058314  kl 0.00020  74.7s
+  step    68000  recon 0.057042  total 0.059198  kl 0.00022  76.2s
+  step    69000  recon 0.055365  total 0.057424  kl 0.00021  75.1s
+  step    70000  recon 0.055535  total 0.057407  kl 0.00019  74.6s
+  step    71000  recon 0.054838  total 0.056603  kl 0.00018  74.4s
+  step    72000  recon 0.054818  total 0.056549  kl 0.00017  78.1s
+  step    73000  recon 0.054684  total 0.056306  kl 0.00016  73.9s
+  step    74000  recon 0.053851  total 0.055444  kl 0.00016  74.3s
+  step    75000  recon 0.055336  total 0.056877  kl 0.00015  74.9s
+  step    76000  recon 0.054032  total 0.055464  kl 0.00014  74.7s
+  step    77000  recon 0.053835  total 0.055197  kl 0.00014  74.6s
+  step    78000  recon 0.053570  total 0.054950  kl 0.00014  77.1s
+  step    79000  recon 0.053724  total 0.055007  kl 0.00013  74.5s
+  step    80000  recon 0.053655  total 0.054935  kl 0.00013  75.3s
+  step    81000  recon 0.052588  total 0.053721  kl 0.00011  74.2s
+  step    82000  recon 0.052722  total 0.053872  kl 0.00011  76.0s
+  step    83000  recon 0.052232  total 0.053377  kl 0.00011  76.5s
+  step    84000  recon 0.052079  total 0.053105  kl 0.00010  77.3s
+  step    85000  recon 0.052678  total 0.053644  kl 0.00010  76.8s
+  step    86000  recon 0.051666  total 0.052659  kl 0.00010  76.7s
+  step    87000  recon 0.051652  total 0.052712  kl 0.00011  77.2s
+  step    88000  recon 0.052034  total 0.052876  kl 0.00008  78.1s
+  step    89000  recon 0.050578  total 0.051505  kl 0.00009  76.6s
+  step    90000  recon 0.051289  total 0.052114  kl 0.00008  75.0s
+  step    91000  recon 0.050557  total 0.051359  kl 0.00008  77.1s
+  step    92000  recon 0.050867  total 0.051676  kl 0.00008  78.3s
+  step    93000  recon 0.051012  total 0.051785  kl 0.00008  78.2s
+  step    94000  recon 0.050556  total 0.051292  kl 0.00007  75.7s
+  step    95000  recon 0.050233  total 0.051000  kl 0.00008  75.9s
+  step    96000  recon 0.050156  total 0.050845  kl 0.00007  75.8s
+  step    97000  recon 0.050584  total 0.051242  kl 0.00007  75.7s
+  step    98000  recon 0.049601  total 0.050278  kl 0.00007  75.8s
+  step    99000  recon 0.049202  total 0.049869  kl 0.00007  76.3s
+  step   100000  recon 0.049333  total 0.050013  kl 0.00007  75.6s
+  step   101000  recon 0.048850  total 0.049576  kl 0.00007  75.7s
+  step   102000  recon 0.049400  total 0.049967  kl 0.00006  75.9s
+  step   103000  recon 0.049114  total 0.049665  kl 0.00006  75.7s
+  step   104000  recon 0.048714  total 0.049284  kl 0.00006  75.7s
+  step   105000  recon 0.048237  total 0.048776  kl 0.00005  75.7s
+  step   106000  recon 0.048835  total 0.049352  kl 0.00005  75.4s
+  step   107000  recon 0.048224  total 0.048708  kl 0.00005  75.5s
+  step   108000  recon 0.047614  total 0.048109  kl 0.00005  75.5s
+  step   109000  recon 0.047678  total 0.048171  kl 0.00005  74.9s
+  step   110000  recon 0.047567  total 0.048029  kl 0.00005  75.2s
+  step   111000  recon 0.047747  total 0.048181  kl 0.00004  75.7s
+  step   112000  recon 0.047607  total 0.048041  kl 0.00004  75.7s
+  step   113000  recon 0.047346  total 0.047828  kl 0.00005  76.4s
+  step   114000  recon 0.047463  total 0.047876  kl 0.00004  75.6s
+  step   115000  recon 0.046944  total 0.047310  kl 0.00004  75.8s
+  step   116000  recon 0.047218  total 0.047683  kl 0.00005  75.7s
+  step   117000  recon 0.046803  total 0.047246  kl 0.00004  75.6s
+  step   118000  recon 0.046558  total 0.046916  kl 0.00004  75.6s
+  step   119000  recon 0.046990  total 0.047346  kl 0.00004  75.7s
+  step   120000  recon 0.046431  total 0.046789  kl 0.00004  75.7s
+  step   121000  recon 0.045910  total 0.046280  kl 0.00004  75.7s
+  step   122000  recon 0.046197  total 0.046537  kl 0.00003  76.1s
+  step   123000  recon 0.046237  total 0.046571  kl 0.00003  72.5s
+  step   124000  recon 0.045700  total 0.046011  kl 0.00003  72.3s
+  step   125000  recon 0.046312  total 0.046647  kl 0.00003  72.3s
+  step   126000  recon 0.045279  total 0.045600  kl 0.00003  74.4s
+  step   127000  recon 0.045809  total 0.046101  kl 0.00003  72.4s
+  step   128000  recon 0.045410  total 0.045708  kl 0.00003  72.3s
+  step   129000  recon 0.045660  total 0.045959  kl 0.00003  72.5s
+  step   130000  recon 0.045185  total 0.045442  kl 0.00003  72.8s
+  step   131000  recon 0.044981  total 0.045298  kl 0.00003  72.4s
+  step   132000  recon 0.045172  total 0.045431  kl 0.00003  72.5s
+  step   133000  recon 0.044909  total 0.045171  kl 0.00003  72.7s
+  step   134000  recon 0.044756  total 0.045034  kl 0.00003  72.4s
+  step   135000  recon 0.045082  total 0.045328  kl 0.00002  72.4s
+  step   136000  recon 0.044238  total 0.044477  kl 0.00002  72.5s
+  step   137000  recon 0.044509  total 0.044739  kl 0.00002  72.3s
+  step   138000  recon 0.044501  total 0.044731  kl 0.00002  72.6s
+  step   139000  recon 0.044427  total 0.044648  kl 0.00002  72.2s
+  step   140000  recon 0.043940  total 0.044156  kl 0.00002  72.4s
+  step   141000  recon 0.044561  total 0.044770  kl 0.00002  72.4s
+  step   142000  recon 0.043930  total 0.044154  kl 0.00002  72.5s
+  step   143000  recon 0.043612  total 0.043812  kl 0.00002  72.5s
+  step   144000  recon 0.043935  total 0.044128  kl 0.00002  72.6s
+  step   145000  recon 0.043405  total 0.043641  kl 0.00002  72.5s
+  step   146000  recon 0.043229  total 0.043435  kl 0.00002  72.7s
+  step   147000  recon 0.042993  total 0.043244  kl 0.00003  72.3s
+  step   148000  recon 0.043179  total 0.043351  kl 0.00002  72.5s
+  step   149000  recon 0.043115  total 0.043290  kl 0.00002  72.4s
+  step   150000  recon 0.043781  total 0.043962  kl 0.00002  72.5s
+  step   151000  recon 0.042603  total 0.042763  kl 0.00002  72.6s
+  step   152000  recon 0.042777  total 0.042960  kl 0.00002  72.6s
+  step   153000  recon 0.042719  total 0.042873  kl 0.00002  72.5s
+  step   154000  recon 0.043256  total 0.043409  kl 0.00002  74.2s
+  step   155000  recon 0.042721  total 0.042888  kl 0.00002  76.5s
+  step   156000  recon 0.042342  total 0.042506  kl 0.00002  75.4s
+  step   157000  recon 0.042868  total 0.043046  kl 0.00002  74.5s
+  step   158000  recon 0.042630  total 0.042771  kl 0.00001  72.4s
+  step   159000  recon 0.042203  total 0.042358  kl 0.00002  72.5s
+  step   160000  recon 0.042785  total 0.042971  kl 0.00002  72.4s
+  step   161000  recon 0.042166  total 0.042333  kl 0.00002  74.3s
+  step   162000  recon 0.041784  total 0.041960  kl 0.00002  75.3s
+  step   163000  recon 0.041444  total 0.041584  kl 0.00001  74.2s
+  step   164000  recon 0.041851  total 0.042002  kl 0.00002  73.9s
+  step   165000  recon 0.042261  total 0.042413  kl 0.00002  75.5s
+  step   166000  recon 0.041535  total 0.041674  kl 0.00001  73.2s
+  step   167000  recon 0.041743  total 0.041890  kl 0.00001  72.7s
+  step   168000  recon 0.041329  total 0.041456  kl 0.00001  72.3s
+  step   169000  recon 0.041205  total 0.041337  kl 0.00001  73.6s
+  step   170000  recon 0.041545  total 0.041668  kl 0.00001  72.3s
+  step   171000  recon 0.041333  total 0.041534  kl 0.00002  72.2s
+  step   172000  recon 0.040863  total 0.040979  kl 0.00001  72.6s
+  step   173000  recon 0.041300  total 0.041410  kl 0.00001  73.5s
+  step   174000  recon 0.041278  total 0.041382  kl 0.00001  74.1s
+  step   175000  recon 0.041149  total 0.041258  kl 0.00001  72.4s
+  step   176000  recon 0.041077  total 0.041204  kl 0.00001  77.2s
+  step   177000  recon 0.040610  total 0.040712  kl 0.00001  74.4s
+  step   178000  recon 0.040968  total 0.041072  kl 0.00001  74.8s
+  step   179000  recon 0.040885  total 0.040995  kl 0.00001  74.5s
+  step   180000  recon 0.041301  total 0.041541  kl 0.00002  133.6s
+  step   181000  recon 0.040407  total 0.040559  kl 0.00002  80.2s
+  step   182000  recon 0.041243  total 0.041350  kl 0.00001  74.7s
+  step   183000  recon 0.040224  total 0.040317  kl 0.00001  73.9s
+  step   184000  recon 0.040344  total 0.040455  kl 0.00001  73.8s
+  step   185000  recon 0.039754  total 0.039864  kl 0.00001  73.2s
+  step   186000  recon 0.039916  total 0.040005  kl 0.00001  73.1s
+  step   187000  recon 0.040587  total 0.040690  kl 0.00001  76.9s
+  step   188000  recon 0.040217  total 0.040329  kl 0.00001  75.9s
+  step   189000  recon 0.039993  total 0.040074  kl 0.00001  75.7s
+  step   190000  recon 0.040537  total 0.040628  kl 0.00001  72.6s
+  step   191000  recon 0.040385  total 0.040466  kl 0.00001  73.1s
+  step   192000  recon 0.039062  total 0.039171  kl 0.00001  73.7s
+  step   193000  recon 0.040084  total 0.040173  kl 0.00001  73.8s
+  step   194000  recon 0.039962  total 0.040062  kl 0.00001  73.0s
+  step   195000  recon 0.039834  total 0.039931  kl 0.00001  75.1s
+  step   196000  recon 0.038912  total 0.038983  kl 0.00001  74.6s
+  step   197000  recon 0.039899  total 0.039973  kl 0.00001  73.8s
+  step   198000  recon 0.039374  total 0.039447  kl 0.00001  73.1s
+  step   199000  recon 0.039676  total 0.039777  kl 0.00001  74.6s
+  step   200000  recon 0.039191  total 0.039265  kl 0.00001  72.8s
+
+OVERFIT-10 RESULT (ACT-LSTM (K=100))
+  optimizer steps   200000   (12.76 steps/s)
+  wall              15674.6 s
+  stopped by        hard_cap at step 200000
+  deployment recon  0.032544   (THE GATED QUANTITY: final weights, eval mode, model(obs) only)
+  train-mode recon  0.039191   (window mean, dropout on; NOT gated)
+  final total loss  0.039265   (recon + any KL term; NOT gated)
+  reconstruction as a FRACTION of the baselines:
+    of ZERO  0.05084  (19.7x better)
+    of COPY  0.07942  (12.6x better)
+  run dir           runs\20260929-022601_act_lstm_overfit10_K100_W12
+
+GATE (neighbour-ambiguity criterion)
+  train error       0.032544
+  ambiguity ref     0.054265   (W_o=12, K=100, 10 episodes)
+  ratio             0.5997   (< 1.0 passes)
+  VERDICT: PASS - training error is below what the observation can determine.
+  reference: neighbour ambiguity 0.054265 (normalized L1, 16 trainable dims; W_o=12, K=100; 10 episodes / 7628 samples from scripted)
+  gate.json    runs\20260929-022601_act_lstm_overfit10_K100_W12\gate.json
+  This gate ran on SCRIPTED data and must be re-run on piloted data before it is cited.

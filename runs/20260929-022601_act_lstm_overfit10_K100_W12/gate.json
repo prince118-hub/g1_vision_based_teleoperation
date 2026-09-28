@@ -1,0 +1,62 @@
+{
+ "status": "hard_cap",
+ "final": true,
+ "error": null,
+ "note": null,
+ "passed": true,
+ "train_error": 0.032544438336548534,
+ "train_error_units": "masked_l1_reconstruction",
+ "train_error_measured": "deployment: eval mode, model(obs) only, fixed weights",
+ "scored_weights": "final weights",
+ "scored_at_step": 200000,
+ "train_mode_window_recon": {
+  "value": 0.03919143792677968,
+  "measured": "train mode: running mean over a window of optimizer steps",
+  "note": "logged for comparison; NOT gated"
+ },
+ "total_loss": 0.03926465598922737,
+ "reference": 0.05426502055262447,
+ "ratio": 0.5997314292913237,
+ "at_step": 200000,
+ "optimizer_steps": 200000,
+ "stop": {
+  "reason": "hard_cap",
+  "step": 200000
+ },
+ "steps_per_second": 12.759,
+ "detail": {
+  "mean": 0.05426502055262447,
+  "median": 0.016877200454473495,
+  "p90": 0.1238193862140179,
+  "samples": 7628,
+  "elements": 11356480,
+  "obs_window": 12,
+  "chunk_size": 100,
+  "episodes": 10,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   8,
+   9,
+   10
+  ],
+  "sources": [
+   "scripted"
+  ],
+  "neighbour_distance": {
+   "p50": 1.1821553707122803,
+   "p90": 3.2104366779327402,
+   "max": 24.150190353393555
+  },
+  "exclude_same_episode": false,
+  "subsampled_to": null,
+  "metric": "euclidean on normalized observation window (564 dims)",
+  "units": "masked_l1_reconstruction",
+  "citation": "neighbour ambiguity 0.054265 (normalized L1, 16 trainable dims; W_o=12, K=100; 10 episodes / 7628 samples from scripted)"
+ }
+}

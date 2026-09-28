@@ -1,0 +1,58 @@
+==============================================================================
+OVERFIT-10 GATE: BC on 10 episodes, seeds [0, 1, 2, 3, 4, 5, 6, 8, 9, 10]
+  DATA SOURCE : scripted
+  REAL DEMOS  : False
+  SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.
+  HYPERPARAMS : PROVISIONAL HYPERPARAMETERS, NOT TUNED. Chosen on SCRIPTED demonstrator data, whose action distribution differs from piloted teleoperation. No sweep or search was run, deliberately. Every value is re-opened when piloted data exists; no result obtained with them may be cited as tuned.
+==============================================================================
+
+  computing the neighbour-ambiguity reference for W_o=12, K=1 ...
+  neighbour ambiguity 0.015836 (normalized L1, 16 trainable dims; W_o=12, K=1; 10 episodes / 7628 samples from scripted)
+run           runs\20260928-221450_bc_overfit10_K1_W12
+device        cuda  NVIDIA GeForce RTX 3050 Laptop GPU, 4.00 GB VRAM
+determinism   seed 0, deterministic_algorithms=True
+model         BCPolicy, 563222 parameters
+data          10 episodes, 7628 samples, K=1 W_o=12
+              SOURCE: scripted
+              SCRIPTED demonstrator data. It is smoother and more consistent than piloted teleoperation will be, and tracking_ok cannot be exercised by episodes recorded without a camera. NO GATE RESULT FROM THIS RUN MAY BE CITED without a re-run on piloted data.
+baselines     zero 0.695940   copy 0.016483   (normalized L1, trainable dims)
+  epoch   15  train 0.036562  (0.053x zero, 2.218x copy)  0.6s
+  epoch   30  train 0.028462  (0.041x zero, 1.727x copy)  0.6s
+  epoch   45  train 0.024956  (0.036x zero, 1.514x copy)  0.6s
+  epoch   60  train 0.021271  (0.031x zero, 1.290x copy)  0.6s
+  epoch   75  train 0.021247  (0.031x zero, 1.289x copy)  0.6s
+  epoch   90  train 0.017541  (0.025x zero, 1.064x copy)  0.6s
+  epoch  105  train 0.017633  (0.025x zero, 1.070x copy)  0.6s
+  epoch  120  train 0.016440  (0.024x zero, 0.997x copy)  0.8s
+  epoch  135  train 0.014930  (0.021x zero, 0.906x copy)  0.6s
+  epoch  150  train 0.016118  (0.023x zero, 0.978x copy)  0.6s
+  epoch  165  train 0.014118  (0.020x zero, 0.856x copy)  0.7s
+  epoch  180  train 0.012978  (0.019x zero, 0.787x copy)  0.6s
+  epoch  195  train 0.012471  (0.018x zero, 0.757x copy)  0.6s
+  epoch  210  train 0.012660  (0.018x zero, 0.768x copy)  0.7s
+  epoch  225  train 0.011574  (0.017x zero, 0.702x copy)  0.6s
+  epoch  240  train 0.012604  (0.018x zero, 0.765x copy)  0.6s
+  epoch  255  train 0.010792  (0.016x zero, 0.655x copy)  0.7s
+  epoch  270  train 0.011841  (0.017x zero, 0.718x copy)  0.6s
+  epoch  285  train 0.011151  (0.016x zero, 0.677x copy)  0.6s
+  epoch  300  train 0.009951  (0.014x zero, 0.604x copy)  0.7s
+
+OVERFIT-10 RESULT (BC)
+  optimizer steps   9000   (45.02 steps/s)
+  wall              199.9 s
+  deployment recon  0.010013   (THE GATED QUANTITY: final weights, eval mode, model(obs) only)
+  train-mode recon  0.009951   (window mean, dropout on; NOT gated)
+  final total loss  0.009951   (recon + any KL term; NOT gated)
+  reconstruction as a FRACTION of the baselines:
+    of ZERO  0.01439  (69.5x better)
+    of COPY  0.60748  (1.6x better)
+  run dir           runs\20260928-221450_bc_overfit10_K1_W12
+
+GATE (neighbour-ambiguity criterion)
+  train error       0.010013
+  ambiguity ref     0.015836   (W_o=12, K=1, 10 episodes)
+  ratio             0.6323   (< 1.0 passes)
+  VERDICT: PASS - training error is below what the observation can determine.
+  reference: neighbour ambiguity 0.015836 (normalized L1, 16 trainable dims; W_o=12, K=1; 10 episodes / 7628 samples from scripted)
+  gate.json    runs\20260928-221450_bc_overfit10_K1_W12\gate.json
+  This gate ran on SCRIPTED data and must be re-run on piloted data before it is cited.
