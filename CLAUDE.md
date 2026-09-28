@@ -24,8 +24,9 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 says why. **P1–P3 CLOSED.** P3's open-loop replay reproduces the manipulation channel on 5 scripted episodes; the locomotion channel
 cannot be replayed open loop by any recorder (`NOTES.md` 2026-09-16). **P4 in progress:** BC, chunked BC and state-only ACT all pass the
 overfit-10 gate (§8 2026-09-22), and an independent audit found ACT **is** ACT but not trained as the reference trains it (§8 2026-09-23).
-**Next: ACT-LSTM, the `use_lstm` flag on the SAME class** (`g1_model/act.py`) — and the gate now REFUSES carried state, so it needs an
-explicit per-episode scoring protocol before it can be gated. **Every model result so far
+**ACT-LSTM is BUILT** (`use_lstm` on the same class, `g1_model/act.py`, §8 2026-09-28) and passes its tests; it has **never been
+trained**. **Next: the overfit-10 gate for BC, chunked BC, ACT and ACT-LSTM, all at W_o = 12, on the NVIDIA laptop** (O34 Option B:
+results come from that machine only). All three existing gate PASSES were at W_o = 1 and must be re-run at 12. **Every model result so far
 is on SCRIPTED data — no piloted episode exists** (`data/raw/` is empty), so O31 and O32 stay open until P5.
 
 **P5 pilot has not started.** It must settle D12: the grasp worked free-based on 2026-09-15, so D12 may bind only the scripted demonstrator
@@ -40,7 +41,8 @@ evaluation harness, not yet built, must start its episodes through the same rese
 [EXISTS] scripted demonstrator (g1_data/scripted_demo.py) 12/12 and 40/40; g1_data/spec.py frozen at g1-spec-1.1.0
 [EXISTS] recorder @25 Hz -> success detection -> offline phase labels -> dataset -> loader -> shared train loop + masked-L1 loss -> neighbour-ambiguity gate -> BC and chunked BC (ONE class, K=1 vs K>1): g1_data/{recorder,success,phase_label,dataset}.py + g1_model/{loader,train,ambiguity,models}.py
 [EXISTS] ACT, state-only, one decoder layer (bit-identical to the reference's 7, audit 2026-09-23); overfit-10 PASS 0.920 on scripted data: g1_model/act.py
-[MISSING] ACT-LSTM (the `use_lstm` flag on the SAME class) -> autonomous deployment -> Exp 1 in-distribution, Exp 2 held-out patch
+[EXISTS] ACT-LSTM = ACT with `use_lstm=True` (Option B, third token); tests pass, NEVER trained: g1_model/act.py, tools/train_bc.py --model act_lstm
+[MISSING] autonomous deployment -> Exp 1 in-distribution, Exp 2 held-out patch
 ```
 
 ## 4. Current state — the measurements a fresh session cannot re-derive
@@ -57,7 +59,7 @@ is deliberately NOT repeated here — `NOTES.md`, the suites and the run directo
 
 ## 5. Not yet built
 
-**ACT-LSTM — the `use_lstm` flag on the SAME class as ACT** (`g1_model/act.py`; two implementations would stop the gap isolating the LSTM), plus autonomous deployment and the Exp 1 / Exp 2 evaluation harness. Everything else in the learning stack is built (§3, `g1_model/`).
+Autonomous deployment and the Exp 1 / Exp 2 evaluation harness. The learning stack, ACT-LSTM included, is built (§3, `g1_model/`) but only BC, chunked BC and ACT have been through a gate.
 Dataset and evaluation design — 150 episodes, splits, fixed eval seeds, nested scaling subsets, the statistical limit — is in PLAN.md and `NOTES.md` "PHASE 2 CLOSEOUT".
 
 ## 6. State and action vectors
@@ -85,7 +87,7 @@ command applied FROM `state[t]`; build the pair at ONE point in the loop, before
 | D5 | §3.3.1 joints start at zero | legs start at `DEFAULT_ANGLES` | the walking policy cannot recover from straight legs | 3.3.1, 3.8.1 |
 | D6 | §3.3.4 pelvis-velocity trigger | **abandoned**; `KeyboardCommand` | §3.3.4 and §3.3.8 are incompatible (TR1); written up as a negative result | 3.3.4, 3.3.8 |
 | D7 | §3.3.6 grippers press via IK error | pads press; arm holds a clean pose | IK-error pressing corrupts the arm dims it is recorded into | 3.3.6 |
-| D8 | two policies | three (BC, ACT, ACT-LSTM) | isolates the LSTM instead of confounding it with chunking | 3.6–3.8.4, RQ2 |
+| D8 | two policies | three (BC, ACT, ACT-LSTM); **all at W_o = 12 (ACT reference: 1) — pending adviser approval** (§8 2026-09-25, 2026-09-27) | isolates the LSTM instead of confounding it with chunking; one shared window leaves each model's own mechanism the only difference | 3.6–3.8.4, RQ2 |
 | D9 | §3.9 Ubuntu + ROS2 | Windows 11, no ROS | ROS adds no value for a single-process sim | 3.9 |
 | D10 | §3.4 waist as live DOF | waist pinned at 0 | torso-yaw sign unverified; waist motion perturbs the locomotion policy | 3.4 |
 | D11 | §3.3.6 friction grasp | **weld**, gated on palm proximity/opposition/separation | friction holds 1 of 9 standoffs and couples to unrelated foot contacts; reportable negative result | 3.3.6 + limits |
@@ -103,6 +105,41 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
+- 2026-09-28 — **O34 OPTION B: every result comes from ONE machine, the NVIDIA laptop** — training, collection and evaluation data
+  alike. The CPU laptop is for code and tests only; nothing it records or trains is a result. Pinned versions do not make machines
+  interchangeable (O34: 14/40 seeds still diverge, up to 10.6 mm). `requirements.txt` pinned to the partner's build: Python 3.10.11,
+  mujoco==3.6.0, numpy==1.26.4, torch==2.11.0 (cu126 there), opencv < 4.12 (4.12+ needs NumPy 2). Old `mujoco>=3.7.0` excluded 3.6.0.
+- 2026-09-28 — **ACT-LSTM BUILT as `ACTConfig.use_lstm`; tests only, NOT trained.** A 2-layer LSTM (47→256, dropout 0.3) reads the
+  W_o window from zero memory on every call; `h_n[-1]` → Linear(256→512) is a THIRD token [latent, proprio, lstm] with its own
+  `lstm_pos_embed` (`additional_pos_embed` stays the reference's (2, h)). The CVAE encoder does not see it. Built LAST, so ACT-LSTM from
+  a seed shares every ACT parameter bit-identically. `use_lstm=False` is PROVEN identical to pre-flag ACT against a fingerprint recorded
+  on main BEFORE the change (TR32), and the W_o = 12 checkpoint in `runs/` gives bit-identical output. **Accepted:** the `lstm_*` fields
+  sit INERT in ACT's config, so the two configs differ in `use_lstm` alone (PLAN Phase 4 exit check, tested on the runner's configs).
+  **Disclose:** the 0.3 is `nn.LSTM`'s BETWEEN-LAYER dropout only, never on the token; the LSTM keeps PyTorch's default init.
+  **Untested:** cuDNN LSTM under `deterministic_algorithms` on the GPU.
+- 2026-09-27 — **W_o = 12 pipeline passes its CODE TEST on the second (CPU) laptop — not a result (O34).** Overfit-10: BC 0.009280 /
+  0.016343 = 0.568 PASS, chunked BC 0.034796 / 0.055214 = 0.630 PASS. ACT: 300-step timing run only, **~2.0 s/step on CPU vs 73 ms on
+  the RTX 3050** (~28×; a 195k-step run ≈ 4.5 days) — ACT and ACT-LSTM training belongs on a CUDA GPU.
+- 2026-09-27 — **PIN THE MUJOCO VERSION once the partner's is known** (O34). DONE 2026-09-28: pinned, seeds 0–44 re-recorded; the
+  "must match the measurement file" test failed on 14/40 seeds, so it was replaced by Option B (next entry up).
+- 2026-09-27 — **ALL MODELS AT W_o = 12: BC, chunked BC, ACT and ACT-LSTM share one observation window; D8 still pending adviser
+  approval.** Replaces "BC stays at W_o = 1 on purpose" (2026-09-25). Reason: with one window every rung of the ladder changes ONE thing
+  (BC → chunked BC chunking, → ACT the CVAE, → ACT-LSTM recurrence), so every comparison is fair. `tools/train_bc.py --obs-window`
+  (default 12) sets it for BC, chunked BC and ACT, and the loader now takes the window from the MODEL's config (it used a separate
+  `BCConfig(obs_window=1)` for ACT too). 1 is still accepted and reproduces the old gates. **Disclose:** BC now has 0.48 s of history, so
+  BC vs ACT-LSTM no longer compares "no temporal context" with "temporal context" — the LSTM's contribution is recurrence over a window
+  every model sees. **Every overfit-10 PASS (BC 0.745, chunked BC 0.953, ACT 0.920) was at W_o = 1 and must be re-run at 12.**
+- 2026-09-25 — **ACT-LSTM DESIGN: Option B, sequence input; THREE models, ACT moves to W_o = 12 — DECIDED, not yet built; D8 pending
+  adviser approval.** The LSTM reads the last W_o states on EVERY call, starting from fresh memory each time, and its output is fed into
+  ACT as an extra input token. No state is carried between calls, so the existing loader and the gate (which refuses carried state, TR31)
+  work unchanged. Rejected, Option A (hidden state carried across the episode): a sequential sampler ACT does not use, plus a guard
+  exemption. **Models: ACT W_o = 12, ACT-LSTM W_o = 12 (BC: see 2026-09-27); ACT and ACT-LSTM differ ONLY in `use_lstm`.** Replaces a same-day,
+  never-committed 4-model design (ACT at 1 plus a separate windowed-ACT control): giving ACT the same window makes ACT vs ACT-LSTM
+  fair with three models and saves a training condition. **LSTM: 2 layers, dropout 0.3 (proposal), hidden 256.** **W_o = 12 is a
+  STARTING CHOICE (0.48 s at 25 Hz), not a tuned value** — a W_o of 1 would leave the LSTM nothing to recur over. **Cost, disclose:**
+  our ACT no longer matches the reference's single-timestep observation (correspondence row 53, ADAPTED).
+  **ACT's overfit-10 PASS (0.920) was at W_o = 1 and must be re-run at 12**; the W_o = 12 gate reference is HIGHER (O31,
+  dimensionality) — never compare gate ratios across W_o.
 - 2026-09-23 — **ACT AUDIT VERDICT: the model IS ACT; the training is NOT the reference's; on scripted data the trained model behaves
   like chunked BC.** Independent audit against `reference/act@742c753c` and arXiv 2304.13705v1 (`docs/ACT_AUDIT_REPORT.md`, with
   `docs/ACT_AUDIT.md` — the RECORD, never edit either). Measured against the reference's OWN `transformer.py`: outputs, latents, both loss
@@ -297,10 +334,15 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   On the scripted train split 4 STATE dims fall below 1e-2 — 9 base z (0.0087), 43 right wrist (0.0020), 44–45 waist (0.0030, 0.0069),
   all pinned — so their jitter is z-scored up to **4.9×** harder than the reference would; no action dim is affected. RECORDED, NOT FIXED:
   normalization is regenerated from piloted data, and this **must be decided BEFORE norm stats are fitted on real episodes** (D14's hazard).
+- **O34. RESOLVED BY POLICY, NOT BY PHYSICS — the simulation does not reproduce bit-for-bit across machines.** Against the partner's
+  `docs/measurements/bprime_gates_adopted_pred_40.json` (seeds 0–39): the CPU laptop at MuJoCo 3.14.0 / NumPy 2.4 matched 0/40 (to
+  74.8 mm; seeds 38, 44 fail placement). With the partner's versions pinned (env `g1_match`, 2026-09-28): **26/40 agree to ≤ 0.0003 mm,
+  14 diverge 0.04–10.6 mm** (seeds 0 2 4 9 11 20 24 26 30–33 36 38), nothing between — a residual last-bit difference that some episodes
+  amplify; 45/45 pass every recorder check. Suspected residual (UNVERIFIED): CPU (AMD here), torch thread count, NumPy source. Same
+  scene/`motion.pt` (tracked, unchanged since 51fc1d7) and identical `reset_fingerprint`. **Decision (§8 2026-09-28): Option B.**
 - **O6.** Dead code: `gating.py`, `GatingConfig`, `TorsoYawConfig`, `IKConfig.neutral_weight`/`.target_deadzone`, `set_waist_yaw`,
   `ZEDConfig.camera_fps` (O29); `RejectReason` survives for `NAN`. **O7.** Stale docs: README claims torso-yaw following and active gating;
-  `config.py` says locomotion is "not yet built"; `test/*.py` is stale; `docs/ACT_CORRESPONDENCE.md` rows 18/22 still read UNRESOLVED and
-  row 36 "decision required", though the code decided (`act.py` `DEC_LAYERS = 1`, `LR = 1e-5`). Resolved issues (O10, O12, O14–O16, O18, O20–O24): `NOTES.md` "2026-09-22 — CLAUDE.md §8 ARCHIVE".
+  `config.py` says locomotion is "not yet built"; `test/*.py` is stale. (`docs/ACT_CORRESPONDENCE.md` rows 18/22/36 resolved 2026-09-25.) Resolved issues (O10, O12, O14–O16, O18, O20–O24): `NOTES.md` "2026-09-22 — CLAUDE.md §8 ARCHIVE".
 
 ## 11. File and module structure
 
