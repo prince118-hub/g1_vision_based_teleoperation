@@ -19,15 +19,15 @@ mitigation and the whole teleop-parity effort (base lock in the entry point, the
 keypoint recorder, the IK speed fix). Some of that is really Phase-5 pilot preparation done early, because a live camera was
 available. Nothing was skipped; the work simply did not arrive in the order this file predicted.
 
-**Status: Phases 1–3 are CLOSED. Phase 4 (model code) is IN PROGRESS:** BC, chunked BC and state-only ACT pass the overfit-10
-gate on scripted data; ACT-LSTM is next. **Phase 5 (pilot) has NOT STARTED** — no piloted episode exists (`data/raw/` is empty).
+**Status: Phases 1–4 are CLOSED** (Phase 4 with a qualification, below): BC, chunked BC, ACT and ACT-LSTM pass the overfit-10
+gate at W_o = 12 on scripted data. **Phase 5 (pilot) has NOT STARTED** — no piloted episode exists (`data/raw/` is empty).
 
 ```
 P1 grasp physics ─┐
    (CLOSED)       ├─> P3 recorder ────────────> P5 pilot ──> P6 collection ──> P7 train+eval ──> P8 writing
 P2 freeze specs ──┘     (CLOSED)                  ^                               ^
    (CLOSED)                                       │                               │
-P4 model codebase ────────────────────────────────┴───────────────────────────────┘  (IN PROGRESS; needs only P2's dims)
+P4 model codebase ────────────────────────────────┴───────────────────────────────┘  (CLOSED; needed only P2's dims)
 ```
 
 ---
@@ -104,16 +104,15 @@ open-loop metric must never stand in for task success in Chapter 4. Hand-driven 
 
 ---
 
-## Phase 4 — Shared model codebase — IN PROGRESS (built ahead of its data; see Phase numbering)
+## Phase 4 — Shared model codebase — CLOSED 2026-09-29, with a qualification (built ahead of its data; see Phase numbering)
 
 No dependency on Phase 1 or 3, only on the Phase-2 dimensions, which are frozen.
 
 **As built** (in `g1_model/`, not the `g1_policy/` / `g1_train/` paths below): one training loop, one masked-L1 loss and the
 neighbour-ambiguity gate (`train.py`, `ambiguity.py`); BC and chunked BC as ONE class (`models.py`); state-only ACT (`act.py`).
-All three PASS the overfit-10 gate on 10 scripted episodes (CLAUDE.md §8, 2026-09-22), at W_o = 1. ACT-LSTM, the `use_lstm`
-flag on the same class, is built and tested but never trained (CLAUDE.md §8, 2026-09-28). **Remaining:** every model's gate
-at W_o = 12. The task list below is the original plan; where the code differs (AdamW with step budgets and a stop rule, not
-cosine annealing and epoch early-stopping), the code and CLAUDE.md are authoritative.
+ACT-LSTM is the `use_lstm` flag on the same ACT class (CLAUDE.md §8, 2026-09-28). The task list below is the original plan; where
+the code differs (AdamW with step budgets and a stop rule, not cosine annealing and epoch early-stopping), the code and CLAUDE.md
+are authoritative.
 
 **Decide before starting:** observation window `W_o`, action chunk size `K`, LSTM hidden size and layer count (proposal: 2
 stacked, dropout 0.3), transformer width/depth, KL weight β. The proposal defers all of these.
@@ -130,6 +129,16 @@ stacked, dropout 0.3), transformer width/depth, KL weight β. The proposal defer
 
 **Exit criterion:** all three train to convergence on synthetic data, and ACT and ACT-LSTM, both at `obs_window = 12`, differ
 *only* in `use_lstm` — verified by diffing the two config objects (CLAUDE.md §8 2026-09-25).
+
+**Closed 2026-09-29 with a qualification** (CLAUDE.md §8 2026-09-29, `NOTES.md` 2026-09-29). All four models pass the overfit-10
+gate at W_o = 12 on 10 scripted episodes, on the NVIDIA laptop (the one machine results come from, O34): BC 0.632, chunked BC
+0.718, ACT 0.720, ACT-LSTM 0.600 (train error ÷ neighbour-ambiguity reference; < 1 passes). The config half of the criterion is
+**met**: the model configs saved in the ACT and ACT-LSTM checkpoints differ only in `use_lstm`. The convergence half is **not
+shown**. BC and chunked BC ran a fixed 300 epochs with no stop rule, as their W_o = 1 gates did. ACT and ACT-LSTM both stopped
+at the 200,000-step cap, still improving 1.6% and 2.1% over their last 10 windows against the stop rule's 1%. The gate verdicts
+stand, since they score the weights actually trained, but the models must not be ranked on these numbers. On scripted data the CVAE latent collapses (KL 1e-05)
+and ACT scores the same as chunked BC, as predicted (CLAUDE.md O32): that comparison waits for piloted data in Phase 5. Carry
+forward: a cuDNN LSTM crashes Python at exit on this build, so an ACT-LSTM run is judged by its `gate.json`, never by its exit code.
 
 ---
 

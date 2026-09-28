@@ -20,18 +20,15 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. Phase numbers are PLAN.md's** (P3 recorder, P4 model code, P5 pilot); the model code was built ahead of its data, and PLAN.md
-says why. **P1–P3 CLOSED.** P3's open-loop replay reproduces the manipulation channel on 5 scripted episodes; the locomotion channel
-cannot be replayed open loop by any recorder (`NOTES.md` 2026-09-16). **P4 in progress:** BC, chunked BC and state-only ACT all pass the
-overfit-10 gate (§8 2026-09-22), and an independent audit found ACT **is** ACT but not trained as the reference trains it (§8 2026-09-23).
-**ACT-LSTM is BUILT** (`use_lstm` on the same class, `g1_model/act.py`, §8 2026-09-28) and passes its tests; it has **never been
-trained**. **Next: the overfit-10 gate for BC, chunked BC, ACT and ACT-LSTM, all at W_o = 12, on the NVIDIA laptop** (O34 Option B:
-results come from that machine only). All three existing gate PASSES were at W_o = 1 and must be re-run at 12. **Every model result so far
-is on SCRIPTED data — no piloted episode exists** (`data/raw/` is empty), so O31 and O32 stay open until P5.
+**None. Phase numbers are PLAN.md's** (P3 recorder, P4 model code, P5 pilot); the model code was built ahead of its data (PLAN.md says
+why). **P1–P4 CLOSED.** P3's replay reproduces the manipulation channel only (`NOTES.md` 2026-09-16). **P4 closed WITH A QUALIFICATION
+(§8 2026-09-29):** BC, chunked BC, ACT and ACT-LSTM all pass overfit-10 at W_o = 12 on the NVIDIA laptop (O34 Option B), ACT and
+ACT-LSTM differing only in `use_lstm` — but **neither ACT run converged** (both hit the 200k-step cap, still improving). **Every model
+result is on SCRIPTED data — no piloted episode exists** (`data/raw/` is empty), so O31 and O32 stay open until P5. D8 awaits the adviser.
 
-**P5 pilot has not started.** It must settle D12: the grasp worked free-based on 2026-09-15, so D12 may bind only the scripted demonstrator
-(§8). D18 is enforced at every reset (`g1_data/reset.py` raises on a contract mismatch; the recorder stores it per episode) — the
-evaluation harness, not yet built, must start its episodes through the same reset.
+**Next: P5 pilot, not started.** It must settle D12: the grasp worked free-based on 2026-09-15, so D12 may bind only the scripted
+demonstrator (§8). D18 is enforced at every reset (`g1_data/reset.py` raises on a contract mismatch; the recorder stores it per episode)
+— the evaluation harness, not yet built, must start its episodes through the same reset.
 
 ## 3. Full pipeline (end to end)
 
@@ -39,9 +36,9 @@ evaluation harness, not yet built, must start its episodes through the same rese
 [EXISTS] ZED (30 Hz, BODY_38) -> One-Euro -> scaling -> DLS IK -> arms; waist pinned | KeyboardCommand -> LSTM policy -> legs; 500 Hz physics
 [EXISTS] WELD grasp (D11) + base lock (D12) + B-prime exclusion (D18) + seeded spawn; teleop under stepped physics, full task by a live operator
 [EXISTS] scripted demonstrator (g1_data/scripted_demo.py) 12/12 and 40/40; g1_data/spec.py frozen at g1-spec-1.1.0
-[EXISTS] recorder @25 Hz -> success detection -> offline phase labels -> dataset -> loader -> shared train loop + masked-L1 loss -> neighbour-ambiguity gate -> BC and chunked BC (ONE class, K=1 vs K>1): g1_data/{recorder,success,phase_label,dataset}.py + g1_model/{loader,train,ambiguity,models}.py
-[EXISTS] ACT, state-only, one decoder layer (bit-identical to the reference's 7, audit 2026-09-23); overfit-10 PASS 0.920 on scripted data: g1_model/act.py
-[EXISTS] ACT-LSTM = ACT with `use_lstm=True` (Option B, third token); tests pass, NEVER trained: g1_model/act.py, tools/train_bc.py --model act_lstm
+[EXISTS] recorder @25 Hz -> success detection -> offline phase labels -> dataset -> loader -> shared train loop + masked-L1 loss -> neighbour-ambiguity gate -> BC and chunked BC (ONE class, K=1 vs K>1; overfit-10 PASS 0.632 / 0.718 at W_o = 12): g1_data/{recorder,success,phase_label,dataset}.py + g1_model/{loader,train,ambiguity,models}.py
+[EXISTS] ACT, state-only, one decoder layer (bit-identical to the reference's 7, audit 2026-09-23); overfit-10 PASS 0.720 at W_o = 12, 200k cap, NOT converged: g1_model/act.py
+[EXISTS] ACT-LSTM = ACT with `use_lstm=True` (Option B, third token); overfit-10 PASS 0.600 at W_o = 12, 200k cap, NOT converged: g1_model/act.py, tools/train_bc.py --model act_lstm
 [MISSING] autonomous deployment -> Exp 1 in-distribution, Exp 2 held-out patch
 ```
 
@@ -59,7 +56,7 @@ is deliberately NOT repeated here — `NOTES.md`, the suites and the run directo
 
 ## 5. Not yet built
 
-Autonomous deployment and the Exp 1 / Exp 2 evaluation harness. The learning stack, ACT-LSTM included, is built (§3, `g1_model/`) but only BC, chunked BC and ACT have been through a gate.
+Autonomous deployment and the Exp 1 / Exp 2 evaluation harness. The learning stack is built (§3, `g1_model/`) and all four models pass the overfit-10 gate at W_o = 12 (§8 2026-09-29).
 Dataset and evaluation design — 150 episodes, splits, fixed eval seeds, nested scaling subsets, the statistical limit — is in PLAN.md and `NOTES.md` "PHASE 2 CLOSEOUT".
 
 ## 6. State and action vectors
@@ -105,6 +102,11 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
+- 2026-09-29 — **PHASE 4 CLOSED WITH A QUALIFICATION: all four PASS overfit-10 at W_o = 12** (O34 Option B: NVIDIA laptop, ab257e5,
+  scripted): BC **0.632**, chunked BC **0.718**, ACT **0.720**, ACT-LSTM **0.600** (K=100 share ref 0.054265). **Neither ACT run converged:**
+  both hit the 200k CAP still improving 1.6% / 2.1% per 10 windows (rule: 1%) — PASSES stand, **do not rank models on this gate**. Latent
+  collapsed in both (KL 1e-05, O32); ACT ≈ chunked BC; configs differ ONLY in `use_lstm`. **cuDNN LSTM: deterministic on GPU, CRASHES AT EXIT
+  (0xC0000409)** — judge ACT-LSTM by `gate.json`, not exit code; cuDNN kept ON (a methods call). Detail: `NOTES.md` 2026-09-29.
 - 2026-09-28 — **O34 OPTION B: every result comes from ONE machine, the NVIDIA laptop** — training, collection and evaluation data
   alike. The CPU laptop is for code and tests only; nothing it records or trains is a result. Pinned versions do not make machines
   interchangeable (O34: 14/40 seeds still diverge, up to 10.6 mm). `requirements.txt` pinned to the partner's build: Python 3.10.11,
@@ -116,7 +118,7 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   on main BEFORE the change (TR32), and the W_o = 12 checkpoint in `runs/` gives bit-identical output. **Accepted:** the `lstm_*` fields
   sit INERT in ACT's config, so the two configs differ in `use_lstm` alone (PLAN Phase 4 exit check, tested on the runner's configs).
   **Disclose:** the 0.3 is `nn.LSTM`'s BETWEEN-LAYER dropout only, never on the token; the LSTM keeps PyTorch's default init.
-  **Untested:** cuDNN LSTM under `deterministic_algorithms` on the GPU.
+  **Tested 2026-09-29:** cuDNN LSTM under `deterministic_algorithms` IS deterministic on the GPU, and crashes Python at exit (entry above).
 - 2026-09-27 — **W_o = 12 pipeline passes its CODE TEST on the second (CPU) laptop — not a result (O34).** Overfit-10: BC 0.009280 /
   0.016343 = 0.568 PASS, chunked BC 0.034796 / 0.055214 = 0.630 PASS. ACT: 300-step timing run only, **~2.0 s/step on CPU vs 73 ms on
   the RTX 3050** (~28×; a 195k-step run ≈ 4.5 days) — ACT and ACT-LSTM training belongs on a CUDA GPU.

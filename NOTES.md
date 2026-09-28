@@ -6880,3 +6880,76 @@ owed); 2026-09-09 O20/O21 ("rotating the offset alone scored 10/10 → 3/10" has
   rather than schedule-derived.
 
 **Still lives in:** §10 item, resolved. §14 permits removing resolved issues; archived rather than deleted. O12's answer also lives in PLAN.md and in §3 (the robot walks in every episode).
+
+---
+
+## 2026-09-29 — Phase 4 closed: all four models pass overfit-10 at W_o = 12 (NVIDIA laptop)
+
+The first results under O34 Option B: every number below comes from the NVIDIA laptop (RTX 3050 Laptop, 4 GB), with the pinned
+environment verified before the runs: Python 3.10.11, mujoco 3.6.0, numpy 1.26.4, torch 2.11.0+cu126 (CUDA 12.6, cuDNN 91002),
+opencv 4.11.0. Code at commit `ab257e5`. Data: the 40 scripted episodes recorded on THIS laptop (`data/synthetic/`), gate on the
+first 10 training seeds (0-6, 8-10, 7628 samples), `norm_stats_v1.npz` fitted on the training split. Run directories are in
+`runs/` (git-ignored).
+
+### Pre-flight
+- All suites pass: `g1_data.test_{spec,contact_contract,dataset,dropout}`, `g1_model.test_{loader,ambiguity,train}`,
+  `tools.test_keypoint_recording` (192 tests), and `g1_model.test_act` 47/47. `test/test_g1_control.py` not run (stale, O7).
+- The ACT golden fingerprint (`test_use_lstm_false_is_act_exactly_as_it_was_before_the_flag`), recorded on torch 2.14 CPU, PASSES
+  here on torch 2.11 CUDA: the parameter hashes are exact and the outputs are within the test's 1e-6 tolerance.
+
+### Gate results (W_o = 12; ratio < 1 passes)
+| model | budget | train error (deployed) | reference | ratio | run |
+|---|---|---|---|---|---|
+| BC (K=1) | 300 epochs, batch 256 (9000 steps) | 0.010013 | 0.015836 | **0.632 PASS** | `20260928-221450_bc_overfit10_K1_W12` |
+| chunked BC (K=100) | 300 epochs, batch 256 (9000 steps) | 0.038959 | 0.054265 | **0.718 PASS** | `20260928-221835_bc_overfit10_K100_W12` |
+| ACT (K=100) | 200k-step cap, batch 8, stop rule 10 x 1000 at 1% | 0.039071 | 0.054265 | **0.720 PASS** | `20260928-222316_act_overfit10_K100_W12` |
+| ACT-LSTM (K=100) | identical to ACT, same `--budget-reason` | 0.032544 | 0.054265 | **0.600 PASS** | `20260929-022601_act_lstm_overfit10_K100_W12` |
+
+Budgets copied from the W_o = 1 gates they replace, so only W_o changed. Wall time: ACT 14,554 s (13.74 steps/s), ACT-LSTM
+15,675 s (12.76 steps/s); ACT used 2.3 of 4 GB.
+
+### Neither ACT run converged
+Both stopped by the 200,000-step HARD CAP, not by the stop rule. Improvement of the best windowed mean over the last 10 windows
+against the best before them (the rule's own quantity; it stops below 1% for BOTH monitors):
+
+| run | recon_l1 | train_loss |
+|---|---|---|
+| ACT | 0.046795 -> 0.046035, 1.62% | 0.046922 -> 0.046144, 1.66% |
+| ACT-LSTM | 0.039754 -> 0.038912, 2.12% | 0.039864 -> 0.038983, 2.21% |
+
+The W_o = 1 ACT gate DID stop by the rule, at 195,000 steps. PLAN.md's Phase 4 exit criterion ("train to convergence") is
+therefore NOT shown for ACT or ACT-LSTM, nor for BC and chunked BC, which ran a fixed 300 epochs with no stop rule (as at
+W_o = 1). The gate verdicts stand, because the gate scores the final weights actually trained. **Do not rank the models on this gate.** ACT-LSTM was still improving faster than ACT, a ratio
+below 1 means only that the fit is below the observation's ambiguity, and this is training error on 10 scripted episodes, not RQ3.
+
+### What else the runs show
+- **The latent collapsed again, in both ACT and ACT-LSTM**: KL 1e-05 throughout, as at W_o = 1 (CLAUDE.md §8 2026-09-22). Expected on
+  a deterministic demonstrator (O32). ACT scores the same as chunked BC (0.720 vs 0.718), as the audit predicted: on scripted data the
+  CVAE adds nothing the gate can see.
+- **ACT and ACT-LSTM differ ONLY in `use_lstm`**, diffed from the `model_kwargs` saved in both `best.pt` files (every other field equal,
+  including the inert `lstm_*` fields). The training configs are identical except `run_name`; the metadata notes differ only in
+  `model` and in the regularization statement, which names the LSTM dropout. Parameters: ACT 40,755,414, ACT-LSTM 41,726,166.
+- The three K=100 models share one reference (0.054265) because they share one loader configuration, so their ratios are directly
+  comparable to each other. BC's reference (0.015836) is its own. None is comparable with the W_o = 1 gates (O31), nor with the
+  CPU laptop's W_o = 12 code-test ratios (0.568, 0.630): that laptop recorded its own episodes and the reference differs
+  (0.015836 here vs 0.016343 there; O34).
+
+### cuDNN LSTM on the GPU: deterministic, but crashes Python at exit
+- **Determinism (the item §8 2026-09-28 left untested).** With `use_deterministic_algorithms(True)`, `cudnn.deterministic = True`,
+  `cudnn.benchmark = False` and `CUBLAS_WORKSPACE_CONFIG=:4096:8`: a 2-layer LSTM (47 -> 256, dropout 0.3, train mode, batch 64,
+  W = 12), seeded, run forward and backward twice, gives bit-identical gradients and outputs. Small scale only; a full run was not
+  repeated to check bit-identity end to end.
+- **Exit crash.** Every process that has run a cuDNN LSTM on CUDA exits with `-1073740791` (0xC0000409, a fail-fast) AFTER all its
+  work is done: `g1_model.test_act` prints `47/47 passed` and then crashes, twice. A minimal script reproduces it:
+  | script | exit |
+  |---|---|
+  | Linear on CUDA, deterministic | 0 |
+  | LSTM on CUDA, deterministic | crash |
+  | LSTM on CUDA, NOT deterministic | crash |
+  | LSTM, then `gc.collect()` + `synchronize()` + `empty_cache()` | crash |
+  | LSTM with `torch.backends.cudnn.enabled = False` | 0 |
+
+  So it is cuDNN's RNN teardown in this build (torch 2.11.0+cu126, cuDNN 9.10, Windows), not our code; `faulthandler` prints
+  nothing. **cuDNN is kept ON**: disabling it changes how the LSTM computes, a methods decision not taken here. Consequence: the
+  ACT-LSTM gate run "failed" with that exit code while its `gate.json` was complete and `passed = true`. **Judge an ACT-LSTM run by
+  its `gate.json` and log, never by its exit code**, and run it with `python -u` so the log is not lost in the crash.
