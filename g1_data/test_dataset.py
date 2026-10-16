@@ -88,6 +88,35 @@ def test_missing_contract_counts_as_a_different_contract():
     _raises(DS.DatasetError, DS.assert_uniform, [a, b])
 
 
+def _ep_demo(seed, demonstrator):
+    e = _ep(seed)
+    if demonstrator is not None:
+        e.meta["demonstrator"] = dict(demonstrator)
+    return e
+
+
+def test_uniform_demonstrator_settings_pass():
+    A = dict(hold_max=0.80, reposition_s=0.5)
+    DS.assert_uniform_demonstrator([_ep_demo(0, A), _ep_demo(1, A)])
+    # No demonstrator at all (teleop, or recorded before the field): uniform.
+    DS.assert_uniform_demonstrator([_ep_demo(0, None), _ep_demo(1, None)])
+
+
+def test_mixed_demonstrator_settings_raise():
+    e = _raises(DS.DatasetError, DS.assert_uniform_demonstrator,
+                [_ep_demo(0, dict(hold_max=0.80, reposition_s=0.5)),
+                 _ep_demo(1, dict(hold_max=0.40, reposition_s=0.5))])
+    assert "0.8" in str(e) and "0.4" in str(e)
+
+
+def test_partial_demonstrator_settings_raise():
+    """Some episodes say which settings produced them and some cannot."""
+    e = _raises(DS.DatasetError, DS.assert_uniform_demonstrator,
+                [_ep_demo(0, dict(hold_max=0.80, reposition_s=0.5)),
+                 _ep_demo(1, None)])
+    assert "NO demonstrator settings" in str(e)
+
+
 def test_heldout_spawn_in_training_raises():
     from g1_teleop.config import TeleopConfig
     cfg = TeleopConfig().box

@@ -131,6 +131,37 @@ def assert_uniform(eps: Sequence[Episode]) -> None:
                           for c, p in example.items()))
 
 
+def assert_uniform_demonstrator(eps: Sequence[Episode]) -> None:
+    """One set of demonstrator settings across the episodes, or none at all.
+
+    `meta["demonstrator"]` (hold_max, reposition_s) is written by the scripted
+    recorder since 2026-10-17. Two refusals, both raised, never warned:
+      * MIXED settings - the trajectories come from different demonstrators
+        (CLAUDE.md section 8 2026-10-17: same SPEC_VERSION and contact
+        contract, different walk speed and phase timing), which nothing else
+        here would notice;
+      * SOME episodes with the field and some without - an older episode
+        cannot say which settings produced it, so mixing it in is the same
+        mix, unprovable. Episodes with no demonstrator at all (teleop, or a
+        set recorded entirely before the field existed) are uniform and pass.
+    """
+    groups: Dict[object, List[Episode]] = {}
+    for e in eps:
+        d = e.meta.get("demonstrator")
+        key = None if d is None else tuple(sorted(d.items()))
+        groups.setdefault(key, []).append(e)
+    if len(groups) > 1:
+        lines = []
+        for key, members in groups.items():
+            what = "NO demonstrator settings recorded" if key is None else dict(key)
+            lines.append("%s: %d episode(s), e.g. %s"
+                         % (what, len(members), os.path.basename(members[0].path)))
+        raise DatasetError(
+            "this dataset mixes demonstrator settings. The trajectories were "
+            "produced by different demonstrators, or some cannot say which; do "
+            "not split or normalize across it:\n  " + "\n  ".join(lines))
+
+
 def heldout_leak(eps: Sequence[Episode], box_cfg=None) -> List[int]:
     """Seeds whose spawn falls inside the Objective 4 held-out patch."""
     from g1_teleop.box_reset import in_heldout

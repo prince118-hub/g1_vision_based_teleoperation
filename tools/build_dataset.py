@@ -8,6 +8,17 @@
     python tools/build_dataset.py norm --allow-synthetic
     python tools/build_dataset.py check    # everything, in order
 
+    # a separate dataset, leaving data/processed/*_v1 untouched:
+    python tools/build_dataset.py split --episodes recordings/scripted_v1 \
+        --splits data/processed/splits_scripted_v1.json
+    python tools/build_dataset.py norm --allow-synthetic --episodes recordings/scripted_v1 \
+        --splits data/processed/splits_scripted_v1.json --norm data/processed/norm_stats_scripted_v1.npz
+
+--episodes reads episodes from any folder instead of data/synthetic or
+data/raw/train; its ledger is that folder's ledger.jsonl unless --ledger says
+otherwise. split and norm refuse episodes with mixed demonstrator settings
+(dataset.assert_uniform_demonstrator).
+
 Phase 3, second chunk. Nothing here trains anything: the model codebase, the
 training loop, chunking and the deployment harness are Phase 4.
 
@@ -38,12 +49,26 @@ from g1_data.ledger import EpisodeLedger
 from g1_data.paths import repo_relpath
 
 
+def _episode_dir(a) -> str:
+    if a.episodes:
+        return a.episodes
+    return DS.SYNTHETIC if a.synthetic else DS.RAW_TRAIN
+
+
 def _episodes(a):
-    eps = DS.scan(DS.SYNTHETIC if a.synthetic else DS.RAW_TRAIN)
+    d = _episode_dir(a)
+    eps = DS.scan(d)
     if not eps:
-        raise SystemExit("no episodes in %s - run `stage` first"
-                         % (DS.SYNTHETIC if a.synthetic else DS.RAW_TRAIN))
+        raise SystemExit("no episodes in %s - run `stage` first" % d)
     return eps
+
+
+def _splits_path(a) -> str:
+    return a.splits or DS.SPLITS
+
+
+def _norm_path(a) -> str:
+    return a.norm or DS.NORM_STATS
 
 
 def cmd_layout(a):
@@ -232,6 +257,7 @@ def cmd_partition(a):
 def cmd_split(a):
     eps = _episodes(a)
     DS.assert_uniform(eps)
+    DS.assert_uniform_demonstrator(eps)
     DS.assert_no_leak(eps)
     led = EpisodeLedger(a.ledger)
     cov = DS.coverage(led, eps)
@@ -243,7 +269,7 @@ def cmd_split(a):
     print("  spawn x %s  y %s" % (cov["spawn_x"], cov["spawn_y"]))
     print("  held-out leak     : %s" % (cov["heldout_accepted"] or "NONE - good"))
     sp = DS.stratified_split(eps, val_frac=a.val_frac, grid=(a.grid, a.grid))
-    DS.save_splits(sp)
+    DS.save_splits(sp, path=_splits_path(a))
     occupied = {k: len(v) for k, v in sp["bins"].items()}
     print("split: %d train / %d val over %d occupied bins of %d"
           % (len(sp["train"]), len(sp["val"]), len(occupied), a.grid ** 2))
@@ -251,23 +277,36 @@ def cmd_split(a):
     print("  bins with no val episode: %s  (8 val cannot cover 9 bins; at 150 "
           "episodes every bin draws ~3)" % (sp["bins_without_val"] or "none"))
     print("  val seeds: %s" % sp["val"])
-    print("  saved %s" % repo_relpath(DS.SPLITS))
+    print("  saved %s" % repo_relpath(_splits_path(a)))
     return 0
 
 
 def cmd_norm(a):
     eps = _episodes(a)
-    sp = DS.load_splits() if os.path.exists(DS.SPLITS) else DS.stratified_split(eps)
+    DS.assert_uniform_demonstrator(eps)
+    sp_path = _splits_path(a)
+    if os.path.exists(sp_path):
+        sp = DS.load_splits(sp_path)
+    elif a.splits:
+        # An explicitly named split that does not exist is a mistake, not a
+        # request to invent one: the stats would describe a split nobody saved.
+        raise SystemExit("--splits %s does not exist - run `split` with the same "
+                         "--splits first" % a.splits)
+    else:
+        sp = DS.stratified_split(eps)
+    print("split: %s" % (repo_relpath(sp_path) if os.path.exists(sp_path)
+                         else "computed in memory (no %s)" % repo_relpath(sp_path)))
     train = [e for e in eps if e.seed in set(sp["train"])]
     st, ac, rep = DS.fit_norm_stats(train, "train",
                                     allow_synthetic=a.allow_synthetic)
-    DS.save_norm_stats(st, ac, source=rep["source"], n_episodes=rep["n_episodes"],
-                       seeds=rep["seeds"], split=rep["split"])
+    DS.save_norm_stats(st, ac, path=_norm_path(a), source=rep["source"],
+                       n_episodes=rep["n_episodes"], seeds=rep["seeds"],
+                       split=rep["split"])
     print("fitted on %d TRAIN episodes (%d ticks), source=%s"
           % (rep["n_episodes"], rep["n_ticks"], rep["source"]))
-    print("saved %s" % repo_relpath(DS.NORM_STATS))
+    print("saved %s" % repo_relpath(_norm_path(a)))
 
-    st2, ac2, meta = DS.load_norm_stats()
+    st2, ac2, meta = DS.load_norm_stats(_norm_path(a))
     print("reloaded: spec %s, split %s, source %s" % (meta["spec_version"],
                                                       meta["split"], meta["source"]))
     print("provenance: %d seed(s) %s%s, fitted %s, commit %s"
@@ -275,7 +314,7 @@ def cmd_norm(a):
              " ..." if len(meta["seeds"]) > 8 else "",
              meta["fitted_utc"], meta["git_commit"][:12]))
     # The provenance is only worth writing if something reads it back.
-    DS.assert_norm_stats_match(meta, train, where=os.path.basename(DS.NORM_STATS))
+    DS.assert_norm_stats_match(meta, train, where=os.path.basename(_norm_path(a)))
     print("  seed provenance matches the %d episode(s) just fitted on" % len(train))
     # round trip
     arrays, _ = train[0].load()
@@ -334,8 +373,9 @@ def main():
         p.set_defaults(fn=fn)
         p.add_argument("--synthetic", action="store_true",
                        help="operate on data/synthetic (the scripted demonstrator)")
-        p.add_argument("--ledger", default=os.path.join(ROOT, "recordings", "episodes",
-                                                        "ledger.jsonl"))
+        # Default None: resolved after parsing, so --episodes brings its own
+        # ledger (the namespace and its ledger are one thing, recorder.py).
+        p.add_argument("--ledger", default=None)
         if name in ("stage",):
             p.add_argument("--from", dest="source",
                            default=os.path.join(ROOT, "recordings", "episodes"))
@@ -350,11 +390,24 @@ def main():
             p.add_argument("--grid", type=int, default=3)
         if name in ("norm", "check"):
             p.add_argument("--allow-synthetic", action="store_true")
+        if name in ("split", "norm", "check"):
+            p.add_argument("--episodes", default=None,
+                           help="episode folder (default data/synthetic with "
+                                "--synthetic, else data/raw/train)")
+            p.add_argument("--splits", default=None,
+                           help="split file (default %s)" % repo_relpath(DS.SPLITS))
+        if name in ("norm", "check"):
+            p.add_argument("--norm", default=None,
+                           help="norm stats file (default %s)" % repo_relpath(DS.NORM_STATS))
     a = ap.parse_args()
     for k, v in (("sabotage", False), ("teleop", None), ("val_frac", 0.2),
-                 ("grid", 3), ("allow_synthetic", False), ("source", None)):
+                 ("grid", 3), ("allow_synthetic", False), ("source", None),
+                 ("episodes", None), ("splits", None), ("norm", None)):
         if not hasattr(a, k):
             setattr(a, k, v)
+    if a.ledger is None:
+        a.ledger = (REC.ledger_for(a.episodes) if a.episodes
+                    else os.path.join(ROOT, "recordings", "episodes", "ledger.jsonl"))
     raise SystemExit(a.fn(a))
 
 

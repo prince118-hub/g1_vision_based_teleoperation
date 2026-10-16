@@ -170,6 +170,17 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _git_dirty():
+    """True if TRACKED files differ from HEAD, so `git_commit` alone does not
+    identify the code that ran. None when git cannot answer."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                             capture_output=True, text=True, cwd=ROOT, timeout=10)
+        return bool(out.stdout.strip()) if out.returncode == 0 else None
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 class EpisodeBuffer:
     """Per-tick rows held in memory; written once, at the end.
 
@@ -230,6 +241,7 @@ class EpisodeBuffer:
         m = dict(meta)
         m.setdefault("spec_version", spec.SPEC_VERSION)
         m.setdefault("git_commit", _git_commit())
+        m.setdefault("git_dirty", _git_dirty())
         m.setdefault("mujoco_version", mujoco.__version__)
         m.setdefault("python_version", sys.version.split()[0])
         m.setdefault("n_ticks", len(self.states))
@@ -544,6 +556,12 @@ class ScriptedRecorder:
             reset_fingerprint=self.reset_fingerprint,
             contact_contract=contract_of(model),
             lock_predicate=bool(demo.lock_predicate),
+            # 2026-10-17. The demonstrator settings that shape the trajectory,
+            # written because they changed (CLAUDE.md section 8) and nothing in
+            # the episode said which were used. build_dataset refuses to split
+            # or normalize across a mix (dataset.assert_uniform_demonstrator).
+            demonstrator=dict(hold_max=float(demo.hold_max),
+                              reposition_s=float(demo.reposition_s)),
             source=SOURCE_SCRIPTED,
             n_ticks=len(self.buf),
         )

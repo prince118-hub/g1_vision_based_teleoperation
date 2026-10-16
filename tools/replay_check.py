@@ -350,8 +350,13 @@ def main():
     print("\n================ SUMMARY over %d episode(s) ================" % len(files))
     print("reset fingerprint matched      : %d/%d"
           % (sum(r["reset_fingerprint_ok"] for r in reps), len(files)))
-    print("MANIPULATION reproduced        : %d/%d  (weld and lock within %d ticks, "
-          "box within %.0f mm while welded)"
+    # Matches `manipulation_ok` above: weld fired, weld tick within TICK_TOL,
+    # box within LOCKED_BOX_M while the base is welded. The lock tick is NOT
+    # scored (it follows the walk-in, which open-loop replay cannot reproduce);
+    # dLock is in the per-episode table as evidence only.
+    print("MANIPULATION reproduced        : %d/%d  (weld fired within %d ticks of the "
+          "recorded tick, box within %.0f mm while the base is welded; lock tick "
+          "reported as dLock, not scored)"
           % (len(good), len(files), TICK_TOL, 1000 * LOCKED_BOX_M))
     print("whole task reproduced          : %d/%d  (see the walk numbers below)"
           % (sum(bool(r.get("task_success")) for r in reps), len(files)))

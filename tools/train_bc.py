@@ -6,6 +6,10 @@
     python tools/train_bc.py determinism
     python tools/train_bc.py wo-curve    [--windows 1,2,4,8,16,32]
 
+Every subcommand takes --episodes DIR, --splits PATH and --norm PATH (defaults:
+data/synthetic, data/processed/splits_v1.json, data/processed/norm_stats_v1.npz),
+and writes the three into the run's metadata.json as `data_paths`.
+
 THE GATE CRITERION (revised 2026-09-21, NOTES.md)
 --------------------------------------------------
 A stage passes when its training error on 10 episodes falls BELOW the
@@ -56,6 +60,16 @@ from g1_model import ambiguity as AMB
 from g1_model.act import ACTConfig, build_act
 from g1_model import train as T
 
+# The data a run reads: an episode folder, a split file and a norm-stats file.
+# Set ONCE from the command line in main() (defaults are the v1 paths every
+# earlier run used), read by every call site below - so a run cannot load its
+# split from one dataset and its episodes or normalizer from another.
+DATA = dict(episodes=DS.SYNTHETIC, splits=DS.SPLITS, norm=DS.NORM_STATS)
+
+
+def _data_paths() -> dict:
+    return {k: repo_relpath(v) for k, v in DATA.items()}
+
 
 def _tracking_policy() -> TrackingPolicy:
     """Stated, not defaulted (A2). Off on both switches: every staged episode is
@@ -69,9 +83,9 @@ def _tracking_policy() -> TrackingPolicy:
 def _load(seeds, mcfg, norm_meta, norm_fit_seeds=None) -> ChunkDataset:
     """The loader shape comes from the MODEL's own config (BCConfig or ACTConfig),
     so the window the loader cuts is the window the model was built for."""
-    st, ac, meta = DS.load_norm_stats()
+    st, ac, meta = DS.load_norm_stats(DATA["norm"])
     return ChunkDataset.from_directory(
-        DS.SYNTHETIC,
+        DATA["episodes"],
         LoaderConfig(chunk_size=mcfg.chunk_size, obs_window=mcfg.obs_window,
                      tracking=_tracking_policy()),
         st, ac, norm_meta if norm_meta else None, seeds=seeds,
@@ -237,7 +251,7 @@ def _resume_arg(a):
 
 
 def _splits():
-    sp = DS.load_splits()
+    sp = DS.load_splits(DATA["splits"])
     return sorted(sp["train"]), sorted(sp["val"])
 
 
@@ -256,7 +270,7 @@ def cmd_baselines(a):
     """B6: what near zero is measured against, before anything is trained."""
     bc = BCConfig(obs_window=1, chunk_size=1)
     tr, _ = _splits()
-    st, ac, meta = DS.load_norm_stats()
+    st, ac, meta = DS.load_norm_stats(DATA["norm"])
     ds = _load(tr, bc, meta)
     _banner(ds, "BASELINES on the TRAIN split")
     dev = T.select_device()
@@ -275,7 +289,7 @@ def cmd_determinism(a):
     """B3: prove it, rather than claiming it. Two identical short runs."""
     bc = BCConfig(obs_window=1, chunk_size=1)
     tr, _ = _splits()
-    st, ac, meta = DS.load_norm_stats()
+    st, ac, meta = DS.load_norm_stats(DATA["norm"])
     ds = _load(tr[:3], bc, meta, norm_fit_seeds=tr)
     losses = []
     for i in (1, 2):
@@ -339,7 +353,7 @@ def cmd_overfit10(a):
     mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=True)
     tr, _ = _splits()
     seeds = tr[:10]
-    st, ac, meta = DS.load_norm_stats()
+    st, ac, meta = DS.load_norm_stats(DATA["norm"])
     ds = _load(seeds, mcfg, meta, norm_fit_seeds=tr)
     name = ("ACT (K=%d)" % K if a.model == "act"
             else "ACT-LSTM (K=%d)" % K if a.model == "act_lstm"
@@ -384,6 +398,7 @@ def cmd_overfit10(a):
                    ambiguity_reference=ref.as_metadata(),
                    provisional_hyperparameters=PROVISIONAL,
                    data_caveat=T.dataset_provenance(ds)["caveat"],
+                   data_paths=_data_paths(),
                    regularization=regularization_statement(mcfg)))
     model = _make_model(mcfg, cfg)
     assert_regularization_matches(model, mcfg)
@@ -411,7 +426,7 @@ def cmd_full(a):
     K = int(a.chunk)
     mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=False)
     tr, va = _splits()
-    st, ac, meta = DS.load_norm_stats()
+    st, ac, meta = DS.load_norm_stats(DATA["norm"])
     tds = _load(tr, mcfg, meta)
     vds = _load(va, mcfg, meta, norm_fit_seeds=tr)
     assert not (set(tds.seeds) & set(vds.seeds)), "train and val share a seed"
@@ -447,7 +462,8 @@ def cmd_full(a):
                    ambiguity_reference_train=ref_tr.as_metadata(),
                    ambiguity_reference_val=ref_va.as_metadata(),
                    provisional_hyperparameters=PROVISIONAL,
-                   data_caveat=T.dataset_provenance(tds)["caveat"]))
+                   data_caveat=T.dataset_provenance(tds)["caveat"],
+                   data_paths=_data_paths()))
     model = _make_model(mcfg, cfg)
     res = T.train(model, tds, cfg, val_ds=vds, resume=_resume_arg(a))
     _report(res, res["baselines"], "FULL-SPLIT RESULT (plumbing only)")
@@ -468,7 +484,7 @@ def cmd_wo_curve(a):
     """Part D: neighbour ambiguity as a function of obs_window. NO MODEL."""
     windows = [int(w) for w in str(a.windows).split(",") if w.strip()]
     tr, _ = _splits()
-    st, ac, meta = DS.load_norm_stats()
+    st, ac, meta = DS.load_norm_stats(DATA["norm"])
     print("=" * 78)
     print("W_o SELECTION INSTRUMENT: neighbour ambiguity vs observation window")
     print("  NO MODEL IS INVOLVED. This is a measurement of the DATA, so it "
@@ -481,7 +497,7 @@ def cmd_wo_curve(a):
           "see the report." % len(tr))
     print("=" * 78)
     rows = AMB.ambiguity_curve(
-        DS.SYNTHETIC, tr, windows, int(a.chunk), st, ac, meta,
+        DATA["episodes"], tr, windows, int(a.chunk), st, ac, meta,
         device=T.select_device(), tracking=_tracking_policy())
     print("  %4s %12s %10s %12s %8s" % ("W_o", "ambiguity", "vs W=1",
                                         "nn-dist p50", "dims"))
@@ -564,7 +580,7 @@ def cmd_rescore_gate(a):
         raise SystemExit("checkpoint seeds %r differ from the run's %r"
                          % (ck["data"]["seeds"], seeds))
     K, W = int(meta["loader"]["chunk_size"]), int(meta["loader"]["obs_window"])
-    st, ac, nmeta = DS.load_norm_stats()
+    st, ac, nmeta = DS.load_norm_stats(DATA["norm"])
     ds = _load(seeds, BCConfig(obs_window=W, chunk_size=K), nmeta, norm_fit_seeds=tr)
     device = T.select_device()
     ref = AMB.neighbour_ambiguity(ds, device=device)
@@ -633,6 +649,12 @@ def main():
                          ("rescore-gate", cmd_rescore_gate, 0)):
         p = sub.add_parser(name)
         p.set_defaults(fn=fn)
+        p.add_argument("--episodes", default=DS.SYNTHETIC,
+                       help="episode folder (default %(default)s)")
+        p.add_argument("--splits", default=DS.SPLITS,
+                       help="split file (default %(default)s)")
+        p.add_argument("--norm", default=DS.NORM_STATS,
+                       help="norm-stats file (default %(default)s)")
         if ep:
             # TR28's family: an epoch budget that differs across stages for an
             # UNSTATED reason. BC's gate ran 300 because 300 was the default here;
@@ -674,6 +696,8 @@ def main():
             p.add_argument("--windows", default="1,2,4,8,16,32")
             p.add_argument("--chunk", type=int, default=1)
     a = ap.parse_args()
+    DATA.update(episodes=a.episodes, splits=a.splits, norm=a.norm)
+    print("data: episodes %(episodes)s | splits %(splits)s | norm %(norm)s" % _data_paths())
     raise SystemExit(a.fn(a))
 
 
