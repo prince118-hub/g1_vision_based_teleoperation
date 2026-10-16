@@ -81,7 +81,8 @@ from g1_teleop.base_lock import BaseLock
 from g1_teleop import contact_contract as CC
 from g1_data import spec
 from g1_data.phases import LockConfig, LockPredicate, PlatformGeometry
-from locomotion_input import PelvisVelocity, LeanJoystick, KeyboardCommand
+from locomotion_input import (PelvisVelocity, LeanJoystick, KeyboardCommand,
+                              KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT)
 
 # ── Paths (EDIT THESE) ────────────────────────────────────────────────────────
 # G1_POLICY_PATH overrides the policy path per machine; unset keeps the original.
@@ -989,7 +990,8 @@ def main():
                 hints = ["g grasp   u unlock   b B-prime   o overlay (minimal/full)",
                          "a/d rot  w/s tilt  +/- zoom  r reset  space stop  q quit"]
                 if isinstance(loco, KeyboardCommand):
-                    hints[0] = "arrows walk/turn (hold)   p precision   " + hints[0]
+                    # Its own line: prefixing hints[0] no longer fits with strafe.
+                    hints.insert(0, "arrows walk/turn   n/m strafe (hold)   p precision")
                 for k_, h_ in enumerate(hints):
                     text(right, h_, (10, PANEL_H - 30 + 16 * k_), 0.45, (200, 200, 200))
 
@@ -1040,6 +1042,13 @@ def main():
                         loco.on_key(263)
                     elif ev in ARROW_RIGHT or low == ord("l"):
                         loco.on_key(262)
+                    # Strafe. n/m are free in this loop's single-shot keys below,
+                    # and their low bytes (n/N 0x6E/0x4E, m/M 0x6D/0x4D) collide
+                    # with no arrow code (low bytes 0x00 and 0x51-0x54 'Q'-'T').
+                    elif low in (ord("n"), ord("N")):
+                        loco.on_key(KEYCODE_STRAFE_LEFT)
+                    elif low in (ord("m"), ord("M")):
+                        loco.on_key(KEYCODE_STRAFE_RIGHT)
 
             # Single-shot keys act on the most recent event only.
             raw = drained[-1] if drained else -1

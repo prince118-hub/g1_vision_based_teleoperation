@@ -18,12 +18,18 @@ Two things this script demonstrates:
    from where it should be, and feed a small corrective velocity back into the
    policy. The policy already knows how to walk — we just tell it where to go.
 
-Controls (focus the MuJoCo window):
-  arrow up/down    : forward speed +/-
-  arrow left/right : turn rate +/-
+Controls (focus the MuJoCo window). Each press STEPS the command by 0.1 and the
+current (vx, vy, wz) is printed after every key:
+  arrow up/down    : forward speed +/- 0.1
+  arrow left/right : turn rate +/- 0.1
+  n / m            : lateral speed +/- 0.1 (strafe left / right)
   space            : stop and hold current position
   h                : re-anchor the hold target to the current position
   (close window to quit)
+Limits are MAX_FORWARD / MAX_LATERAL / MAX_TURN from locomotion_input.py, so
+the command stays inside spec.VELOCITY_CLIP. Every letter is also a MuJoCo
+viewer shortcut (n island, m centre of mass, h convex hull), so those display
+toggles flip as a side effect.
 
 Setup: edit POLICY_PATH and SCENE_PATH below.
 Run:   python walk_test.py
@@ -36,6 +42,12 @@ import mujoco.viewer
 import torch
 
 from g1_teleop.indices import ModelIndex
+from locomotion_input import (
+    MAX_FORWARD, MAX_LATERAL, MAX_TURN,
+    KEYCODE_UP, KEYCODE_DOWN, KEYCODE_LEFT, KEYCODE_RIGHT,
+    KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT, KEYCODE_SPACE)
+
+CMD_STEP = 0.1          # per key press, on vx, vy and wz
 
 # ── Paths (EDIT THESE) ────────────────────────────────────────────────────────
 # G1_POLICY_PATH overrides the policy path per machine; unset keeps the original.
@@ -62,10 +74,7 @@ NUM_ACTIONS = 12
 NUM_OBS = 47
 GAIT_PERIOD = 0.8
 
-# ── Command limits (empirically validated as stable on this robot) ────────────
-MAX_FORWARD = 0.80      # m/s
-MAX_LATERAL = 0.40      # m/s
-MAX_TURN = 0.80         # rad/s
+# ── Command limits: MAX_FORWARD / MAX_LATERAL / MAX_TURN, imported above ──────
 
 # ── Position hold (station keeping at zero command) ───────────────────────────
 # Below IDLE_THRESHOLD the operator is not commanding motion, so instead of
@@ -145,29 +154,36 @@ def main():
     counter = 0
 
     def key_callback(keycode):
-        nonlocal cmd
-        if keycode == 265:      # up arrow
-            cmd[0] += 0.1
-        elif keycode == 264:    # down arrow
-            cmd[0] -= 0.1
-        elif keycode == 263:    # left arrow
-            cmd[2] += 0.1
-        elif keycode == 262:    # right arrow
-            cmd[2] -= 0.1
-        elif keycode == 32:     # space — stop and hold here
+        if keycode == KEYCODE_UP:
+            cmd[0] += CMD_STEP
+        elif keycode == KEYCODE_DOWN:
+            cmd[0] -= CMD_STEP
+        elif keycode == KEYCODE_LEFT:
+            cmd[2] += CMD_STEP
+        elif keycode == KEYCODE_RIGHT:
+            cmd[2] -= CMD_STEP
+        elif keycode == KEYCODE_STRAFE_LEFT:
+            cmd[1] += CMD_STEP
+        elif keycode == KEYCODE_STRAFE_RIGHT:
+            cmd[1] -= CMD_STEP
+        elif keycode == KEYCODE_SPACE:   # space — stop and hold here
             cmd[:] = 0.0
             hold_target[:] = data.qpos[ix.base_xy_qpos]
             print(f"holding at x={hold_target[0]:+.3f} y={hold_target[1]:+.3f}")
         elif keycode == ord('H'):   # re-anchor hold target
             hold_target[:] = data.qpos[ix.base_xy_qpos]
             print(f"hold re-anchored at x={hold_target[0]:+.3f} y={hold_target[1]:+.3f}")
+        # Snap to the 0.1 grid so repeated float32 steps print and command
+        # exactly what was pressed (0.1 + 0.1 + 0.1 is not 0.3 in float32).
+        cmd[:] = np.round(cmd, 2)
         cmd[0] = np.clip(cmd[0], -MAX_FORWARD, MAX_FORWARD)
         cmd[1] = np.clip(cmd[1], -MAX_LATERAL, MAX_LATERAL)
         cmd[2] = np.clip(cmd[2], -MAX_TURN, MAX_TURN)
-        print(f"cmd = forward {cmd[0]:.2f}  lateral {cmd[1]:.2f}  turn {cmd[2]:.2f}")
+        print(f"cmd = vx {cmd[0]:+.2f} m/s   vy {cmd[1]:+.2f} m/s   wz {cmd[2]:+.2f} rad/s")
 
     print("=== Standalone walking test ===")
-    print("Focus the MuJoCo window. Arrows: forward/turn. Space: stop+hold. H: re-anchor.")
+    print("Focus the MuJoCo window. Arrows: forward/turn +/-0.1. n/m: strafe +/-0.1. "
+          "Space: stop+hold. H: re-anchor.")
     print("At zero command the robot marches in place — that is the policy balancing.")
     print("Position hold keeps it from drifting away while it does so.\n")
 

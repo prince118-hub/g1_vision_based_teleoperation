@@ -45,10 +45,32 @@ RIGHT_SHOULDER = 13
 LEFT_WRIST = 16
 RIGHT_WRIST = 17
 
-# Validated stable command envelope (measured on this robot)
+# Command envelope. Every value must sit inside spec.VELOCITY_CLIP
+# (+-0.80, +-0.80, +-0.60), which the recorder ASSERTS on every tick
+# (g1_data/recorder.py:208) - a command outside it aborts a recording.
+# MAX_TURN was 0.80 and is 0.60 to match that clip (2026-10-16). Enforced by
+# g1_teleop/test_keyboard_command.py.
 MAX_FORWARD = 0.80
 MAX_LATERAL = 0.40
-MAX_TURN = 0.80
+MAX_TURN = 0.60
+
+# KeyboardCommand speeds (2026-10-16), chosen from the headless speed sweep
+# runs/walk_sweep_2026-10-16/ (tools/walk_sweep.py): no falls up to 1.2 on any
+# axis; the cost of speed is the stop overshoot under station-keeping, which
+# is worst walking BACKWARD (0.29 m at -0.7 vs 0.16 m at +0.7) - hence the
+# slower backward speed. Precision mode halves all four.
+KEY_FORWARD = 0.6       # m/s
+KEY_BACKWARD = 0.4      # m/s
+KEY_STRAFE = 0.4        # m/s, left and right
+KEY_TURN = 0.6          # rad/s
+
+# Key codes for KeyboardCommand.on_key. GLFW codes, which is what the MuJoCo
+# viewer's key_callback delivers (letters arrive as UPPERCASE ASCII); the
+# OpenCV loop in run_integrated_combined.py translates its own codes to these.
+KEYCODE_UP, KEYCODE_DOWN, KEYCODE_LEFT, KEYCODE_RIGHT = 265, 264, 263, 262
+KEYCODE_STRAFE_LEFT = ord("N")      # n: +vy (G1 Y is left)
+KEYCODE_STRAFE_RIGHT = ord("M")     # m: -vy
+KEYCODE_SPACE = 32
 
 
 def _clip_cmd(vx, vy, wz):
@@ -243,20 +265,28 @@ class KeyboardCommand:
     absence of a repeat within release_sec. Key auto-repeat makes holding a key
     produce a steady stream of events, which reads as continuous motion.
 
+    KEYS
+    up/down walk forward/back, left/right turn, n/m strafe left/right, space
+    stops. Forward and backward speeds differ (KEY_FORWARD / KEY_BACKWARD).
+
     PRECISION MODE
     The final approach to the platform needs finer control than crossing the
     room. Press 'p' to halve the speeds for accurate positioning.
 
     TURNING RADIUS
-    Radius is forward_speed / turn_speed, so a gentler turn_speed at the same
-    forward_speed sweeps a wider arc. At 0.35 m/s and 0.25 rad/s the radius is
-    about 1.4 m, which is controllable; the previous 0.5 rad/s gave 1.1 m and
-    felt sharp. Raising forward_speed also widens the radius.
+    Radius is forward_speed / turn_speed. At the 2026-10-16 speeds (0.6 m/s,
+    0.6 rad/s) it is 1.0 m - TIGHTER than the 1.1 m (0.35 m/s at 0.5 rad/s)
+    that was recorded as feeling sharp, and tighter than the 1.4 m it replaces
+    (0.35 m/s, 0.25 rad/s). Precision mode halves both, so it does not change
+    the radius.
     """
 
-    def __init__(self, forward_speed=0.35, turn_speed=0.25, release_sec=0.25,
+    def __init__(self, forward_speed=KEY_FORWARD, backward_speed=KEY_BACKWARD,
+                 strafe_speed=KEY_STRAFE, turn_speed=KEY_TURN, release_sec=0.25,
                  precision_scale=0.5):
         self.forward_speed = forward_speed
+        self.backward_speed = backward_speed
+        self.strafe_speed = strafe_speed
         self.turn_speed = turn_speed
         self.release_sec = release_sec
         self.precision_scale = precision_scale
@@ -284,15 +314,19 @@ class KeyboardCommand:
 
     def on_key(self, keycode):
         now = time.time()
-        if keycode == 265:      # up
+        if keycode == KEYCODE_UP:
             self._pressed["fwd"] = now
-        elif keycode == 264:    # down
+        elif keycode == KEYCODE_DOWN:
             self._pressed["back"] = now
-        elif keycode == 263:    # left
+        elif keycode == KEYCODE_LEFT:
             self._pressed["left"] = now
-        elif keycode == 262:    # right
+        elif keycode == KEYCODE_RIGHT:
             self._pressed["right"] = now
-        elif keycode == 32:     # space
+        elif keycode == KEYCODE_STRAFE_LEFT:
+            self._pressed["strafe_left"] = now
+        elif keycode == KEYCODE_STRAFE_RIGHT:
+            self._pressed["strafe_right"] = now
+        elif keycode == KEYCODE_SPACE:
             self._pressed.clear()
             self.cmd[:] = 0.0
 
@@ -306,7 +340,13 @@ class KeyboardCommand:
         if "fwd" in held:
             fwd += self.forward_speed * scale
         if "back" in held:
-            fwd -= self.forward_speed * scale
+            fwd -= self.backward_speed * scale
+
+        lat = 0.0
+        if "strafe_left" in held:
+            lat += self.strafe_speed * scale
+        if "strafe_right" in held:
+            lat -= self.strafe_speed * scale
 
         turn = 0.0
         if "left" in held:
@@ -314,7 +354,7 @@ class KeyboardCommand:
         if "right" in held:
             turn -= self.turn_speed * scale
 
-        self.cmd[:] = _clip_cmd(fwd, 0.0, turn)
+        self.cmd[:] = _clip_cmd(fwd, lat, turn)
         self.diag = {"strategy": "keyboard", "precision": self.precision,
                      "held": ",".join(sorted(held)) if held else "-"}
         return self.cmd.copy()
