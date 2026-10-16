@@ -1,9 +1,19 @@
 """Record demonstrations from the SCRIPTED demonstrator, with operator control.
 
-    python tools/record_episodes.py --count 5                     # interactive
-    python tools/record_episodes.py --count 5 --auto pass         # accept if all checks pass
+    python tools/record_episodes.py --count 5 --seeds data/eval/train_seeds.json             # interactive
+    python tools/record_episodes.py --count 5 --seeds data/eval/train_seeds.json --auto pass # accept if all checks pass
     python tools/record_episodes.py --invariance 0                # recording changes nothing?
     python tools/record_episodes.py --ledger-summary
+
+    # watch and film (tools/episode_view.py; observation only):
+    python tools/record_episodes.py --count 2 --seeds data/eval/train_seeds.json --auto pass \
+        --viewer --realtime --video-dir D:/thesis_videos/test --out-dir recordings/scripted_test
+
+--out-dir is the episode folder AND its ledger (default recordings/episodes/).
+Writing into recordings/episodes/ requires --seeds: the contiguous fallback
+stream contains held-out-patch seeds (g1_data/dataset.py:183-186).
+--video-dir writes ep_seedNNNN.mp4 per accepted episode and
+ep_seedNNNN_FAIL.mp4 for a discarded, retried or errored one.
 
 Phase 3, first chunk. The recorder is `g1_data/recorder.py` and is OBSERVATION
 ONLY: it wraps `mj_step` and reads the demonstrator's frame. `scripted_demo.py`
@@ -36,11 +46,13 @@ import glob
 import os
 import sys
 import time
+from contextlib import nullcontext
 
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from g1_data import spec
 from g1_data.ledger import EpisodeLedger, seed_stream
@@ -85,6 +97,13 @@ def verdict(meta: dict) -> tuple:
          meta["min_hand_platform_clearance_mm"] >= PENETRATION_MM,
          "%.1f mm (0.0 = never touched, TR19)"
          % meta["min_hand_platform_clearance_mm"]),
+        # The demonstrator's OWN verdict. Added 2026-10-17: without it a
+        # transport scrape (box < DemoConfig.min_clearance over a platform,
+        # scripted_demo.py:1251) passed every row above, so --auto pass
+        # accepted an episode the demonstrator had scored as failed.
+        ("demonstrator ok", bool(o["ok"]),
+         "fail_phase=%s, box clearance %.1f mm"
+         % (o["fail_phase"], 1000.0 * meta["min_box_platform_clearance_m"])),
     ]
     return rows, all(ok for _, ok, _ in rows)
 
@@ -99,14 +118,39 @@ def print_verdict(meta: dict, rows, recommend: bool) -> None:
     print("  RECOMMEND: %s" % ("ACCEPT" if recommend else "DISCARD"))
 
 
-def run_one(seed: int, cfg, demo, book, policy, record: bool = True):
-    """(result, recorder or None). The demonstrator call is untouched either way."""
+def run_one(seed: int, cfg, demo, book, policy, record: bool = True, view=None):
+    """(result, recorder or None). The demonstrator call is untouched either way.
+
+    `view` is an optional `episode_view.EpisodeView`. It is entered BEFORE the
+    recorder so the recorder stays the outermost mj_step wrapper (see
+    episode_view's docstring).
+    """
     from g1_data import scripted_demo as SD
+    ctx = view if view is not None else nullcontext()
     if not record:
-        return SD.run_episode(seed, cfg=cfg, demo=demo, book=book, policy=policy), None
-    with ScriptedRecorder() as rec:
+        with ctx:
+            return SD.run_episode(seed, cfg=cfg, demo=demo, book=book, policy=policy), None
+    with ctx, ScriptedRecorder() as rec:
         result = SD.run_episode(seed, cfg=cfg, demo=demo, book=book, policy=policy)
     return result, rec
+
+
+def make_view(seed: int, a):
+    """An EpisodeView if any watch/film flag is set, else None."""
+    if not (a.viewer or a.realtime or a.video_dir):
+        return None
+    from episode_view import EpisodeView
+    return EpisodeView(seed, viewer=a.viewer, realtime=a.realtime,
+                       video_dir=a.video_dir)
+
+
+def finalize_view(view, accepted: bool) -> None:
+    if view is None:
+        return
+    path = view.finalize(accepted)
+    if path:
+        print("  video -> %s (%d frames, %.1f MB)"
+              % (path, view.n_frames, os.path.getsize(path) / 1e6))
 
 
 def _setup():
@@ -114,8 +158,20 @@ def _setup():
     import walk_test as W
     from g1_data import scripted_demo as SD
     cfg = TeleopConfig()
+    # 2026-10-17, setting "A", chosen by Charles (CLAUDE.md section 8):
+    #   reposition_s 6.0 -> 0.5  REPOSITION let a FREE base close the standoff
+    #                          after the reach (scripted_demo.py:88-92); under
+    #                          the D12 lock the base cannot move, so it was 6 s
+    #                          of dead time (base 0.000 m/s, arm cmd 0.001 rad/s).
+    #   hold_max stays 0.80    (the demonstrator default). Measured on the first
+    #                          50 train seeds, headless: 0.80 -> 49/50, 0.60 ->
+    #                          43/50 (7 placement failures at box y < -0.09),
+    #                          0.40 -> 49/50 but goal-platform clearance < 10 mm
+    #                          on 45/50. A's one failure: seed 25, PLACE(xy).
+    # Episode timing changes: 548-692 ticks, so the D13 range (694-846, measured
+    # with reposition_s 6.0) does not describe episodes recorded with this.
     demo = SD.DemoConfig(walk_place=True, start_xy=(0.60, 0.00), settle_s=14.0,
-                         lock_predicate=True)
+                         lock_predicate=True, hold_max=0.80, reposition_s=0.5)
     return cfg, demo, SD.PoseBook(cfg, demo), torch.jit.load(W.POLICY_PATH)
 
 
@@ -175,11 +231,15 @@ def cmd_record(a):
             ledger.append("issue", seed=seed, label=label)
             print("\n=== seed %d ===" % seed)
             t0 = time.perf_counter()
+            view = make_view(seed, a)
             try:
-                result, rec = run_one(seed, cfg, demo, book, policy)
+                result, rec = run_one(seed, cfg, demo, book, policy, view=view)
             except Exception as e:                          # noqa: BLE001
+                # Includes episode_view.ViewerPerturbation: a viewer that
+                # changed the physics fails the episode outright.
                 ledger.append("error", seed=seed, reason=repr(e))
                 print("  ERROR: %r (recorded in the ledger, seed left pending)" % e)
+                finalize_view(view, accepted=False)
                 break
             # The model the episode ran on is the one the recorder saw.
             meta = rec.metadata(rec.model, result, cfg, demo, seed,
@@ -188,6 +248,7 @@ def cmd_record(a):
             rows, recommend = verdict(meta)
             print_verdict(meta, rows, recommend)
             choice = decide(a.auto, recommend)
+            finalize_view(view, accepted=(choice == "accept"))
             if choice == "accept":
                 path = os.path.join(a.out, "ep_seed%04d.npz" % seed)
                 rec.buf.save(path, meta)
@@ -239,14 +300,28 @@ def main():
     # not separately settable - an operator who can pair the new directory with
     # the old ledger eventually will, and that pairing silently skips every
     # seed the old ledger already accepted.
-    ap.add_argument("--out", default=OUT_DIR,
-                    help="output namespace; its ledger is %s inside it" % "ledger.jsonl")
+    ap.add_argument("--out-dir", "--out", dest="out", default=OUT_DIR,
+                    help="output folder for episodes; its ledger is %s inside it "
+                         "(default recordings/episodes/, which requires --seeds)"
+                    % "ledger.jsonl")
+    ap.add_argument("--viewer", action="store_true",
+                    help="open the MuJoCo passive viewer (observation only)")
+    ap.add_argument("--realtime", action="store_true",
+                    help="pace the episode to wall-clock time (sleep only)")
+    ap.add_argument("--video-dir", default=None,
+                    help="save one MP4 per episode here (1280x720, 25 fps)")
     ap.add_argument("--ledger-summary", action="store_true")
     ap.add_argument("--auto", choices=("pass", "all", "off"), default="off",
                     help="pass: accept when every check passes (unattended runs)")
     ap.add_argument("--invariance", type=int, default=None,
                     help="run this seed with and without the recorder and diff the result")
     a = ap.parse_args()
+    if (a.invariance is None and not a.ledger_summary and a.seeds is None
+            and os.path.abspath(a.out) == os.path.abspath(OUT_DIR)):
+        ap.error("refusing to write into %s without --seeds: the contiguous "
+                 "fallback stream includes held-out-patch seeds. Pass --seeds "
+                 "data/eval/train_seeds.json, or a different --out-dir."
+                 % repo_relpath(OUT_DIR))
     raise SystemExit(cmd_invariance(a) if a.invariance is not None else cmd_record(a))
 
 

@@ -6953,3 +6953,76 @@ below 1 means only that the fit is below the observation's ambiguity, and this i
   nothing. **cuDNN is kept ON**: disabling it changes how the LSTM computes, a methods decision not taken here. Consequence: the
   ACT-LSTM gate run "failed" with that exit code while its `gate.json` was complete and `passed = true`. **Judge an ACT-LSTM run by
   its `gate.json` and log, never by its exit code**, and run it with `python -u` so the log is not lost in the crash.
+
+---
+
+## 2026-10-17 — CLAUDE.md §8 ARCHIVE: retired Phase 4 entries
+
+Retired under the CLAUDE.md §14 retirement policy to bring CLAUDE.md back under its 400-line cap after the 2026-10-17
+demonstrator-settings entry. Approved by Charles before the move. Each entry is VERBATIM as it stood in CLAUDE.md,
+followed by where its content still lives. All three belong to Phase 4, which is CLOSED (2026-09-29), and guard nothing.
+
+### 1.
+
+- 2026-09-27 — **W_o = 12 pipeline passes its CODE TEST on the second (CPU) laptop — not a result (O34).** Overfit-10: BC 0.009280 /
+  0.016343 = 0.568 PASS, chunked BC 0.034796 / 0.055214 = 0.630 PASS. ACT: 300-step timing run only, **~2.0 s/step on CPU vs 73 ms on
+  the RTX 3050** (~28×; a 195k-step run ≈ 4.5 days) — ACT and ACT-LSTM training belongs on a CUDA GPU.
+
+**Still lives in:** the DECISION (ACT and ACT-LSTM train on a CUDA GPU; the CPU laptop's numbers are code tests, not results) is
+O34 Option B (CLAUDE.md §8 2026-09-28, §10 O34). The CPU timing measurement (~2.0 s/step vs 73 ms) has no other home and lives here.
+
+### 2.
+
+- 2026-09-27 — **PIN THE MUJOCO VERSION once the partner's is known** (O34). DONE 2026-09-28: pinned, seeds 0–44 re-recorded; the
+  "must match the measurement file" test failed on 14/40 seeds, so it was replaced by Option B (next entry up).
+
+**Still lives in:** `requirements.txt` (mujoco==3.6.0 and the rest of the partner's build) and CLAUDE.md §8 2026-09-28 (Option B).
+"next entry up" in the text referred to that 2026-09-28 entry.
+
+### 3.
+
+- 2026-09-23 — **Run records corrected, not rewritten.** All 4 ACT overfit-10 runs said "NONE: dropout 0"; ACT trained with 0.1 (eval-mode
+  gate, so no number changes). Corrected in `metadata.json` and in every checkpoint's embedded config, verified that nothing else differs;
+  all 8 runs gained the grad-clip disclosure; each carries a `corrections` entry saying what changed and what did not.
+
+**Still lives in:** every affected run's own `metadata.json` (`corrections` entry; runs/2026092*_act_overfit10_*), and the
+grad-clip disclosure in CLAUDE.md §8 2026-09-23 ("Grad clip 1.0 KEPT").
+
+---
+
+## 2026-10-17 — Scripted rehearsal settings: four 50-seed headless runs, setting "A" adopted
+
+Charles watched the first filmed scripted episodes (`tools/episode_view.py`) and reported a long stop and a walk that
+looked too fast. Measured on the two filmed episodes: the stop is REPOSITION, 6.0 s with the base locked (D12), base
+speed 0.000 m/s and the fastest arm command 0.001 rad/s. REPOSITION exists so a FREE base can close the standoff after
+the reach (`scripted_demo.py:88-92`); under the lock it cannot, so it is dead time. The walk is `DemoConfig.hold_max`
+0.80 (per axis, `scripted_demo.py:1144-1145`); pelvis speed peaks 1.1 m/s carrying the box (that peak includes gait sway).
+
+All four runs: first 50 seeds of `data/eval/train_seeds.json`, `record_episodes._setup` otherwise unchanged, headless,
+nothing saved, NVIDIA laptop. Clearance = box bottom above the platform top during MOVE, per physics step, split by
+platform with a read-only `mj_step` hook (the demonstrator's own `min_clearance_m` takes either platform).
+
+| | 0.40 / 0.5 s | **A: 0.80 / 0.5 s** | 0.60 / 0.5 s | old: 0.80 / 6.0 s |
+|---|---|---|---|---|
+| success | 49/50 | **49/50** | 43/50 | 50/50 |
+| ticks (median) | 644–672 (652) | 548–692 (631) | 583–712 (643) | 676–846 (769) |
+| pickup clearance min / median (mm) | 14.1 / 20.0 | 17.3 / 24.7 | 24.5 / 33.9 | 21.5 / 29.5 |
+| goal clearance min / median (mm) | 4.6 / 9.0 | 6.4 / 11.1 | 8.5 / 10.9 | 5.0 / 12.6 |
+| goal clearance < 5 / < 10 mm | 1 / 45 | 0 / 18 | 0 / 5 | 0 / 14 |
+| goal median by box y −0.21..−0.07 / −0.07..+0.07 / +0.07..+0.21 | 8.9 / 9.4 / 6.8 | 11.4 / 9.8 / 12.1 | 11.1 / 10.4 / 12.5 | 13.8 / 10.1 / 13.0 |
+| failed seeds | 7 TRANSPORT(clearance) | 25 PLACE(xy) | 9, 17, 25, 31, 43, 46, 56 (PLACE) | — |
+
+- Pickup clearance is never the problem (≥ 14 mm in every run); the low values are over the GOAL platform at the
+  end of MOVE. 0.40's low goal clearance clusters at box y > +0.07 (seeds 1, 5, 7, 13, 28, 50, 55 below 7 mm).
+- 0.60 is worse than both 0.40 and 0.80. All 7 failures are placement (xy / upright / resting), box y −0.09..−0.21,
+  6 of 7 at box x ≥ 1.52. Unmeasured hypothesis: the goal approach is tuned at 0.80 (`goal_standoff_bias`, measured
+  arrival deficit, `scripted_demo.py:1110-1117`).
+- Seed 7 at 0.40/0.5 passes with either change alone (4.6 mm vs 12.6 old).
+- `record_episodes.verdict` did not include the demonstrator's own `ok`, so `--auto pass` would have ACCEPTED seed 7.
+  Added as the "demonstrator ok" row.
+- Watched vs headless: seed 0 recorded with `--viewer --realtime --video-dir` is bit-identical to a headless run
+  (sha256 of states, actions, qpos, qvel, phase_labels, and the reset fingerprint).
+- The 0.50–0.71 rad one-tick arm-target jump is 31 ticks into REACH, NOT at REACH start (0.114 rad there), and is in
+  the stored old episodes (`data/synthetic/ep_seed0000-0004`) too. Not investigated (`scripted_demo.py` off-limits).
+- The demonstrator is deterministic: a failing seed fails every time and stays first in the pending list, so record
+  with `--count` = target + expected failures in ONE session.

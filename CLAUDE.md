@@ -102,6 +102,12 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
+- 2026-10-17 — **SCRIPTED REHEARSAL SETTING "A": `reposition_s` 6.0 → 0.5 s, `hold_max` stays 0.80** (Charles; `tools/record_episodes.py`
+  `_setup`, `scripted_demo.py` untouched). REPOSITION was 6 s of dead time: it lets a FREE base close the standoff, but the base is locked there
+  (D12). First 50 train seeds, headless: **A 49/50** (seed 25 `PLACE(xy)`), 0.60/0.5 43/50 (7 placement fails, box y < −0.09), 0.40/0.5 49/50
+  but GOAL-platform clearance < 10 mm on 45/50 (seed 7 4.6 mm, < 5 mm `min_clearance`), old 0.80/6.0 50/50. A: **548–692 ticks**, so **D13's
+  694–846 no longer describes new recordings**; goal clearance min 6.4 mm. New **"demonstrator ok"** check: `--auto pass` had accepted demo
+  failures. Pre-existing, unchanged: a 0.50–0.71 rad one-tick arm-target jump 31 ticks into REACH. Detail: `NOTES.md` 2026-10-17.
 - 2026-09-29 — **PHASE 4 CLOSED WITH A QUALIFICATION: all four PASS overfit-10 at W_o = 12** (O34 Option B: NVIDIA laptop, ab257e5,
   scripted): BC **0.632**, chunked BC **0.718**, ACT **0.720**, ACT-LSTM **0.600** (K=100 share ref 0.054265). **Neither ACT run converged:**
   both hit the 200k CAP still improving 1.6% / 2.1% per 10 windows (rule: 1%) — PASSES stand, **do not rank models on this gate**. Latent
@@ -119,11 +125,7 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   sit INERT in ACT's config, so the two configs differ in `use_lstm` alone (PLAN Phase 4 exit check, tested on the runner's configs).
   **Disclose:** the 0.3 is `nn.LSTM`'s BETWEEN-LAYER dropout only, never on the token; the LSTM keeps PyTorch's default init.
   **Tested 2026-09-29:** cuDNN LSTM under `deterministic_algorithms` IS deterministic on the GPU, and crashes Python at exit (entry above).
-- 2026-09-27 — **W_o = 12 pipeline passes its CODE TEST on the second (CPU) laptop — not a result (O34).** Overfit-10: BC 0.009280 /
-  0.016343 = 0.568 PASS, chunked BC 0.034796 / 0.055214 = 0.630 PASS. ACT: 300-step timing run only, **~2.0 s/step on CPU vs 73 ms on
-  the RTX 3050** (~28×; a 195k-step run ≈ 4.5 days) — ACT and ACT-LSTM training belongs on a CUDA GPU.
-- 2026-09-27 — **PIN THE MUJOCO VERSION once the partner's is known** (O34). DONE 2026-09-28: pinned, seeds 0–44 re-recorded; the
-  "must match the measurement file" test failed on 14/40 seeds, so it was replaced by Option B (next entry up).
+- 2026-09-27 — CPU-laptop code test of W_o = 12; MuJoCo pinned (done 2026-09-28). Archived: `NOTES.md` "2026-10-17 — CLAUDE.md §8 ARCHIVE".
 - 2026-09-27 — **ALL MODELS AT W_o = 12: BC, chunked BC, ACT and ACT-LSTM share one observation window; D8 still pending adviser
   approval.** Replaces "BC stays at W_o = 1 on purpose" (2026-09-25). Reason: with one window every rung of the ladder changes ONE thing
   (BC → chunked BC chunking, → ACT the CVAE, → ACT-LSTM recurrence), so every comparison is fair. `tools/train_bc.py --obs-window`
@@ -164,9 +166,7 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   equal the model's declaration; run fields have none (stop_rule/window_steps must be STATED in a step budget). **BC now declares** — it
   never did, so BC's optimizer settings were unchecked for all of Stage 3; an undeclared or partial declaration is refused. Loop defaults
   that had been reaching models: grad_clip 1.0, weight_decay 0.0, optimizer adamw, seed 0, window_steps 1000, stop_rule None.
-- 2026-09-23 — **Run records corrected, not rewritten.** All 4 ACT overfit-10 runs said "NONE: dropout 0"; ACT trained with 0.1 (eval-mode
-  gate, so no number changes). Corrected in `metadata.json` and in every checkpoint's embedded config, verified that nothing else differs;
-  all 8 runs gained the grad-clip disclosure; each carries a `corrections` entry saying what changed and what did not.
+- 2026-09-23 — Run records corrected, not rewritten. Archived: `NOTES.md` "2026-10-17 — CLAUDE.md §8 ARCHIVE".
 - 2026-09-22 — **ACT PASSES the overfit-10 gate: 0.041081 / 0.044657 = 0.920** (converged, 195k steps, lr 1e-5, beta 10, one decoder
   layer). It had "failed" at 1.140 because the gate scored a TRAIN-MODE window mean, with dropout 0.1 on and the weights moving; ALL of the
   gap is dropout (z = posterior vs 0 moves < 2e-4). **The gate AND best.pt now use ONE quantity, `train.score_deployment`**: final weights,
