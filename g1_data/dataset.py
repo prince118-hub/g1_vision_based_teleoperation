@@ -456,17 +456,44 @@ def save_norm_stats(state, action, path: str = NORM_STATS, source: str = "real",
                 seeds=seeds,
                 fitted_utc=_dt.datetime.now(_dt.timezone.utc).isoformat(
                     timespec="seconds"),
-                git_commit=_git_commit())
+                git_commit=_git_commit(),
+                # O33: the floor these stats were fitted under. Checked on load.
+                std_floor=float(spec.NormStats.STD_FLOOR))
     np.savez(path, state_mean=state.mean, state_std=state.std,
              action_mean=action.mean, action_std=action.std,
              meta=np.array(json.dumps(meta)))
     return path
 
 
+def assert_std_floor(meta: dict, where: str = "") -> None:
+    """The stats were fitted under the CURRENT `NormStats.STD_FLOOR`, or raise.
+
+    The floor changed 1e-6 -> 1e-2 on 2026-10-17 (O33) without a SPEC_VERSION
+    bump - the episodes are unaffected, only the normalizer is. So the version
+    check cannot catch a stale normalizer and this does: a file fitted under
+    another floor scales the near-constant dims differently and changes every
+    input to them silently. A file with no stored floor predates the field and
+    is refused, not assumed.
+    """
+    tag = (" (" + where + ")") if where else ""
+    if "std_floor" not in meta:
+        raise DatasetError(
+            "normalization stats%s carry no `std_floor`, so the floor they were "
+            "fitted under is unknown (the field was added with STD_FLOOR = %g, "
+            "O33). Refit them with `tools/build_dataset.py norm`."
+            % (tag, spec.NormStats.STD_FLOOR))
+    if float(meta["std_floor"]) != float(spec.NormStats.STD_FLOOR):
+        raise DatasetError(
+            "normalization stats%s were fitted with std_floor %g; this build "
+            "uses %g. Refit them with `tools/build_dataset.py norm`."
+            % (tag, float(meta["std_floor"]), spec.NormStats.STD_FLOOR))
+
+
 def load_norm_stats(path: str = NORM_STATS):
     with np.load(path, allow_pickle=False) as z:
         meta = json.loads(str(z["meta"]))
         spec.assert_spec_version(meta["spec_version"], where=os.path.basename(path))
+        assert_std_floor(meta, where=os.path.basename(path))
         st = spec.NormStats(kind="state", mean=z["state_mean"], std=z["state_std"],
                             split=meta["split"])
         ac = spec.NormStats(kind="action", mean=z["action_mean"], std=z["action_std"],

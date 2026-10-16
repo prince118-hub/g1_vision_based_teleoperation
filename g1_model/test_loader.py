@@ -48,6 +48,29 @@ def _staged():
     return eps or None
 
 
+def _v1_stats(eps):
+    """(state, action, meta, split): stats fitted NOW on the v1 split's train
+    episodes, through save/load, in a temp file. Not `norm_stats_v1.npz`: that
+    file predates the stored std floor (O33, 2026-10-17) and is refused on load,
+    which is the point of the floor check, not something these tests are about.
+    None when there is no v1 split."""
+    if not os.path.exists(DS.SPLITS):
+        return None
+    sp = DS.load_splits()
+    train = [e for e in eps if e.seed in set(sp["train"])]
+    st, ac, rep = DS.fit_norm_stats(train, "train", allow_synthetic=True)
+    tmp = tempfile.mkdtemp()
+    try:
+        p = os.path.join(tmp, "norm.npz")
+        DS.save_norm_stats(st, ac, path=p, source=rep["source"],
+                           n_episodes=rep["n_episodes"], seeds=rep["seeds"],
+                           split=rep["split"])
+        st, ac, meta = DS.load_norm_stats(p)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return st, ac, meta, sp
+
+
 def _synthetic_episode(tmp, seed, n_ticks, degraded=(), spawn=(1.50, -0.10)):
     """A real .npz with real metadata, whose tracking_ok is what we say it is.
 
@@ -235,11 +258,11 @@ def test_normalization_round_trips_and_masked_dims_are_untouched():
     if eps is None:
         print("      (skipped: nothing staged in data/synthetic)")
         return
-    if not os.path.exists(DS.NORM_STATS):
-        print("      (skipped: no norm_stats_v1.npz)")
+    got = _v1_stats(eps)
+    if got is None:
+        print("      (skipped: no splits_v1.json)")
         return
-    st, ac, meta = DS.load_norm_stats()
-    sp = DS.load_splits()
+    st, ac, meta, sp = got
     train = [e for e in eps if e.seed in set(sp["train"])]
     d = ChunkDataset(train, LoaderConfig(chunk_size=8, obs_window=1, tracking=TrackingPolicy()),
                      st, ac, meta)
@@ -282,11 +305,11 @@ def test_loader_refuses_to_be_handed_anything_but_norm_stats():
 def test_normalizer_from_another_split_is_refused():
     """A3 + B8. This is the failure that changes every number and no message."""
     eps = _staged()
-    if eps is None or not os.path.exists(DS.NORM_STATS):
-        print("      (skipped: needs staged episodes and norm stats)")
+    got = _v1_stats(eps) if eps is not None else None
+    if got is None:
+        print("      (skipped: needs staged episodes and splits_v1.json)")
         return
-    st, ac, meta = DS.load_norm_stats()
-    sp = DS.load_splits()
+    st, ac, meta, sp = got
     train = [e for e in eps if e.seed in set(sp["train"])]
     val = [e for e in eps if e.seed in set(sp["val"])]
     cfg = LoaderConfig(chunk_size=8, obs_window=1, tracking=TrackingPolicy())

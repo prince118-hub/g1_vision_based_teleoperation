@@ -375,6 +375,17 @@ def test_norm_stats_round_trip():
         assert np.allclose(z[:, d], x[:, d]), "masked dim was rescaled"
 
 
+def test_std_floor_is_the_act_reference_clip():
+    """O33 (2026-10-17): 1e-2, as reference/act/utils.py:97,102. The old 1e-6
+    floored nothing - a std of 5e-3 (servo jitter on a pinned joint) passed."""
+    assert spec.NormStats.STD_FLOOR == 1e-2
+    std = np.ones(22)
+    std[0] = 5e-3                        # trainable dim below the floor
+    _raises(ValueError, spec.NormStats, "action", np.zeros(22), std)
+    std[0] = 1e-2                        # exactly at the floor is allowed
+    spec.NormStats("action", np.zeros(22), std)
+
+
 def test_norm_stats_carries_and_checks_the_spec_version():
     _raises(AssertionError, spec.NormStats, "action", np.zeros(22),
             np.ones(22), "train", "g1-spec-0.0.0")

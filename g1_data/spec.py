@@ -624,10 +624,20 @@ class NormStats:
       4. `spec_version` is stored and checked. Stats fitted under one layout
          are silently wrong under another; that is what versioning is for.
 
-    `std` is floored at `STD_FLOOR` for unmasked dims: a dim that is nearly
-    constant in the training split but not exactly constant (the audit found
-    several at 1e-4 to 1e-3) would otherwise get an enormous scale factor and
-    amplify sampling noise into the model's input.
+    `std` is floored at `STD_FLOOR` = 1e-2 for unmasked dims, the ACT
+    reference's clip (`reference/act/utils.py:97,102`). A dim that is nearly
+    constant in the training split but not exactly constant would otherwise get
+    an enormous scale factor and amplify servo jitter into the model's input.
+    Measured on the scripted_v1 train split (O33, 2026-10-17): base z (0.0084 m),
+    right wrist yaw (0.0019 rad), waist yaw (0.0032) and waist roll (0.0075) -
+    all held still by design (D2, D10) - and right wrist yaw's release spike was
+    a -31 sigma input under the old 1e-6 floor, which floored nothing.
+
+    One number across units: 1e-2 is 1 cm for a position and 0.57 deg for a
+    joint. The floor is stored in every norm-stats file and checked on load
+    (`dataset.load_norm_stats`), so stats fitted under a different floor are
+    refused rather than loaded - changing the floor does not change
+    SPEC_VERSION, because the episodes themselves are unaffected.
     """
 
     kind: str                      # "state" | "action"
@@ -636,7 +646,7 @@ class NormStats:
     split: str = "train"
     spec_version: str = SPEC_VERSION
 
-    STD_FLOOR = 1e-6
+    STD_FLOOR = 1e-2        # O33, 2026-10-17 (was 1e-6)
 
     def __post_init__(self):
         if self.kind not in ("state", "action"):

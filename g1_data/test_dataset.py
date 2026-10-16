@@ -315,6 +315,45 @@ def test_norm_stats_carry_seed_provenance_and_it_is_checked():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _rewrite_norm_meta(path, **changes):
+    """Rewrite a stats file's metadata; a value of None removes the key."""
+    with np.load(path, allow_pickle=False) as z:
+        arrays = {k: z[k] for k in z.files if k != "meta"}
+        meta = json.loads(str(z["meta"]))
+    for k, v in changes.items():
+        if v is None:
+            meta.pop(k, None)
+        else:
+            meta[k] = v
+    np.savez(path, meta=np.array(json.dumps(meta)), **arrays)
+
+
+def test_norm_stats_store_the_std_floor_and_refuse_a_different_one():
+    """O33 (2026-10-17): the floor changed without a SPEC_VERSION bump, so the
+    file carries it and loading checks it. Missing or different: refused."""
+    eps = _fake_episode_files(3)
+    if eps is None:
+        print("      (skipped: nothing staged in data/synthetic)")
+        return
+    tmp, eps = eps
+    try:
+        st, ac, rep = DS.fit_norm_stats(eps, "train", allow_synthetic=True)
+        path = os.path.join(tmp, "norm.npz")
+        DS.save_norm_stats(st, ac, path=path, source=rep["source"],
+                           n_episodes=rep["n_episodes"], seeds=rep["seeds"],
+                           split=rep["split"])
+        _, _, meta = DS.load_norm_stats(path)
+        assert meta["std_floor"] == spec.NormStats.STD_FLOOR == 1e-2
+        _rewrite_norm_meta(path, std_floor=1e-6)            # fitted under the old floor
+        e = _raises(DS.DatasetError, DS.load_norm_stats, path)
+        assert "1e-06" in str(e) and "0.01" in str(e)
+        _rewrite_norm_meta(path, std_floor=None)            # predates the field
+        e = _raises(DS.DatasetError, DS.load_norm_stats, path)
+        assert "std_floor" in str(e)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_repo_relpath_survives_a_cross_drive_path():
     """A1: `os.path.relpath` raises across Windows drive letters, and the fix had
     been written three times separately. One helper, and a test that proves it is

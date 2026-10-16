@@ -102,6 +102,9 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
+- 2026-10-17 — **O33: `NormStats.STD_FLOOR` 1e-6 → 1e-2, NO SPEC_VERSION bump** (a bump fails every load of the 50 scripted_v1 episodes; the
+  episodes are unaffected). The floor is stored in each stats file and checked on load instead. scripted_v1 refit: dims 9, 43, 44, 45 floored,
+  worst |z| base z 6.1 → 5.1, right wrist yaw 31.3 → 6.1; means and actions unchanged. **`norm_stats_v1.npz` predates the field and is now refused** — refit to use it.
 - 2026-10-17 — **SCRIPTED REHEARSAL SETTING "A": `reposition_s` 6.0 → 0.5 s, `hold_max` stays 0.80** (Charles; `tools/record_episodes.py`
   `_setup`, `scripted_demo.py` untouched). REPOSITION was 6 s of dead time: it lets a FREE base close the standoff, but the base is locked there
   (D12). First 50 train seeds, headless: **A 49/50** (seed 25 `PLACE(xy)`), 0.60/0.5 43/50 (7 placement fails, box y < −0.09), 0.40/0.5 49/50
@@ -332,10 +335,8 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   (TR16). **Qualified 2026-09-15:** measured with the capped scripted station-keeper; a human at full command overcame it (§8).
 - **O32. NEW — prediction: the ACT latent is ACTIVE on piloted data.** Scripted: KL 1e-05, z inert (§8 2026-09-22). Predicted on teleop:
   KL stays above zero and the z = 0 vs posterior-mean gap opens. If it collapses there too, beta (10; balance-matched 14.70) is the suspect.
-- **O33. NEW — normalization std floor: ours 1e-6, the reference's 1e-2** (`spec.py` `STD_FLOOR`; `reference/act/utils.py:97,102`).
-  On the scripted train split 4 STATE dims fall below 1e-2 — 9 base z (0.0087), 43 right wrist (0.0020), 44–45 waist (0.0030, 0.0069),
-  all pinned — so their jitter is z-scored up to **4.9×** harder than the reference would; no action dim is affected. RECORDED, NOT FIXED:
-  normalization is regenerated from piloted data, and this **must be decided BEFORE norm stats are fitted on real episodes** (D14's hazard).
+- **O33. RESOLVED 2026-10-17 (§8): `STD_FLOOR` 1e-6 → 1e-2**, the reference's clip (`reference/act/utils.py:97,102`). Floors state dims
+  9, 43, 44, 45 (pinned, D2/D10); no action dim. Stats files carry `std_floor`; a missing or different one is refused on load.
 - **O34. RESOLVED BY POLICY, NOT BY PHYSICS — the simulation does not reproduce bit-for-bit across machines.** Against the partner's
   `docs/measurements/bprime_gates_adopted_pred_40.json` (seeds 0–39): the CPU laptop at MuJoCo 3.14.0 / NumPy 2.4 matched 0/40 (to
   74.8 mm; seeds 38, 44 fail placement). With the partner's versions pinned (env `g1_match`, 2026-09-28): **26/40 agree to ≤ 0.0003 mm,
