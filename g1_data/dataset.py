@@ -162,6 +162,56 @@ def assert_uniform_demonstrator(eps: Sequence[Episode]) -> None:
             "not split or normalize across it:\n  " + "\n  ".join(lines))
 
 
+def episode_success(e: Episode) -> Tuple[bool, str]:
+    """(succeeded, reason) for one episode, by the source's own measure.
+
+      scripted   `meta["outcome"]["ok"]` - the demonstrator's verdict, which
+                 includes its transport-clearance and wedge criteria. A
+                 scripted episode with no outcome is refused: "cannot tell"
+                 must not pass as "succeeded".
+      anything   `success.evaluate(...)["episode_success"]`, the proposal's four
+      else       criteria computed from the trajectory. Human (teleop) episodes
+                 store no verdict of their own, so it is computed here.
+    """
+    from g1_data import recorder as REC
+    if e.meta.get("source") == REC.SOURCE_SCRIPTED:
+        o = e.meta.get("outcome")
+        if o is None:
+            return False, "scripted episode with no demonstrator outcome recorded"
+        if bool(o["ok"]):
+            return True, ""
+        return False, ("demonstrator ok=False (fail_phase %s, placement %.4f m)"
+                       % (o.get("fail_phase"), float(o.get("placement_error", float("nan")))))
+    from g1_data import success as SU
+    arrays, _ = e.load()
+    r = SU.evaluate(arrays, e.meta)
+    if r["episode_success"]:
+        return True, ""
+    return False, ("success criteria failed (%s; placement %.4f m)"
+                   % (r.get("attributed_to"), r["place_detail"]["placement_error_m"]))
+
+
+def assert_successful(eps: Sequence[Episode]) -> None:
+    """Every episode succeeded, or raise naming each one that did not.
+
+    Added 2026-10-17 after a failed scripted episode (seed 25, placement 0.1087 m)
+    was accepted by mistake at the ACCEPT prompt and nothing downstream noticed:
+    split, norm and the loader read the spec version, contact contract, held-out
+    patch and demonstrator settings, but never whether the episode WORKED. A
+    failed demonstration trains the policy on a failure.
+    """
+    bad = []
+    for e in eps:
+        ok, why = episode_success(e)
+        if not ok:
+            bad.append("%s (seed %s): %s" % (os.path.basename(e.path), e.seed, why))
+    if bad:
+        raise DatasetError(
+            "%d episode(s) did not succeed and may not be split, normalized or "
+            "trained on. Move them out of the folder (and record the correction "
+            "in its ledger):\n  %s" % (len(bad), "\n  ".join(bad)))
+
+
 def heldout_leak(eps: Sequence[Episode], box_cfg=None) -> List[int]:
     """Seeds whose spawn falls inside the Objective 4 held-out patch."""
     from g1_teleop.box_reset import in_heldout

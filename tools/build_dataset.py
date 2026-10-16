@@ -258,6 +258,7 @@ def cmd_split(a):
     eps = _episodes(a)
     DS.assert_uniform(eps)
     DS.assert_uniform_demonstrator(eps)
+    DS.assert_successful(eps)
     DS.assert_no_leak(eps)
     led = EpisodeLedger(a.ledger)
     cov = DS.coverage(led, eps)
@@ -284,6 +285,7 @@ def cmd_split(a):
 def cmd_norm(a):
     eps = _episodes(a)
     DS.assert_uniform_demonstrator(eps)
+    DS.assert_successful(eps)
     sp_path = _splits_path(a)
     if os.path.exists(sp_path):
         sp = DS.load_splits(sp_path)

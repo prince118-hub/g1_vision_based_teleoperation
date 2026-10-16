@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -115,6 +116,82 @@ def test_partial_demonstrator_settings_raise():
                 [_ep_demo(0, dict(hold_max=0.80, reposition_s=0.5)),
                  _ep_demo(1, None)])
     assert "NO demonstrator settings" in str(e)
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FAILED_25 = os.path.join(ROOT, "recordings", "scripted_v1_rejected", "ep_seed0025.npz")
+
+
+def _good_episode_file():
+    src = sorted(DS._npz(DS.SYNTHETIC))
+    return src[0] if src else None
+
+
+def _copy_with_meta(src, dst, drop=(), **meta_updates):
+    """Copy an episode, rewriting only its metadata."""
+    with np.load(src, allow_pickle=False) as z:
+        arrays = {k: z[k] for k in z.files if k != "meta"}
+        meta = json.loads(str(z["meta"]))
+    for k in drop:
+        meta.pop(k, None)
+    meta.update(meta_updates)
+    np.savez_compressed(dst, meta=np.array(json.dumps(meta)), **arrays)
+    return DS.Episode(dst, meta)
+
+
+def test_failed_scripted_episode_is_refused_by_name():
+    """Seed 25 (demonstrator FAIL, placement 0.1087 m) was accepted by mistake
+    on 2026-10-17. A copy of it must be refused, named, and a good episode
+    beside it must not be blamed."""
+    good = _good_episode_file()
+    if not (os.path.exists(FAILED_25) and good):
+        print("      (skipped: needs %s and a staged episode)" % FAILED_25)
+        return
+    tmp = tempfile.mkdtemp()
+    try:
+        shutil.copy2(FAILED_25, os.path.join(tmp, "ep_seed0025.npz"))
+        shutil.copy2(good, os.path.join(tmp, "ep_seed0100.npz"))
+        eps = [DS.Episode(p, DS.read_meta(p)) for p in sorted(DS._npz(tmp))]
+        e = _raises(DS.DatasetError, DS.assert_successful, eps)
+        assert "ep_seed0025.npz" in str(e) and "ep_seed0100.npz" not in str(e)
+        assert "demonstrator ok=False" in str(e) and "0.1087" in str(e)
+        # And build_dataset split refuses it, writing no split file.
+        out = os.path.join(tmp, "splits.json")
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_dataset.py"),
+                            "split", "--episodes", tmp, "--splits", out],
+                           capture_output=True, text=True)
+        assert r.returncode != 0 and "ep_seed0025.npz" in (r.stdout + r.stderr)
+        assert not os.path.exists(out)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_human_episode_success_is_computed_from_the_trajectory():
+    """A non-scripted episode stores no verdict; success.evaluate decides."""
+    good = _good_episode_file()
+    if not (os.path.exists(FAILED_25) and good):
+        print("      (skipped: needs %s and a staged episode)" % FAILED_25)
+        return
+    from g1_data import recorder as REC
+    tmp = tempfile.mkdtemp()
+    try:
+        bad = _copy_with_meta(FAILED_25, os.path.join(tmp, "ep_seed0025.npz"),
+                              drop=("outcome",), source=REC.SOURCE_TELEOP_FIXTURE)
+        ok = _copy_with_meta(good, os.path.join(tmp, "ep_seed0100.npz"),
+                             drop=("outcome",), source=REC.SOURCE_TELEOP_FIXTURE)
+        assert DS.episode_success(ok)[0], DS.episode_success(ok)
+        e = _raises(DS.DatasetError, DS.assert_successful, [ok, bad])
+        assert "ep_seed0025.npz" in str(e) and "success criteria failed" in str(e)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_scripted_episode_without_an_outcome_is_refused():
+    from g1_data import recorder as REC
+    e = _ep(7)
+    e.meta["source"] = REC.SOURCE_SCRIPTED
+    ok, why = DS.episode_success(e)
+    assert not ok and "no demonstrator outcome" in why
 
 
 def test_heldout_spawn_in_training_raises():

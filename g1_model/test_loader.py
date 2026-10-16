@@ -438,6 +438,30 @@ def test_tracking_policy_rejects_a_nonsense_threshold():
 
 
 # ─── B7: what the loader must not do ──────────────────────────────────────────
+def test_loader_refuses_a_failed_episode_by_name():
+    """A copy of scripted_v1 seed 25 (demonstrator FAIL, accepted by mistake on
+    2026-10-17) must not reach training, even from a folder never split."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    failed = os.path.join(root, "recordings", "scripted_v1_rejected", "ep_seed0025.npz")
+    staged = _staged()
+    if not (os.path.exists(failed) and staged):
+        print("      (skipped: needs %s and a staged episode)" % failed)
+        return
+    tmp = tempfile.mkdtemp()
+    try:
+        shutil.copy2(failed, os.path.join(tmp, "ep_seed0025.npz"))
+        shutil.copy2(staged[0].path, os.path.join(tmp, "ep_seed0100.npz"))
+        st, ac = _identity()
+        cfg = LoaderConfig(chunk_size=8, obs_window=1, tracking=TrackingPolicy())
+        e = _raises(DS.DatasetError, ChunkDataset.from_directory, tmp, cfg, st, ac, None)
+        assert "ep_seed0025.npz" in str(e) and "ep_seed0100.npz" not in str(e)
+        # The good one alone still loads.
+        os.remove(os.path.join(tmp, "ep_seed0025.npz"))
+        assert len(ChunkDataset.from_directory(tmp, cfg, st, ac, None)) > 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_loader_never_reads_gait_phase_or_feeds_phase_labels():
     """The schema freeze excludes the gait clock from the state; a sample that
     carried it would hand BC the temporal capability ACT-LSTM must supply."""

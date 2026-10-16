@@ -216,6 +216,10 @@ class ChunkDataset(Dataset):
         # are the ones that make a result meaningless rather than wrong.
         DS.assert_uniform(episodes)
         DS.assert_no_leak(episodes)
+        # 2026-10-17: a failed episode trains the policy on a failure. Refused
+        # here as well as in build_dataset, because a loader can be pointed at a
+        # folder that was never split (dataset.assert_successful).
+        DS.assert_successful(episodes)
 
         # A3: a normalizer from another split loads without complaint and shifts
         # every input by a constant. This is the only place that can notice.
