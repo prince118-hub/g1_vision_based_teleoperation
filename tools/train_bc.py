@@ -2,6 +2,7 @@
 
     python tools/train_bc.py overfit10   [--epochs 300] [--chunk 1] [--obs-window 12]
     python tools/train_bc.py full        [--epochs 100] [--chunk 1] [--obs-window 12]
+    python tools/train_bc.py train       (as full, plus --checkpoint-every N --out-dir DIR)
     python tools/train_bc.py baselines
     python tools/train_bc.py determinism
     python tools/train_bc.py wo-curve    [--windows 1,2,4,8,16,32]
@@ -421,8 +422,32 @@ def cmd_overfit10(a):
     return 0 if verdict.passed else 1
 
 
-def cmd_full(a):
-    """Part B: the 32/8 split, deferred from Stage 2. A PLUMBING CHECK."""
+def _out_dir(a):
+    """--out-dir, checked: a run never writes into another run's files. The
+    directory may exist holding only the caller's own `train.log` (a launcher
+    redirects into it before Python starts); anything else is refused."""
+    d = getattr(a, "out_dir", None)
+    if not d:
+        return None
+    if os.path.isdir(d):
+        other = sorted(f for f in os.listdir(d) if f != "train.log")
+        if other:
+            raise SystemExit("--out-dir %s already holds %s - refusing to write "
+                             "a run over another one" % (d, other[:5]))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def cmd_train(a):
+    """The train/val run whose checkpoints are evaluated by task success."""
+    return cmd_full(a, purpose="train")
+
+
+def cmd_full(a, purpose="plumbing"):
+    """Part B: the train/val split. `full` is the Stage-2 PLUMBING CHECK; `train`
+    (cmd_train) is the same code path labelled as the run it is - every
+    mechanic identical, only the metadata's statement of purpose differs."""
+    out_dir = _out_dir(a)        # refused here, before minutes of data loading
     K = int(a.chunk)
     mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=False)
     tr, va = _splits()
@@ -430,12 +455,17 @@ def cmd_full(a):
     tds = _load(tr, mcfg, meta)
     vds = _load(va, mcfg, meta, norm_fit_seeds=tr)
     assert not (set(tds.seeds) & set(vds.seeds)), "train and val share a seed"
-    _banner(tds, "FULL SPLIT: %d train episodes, %d val episodes (K=%d)"
-            % (len(tds.lengths), len(vds.lengths), K))
-    print("  THIS IS A PLUMBING CHECK, NOT A RESULT. The val number says the "
-          "pipeline runs end to end.")
-    print("  It is not evidence about BC: the hyperparameters are untuned and "
-          "the data is scripted.")
+    _banner(tds, "%s: %d train episodes, %d val episodes (%s, K=%d, W_o=%d)"
+            % ("TRAINING RUN" if purpose == "train" else "FULL SPLIT",
+               len(tds.lengths), len(vds.lengths), a.model, K, mcfg.obs_window))
+    if purpose == "train":
+        print("  Checkpoints are kept for selection by TASK SUCCESS later; the "
+              "val loss is reported, not used to stop.")
+    else:
+        print("  THIS IS A PLUMBING CHECK, NOT A RESULT. The val number says the "
+              "pipeline runs end to end.")
+        print("  It is not evidence about BC: the hyperparameters are untuned and "
+              "the data is scripted.")
 
     print("")
     print("  neighbour-ambiguity reference, computed on each split separately:")
@@ -447,26 +477,43 @@ def cmd_full(a):
     print("    (the two differ because the reference depends on data DENSITY - "
           "32 episodes vs 8 - so they are not interchangeable.)")
 
+    if purpose == "train":
+        what = dict(gate="training run (train/val split)",
+                    is_a_result="provisional: scripted data (see data_caveat); "
+                                "checkpoints are selected later by task success",
+                    what_this_is="A TRAINING RUN on the train split with the val "
+                                 "split scored every window/epoch. Every periodic "
+                                 "checkpoint is kept (checkpoint_every); best.pt "
+                                 "is the lowest val loss, which is NOT how the "
+                                 "deployed weights will be chosen.")
+    else:
+        what = dict(gate="full-split plumbing check",
+                    is_a_result=False,
+                    what_this_is="A PLUMBING CHECK ON SCRIPTED DATA. It shows "
+                                 "the pipeline carries water end to end. It is "
+                                 "NOT evidence about BC and no conclusion may be "
+                                 "drawn from the validation number.")
     cfg = _train_config(
         mcfg, a.epochs, a.batch, seed=0,
-        run_name="%s_full_K%d_W%d" % (a.model, K, mcfg.obs_window),
+        run_name="%s_%s_K%d_W%d" % (a.model, "train" if purpose == "train" else "full",
+                                    K, mcfg.obs_window),
         log_every=max(1, int(a.epochs) // 20) if a.epochs else 1,
+        checkpoint_every=int(getattr(a, "checkpoint_every", 0) or 0),
         _budget=_budget(a, tds), **_step_kwargs(a),
-        notes=dict(gate="full-split plumbing check",
-                   is_a_result=False,
-                   chunk_size=K,
-                   what_this_is="A PLUMBING CHECK ON SCRIPTED DATA. It shows "
-                                "the pipeline carries water end to end. It is "
-                                "NOT evidence about BC and no conclusion may be "
-                                "drawn from the validation number.",
+        notes=dict(chunk_size=K, model=a.model, **what,
+                   **(dict(kl_weight_used=float(mcfg.kl_weight))
+                      if a.model in ("act", "act_lstm") else {}),
                    ambiguity_reference_train=ref_tr.as_metadata(),
                    ambiguity_reference_val=ref_va.as_metadata(),
                    provisional_hyperparameters=PROVISIONAL,
                    data_caveat=T.dataset_provenance(tds)["caveat"],
                    data_paths=_data_paths()))
     model = _make_model(mcfg, cfg)
-    res = T.train(model, tds, cfg, val_ds=vds, resume=_resume_arg(a))
-    _report(res, res["baselines"], "FULL-SPLIT RESULT (plumbing only)")
+    assert_regularization_matches(model, mcfg)
+    res = T.train(model, tds, cfg, val_ds=vds, resume=_resume_arg(a),
+                  run_dir=out_dir)
+    _report(res, res["baselines"], "TRAINING RESULT" if purpose == "train"
+            else "FULL-SPLIT RESULT (plumbing only)")
     print("  against the neighbour-ambiguity references:")
     print("    train %.6f / %.6f = %.4f   (reconstruction; TR29)"
           % (res["final_recon_l1"], ref_tr.mean,
@@ -475,8 +522,12 @@ def cmd_full(a):
           % (res["final_val_loss"], ref_va.mean,
              res["final_val_loss"] / ref_va.mean))
     print("")
-    print("  Draw no conclusion from the val number. Untuned hyperparameters, "
-          "scripted data.")
+    if purpose == "train":
+        print("  Scripted data: provisional until re-run on piloted data. Choose "
+              "weights by task success, not by the val number.")
+    else:
+        print("  Draw no conclusion from the val number. Untuned hyperparameters, "
+              "scripted data.")
     return 0
 
 
@@ -643,6 +694,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, fn, ep in (("overfit10", cmd_overfit10, 300),
                          ("full", cmd_full, 100),
+                         ("train", cmd_train, 100),
                          ("baselines", cmd_baselines, 0),
                          ("determinism", cmd_determinism, 0),
                          ("wo-curve", cmd_wo_curve, 0),
@@ -680,7 +732,15 @@ def main():
                            help="REQUIRED. Why this many epochs - e.g. 'identical "
                                 "to the run being compared' or a wall-clock cap. "
                                 "Written into metadata.json.")
-        if name in ("overfit10", "full"):
+        if name in ("full", "train"):
+            p.add_argument("--checkpoint-every", type=int, default=0,
+                           help="ALSO keep a checkpoint every N optimizer steps "
+                                "(--max-steps; a multiple of --window-steps) or "
+                                "every N epochs (--epochs). 0 = last.pt and best.pt only")
+            p.add_argument("--out-dir", default=None,
+                           help="run directory (default runs/<timestamp>_<name>). "
+                                "Refused if it holds anything but train.log")
+        if name in ("overfit10", "full", "train"):
             p.add_argument("--chunk", type=int, default=1,
                            help="K. 1 = BC, >1 = chunked BC (same class)")
             p.add_argument("--model", default="bc", choices=("bc", "act", "act_lstm"))

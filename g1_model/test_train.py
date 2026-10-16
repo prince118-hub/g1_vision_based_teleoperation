@@ -1444,6 +1444,47 @@ def test_every_run_records_where_its_hyperparameters_came_from():
         shutil.rmtree(out, ignore_errors=True)
 
 
+def test_checkpoint_every_keeps_every_periodic_checkpoint():
+    """2026-10-17: `checkpoint_every` was declared and never read - a run kept
+    only last.pt and best.pt. Now step budgets keep ckpt_stepNNNNNNN.pt every N
+    steps (N a multiple of window_steps) and epoch budgets ckpt_epochNNNN.pt
+    every N epochs, all of them, and each one carries the right step/epoch."""
+    tmp = _tiny(n_eps=2, n_ticks=40)
+    if tmp is None:
+        print("      (skipped: nothing staged in data/synthetic)")
+        return
+    tmp, ds = tmp
+    out = tempfile.mkdtemp()
+    try:
+        cfg = T.TrainConfig(epochs=None, batch_size=8, seed=0, **_BC_OPT,
+                            max_steps=20, window_steps=5, stop_rule=None,
+                            log_every=0, checkpoint_every=10)
+        m = T.seeded_build(cfg, build_bc, cfg=BCConfig(obs_window=1, chunk_size=1))
+        T.train(m, ds, cfg, run_dir=os.path.join(out, "steps"))
+        got = sorted(f for f in os.listdir(os.path.join(out, "steps")) if f.startswith("ckpt_"))
+        assert got == ["ckpt_step0000010.pt", "ckpt_step0000020.pt"], got
+        ck = torch.load(os.path.join(out, "steps", got[0]), weights_only=False)
+        assert ck["step"] == 10, ck["step"]
+
+        cfg = T.TrainConfig(epochs=3, batch_size=8, seed=0, **_BC_OPT,
+                            log_every=0, checkpoint_every=1)
+        m = T.seeded_build(cfg, build_bc, cfg=BCConfig(obs_window=1, chunk_size=1))
+        T.train(m, ds, cfg, run_dir=os.path.join(out, "epochs"))
+        got = sorted(f for f in os.listdir(os.path.join(out, "epochs")) if f.startswith("ckpt_"))
+        assert got == ["ckpt_epoch0001.pt", "ckpt_epoch0002.pt", "ckpt_epoch0003.pt"], got
+        assert torch.load(os.path.join(out, "epochs", got[1]), weights_only=False)["epoch"] == 2
+
+        # Not a multiple of the window: refused before any training.
+        bad = T.TrainConfig(epochs=None, batch_size=8, seed=0, **_BC_OPT,
+                            max_steps=20, window_steps=5, stop_rule=None,
+                            log_every=0, checkpoint_every=7)
+        m = T.seeded_build(bad, build_bc, cfg=BCConfig(obs_window=1, chunk_size=1))
+        _raises(T.TrainError, T.train, m, ds, bad, run_dir=os.path.join(out, "bad"))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(out, ignore_errors=True)
+
+
 def _tests():
     return [(n, f) for n, f in sorted(globals().items())
             if n.startswith("test_") and callable(f)]

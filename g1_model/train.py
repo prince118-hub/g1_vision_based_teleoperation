@@ -398,7 +398,12 @@ class TrainConfig:
     prefer_cuda: bool = True
     strict_determinism: bool = True
     log_every: int = 1
-    checkpoint_every: int = 0        # 0 = only the last and the best
+    #: 0 = only last.pt and best.pt. N > 0 ALSO writes a weights checkpoint every
+    #: N optimizer steps (step budget; must be a multiple of window_steps, so the
+    #: checkpoint carries that window's losses) or every N epochs (epoch budget),
+    #: as ckpt_step0020000.pt / ckpt_epoch0030.pt, and keeps every one. For
+    #: choosing weights later by task success rather than by val loss.
+    checkpoint_every: int = 0
     run_name: str = "run"
     #: Free-form. The gate runner puts its data-provenance statement here, and
     #: it ends up in metadata.json (C5).
@@ -1211,6 +1216,14 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
     step_mode = cfg.max_steps is not None
     if resume is not None and not step_mode:
         raise TrainError("resume is supported for step-budgeted runs (max_steps)")
+    ckpt_every = int(cfg.checkpoint_every or 0)
+    if ckpt_every < 0:
+        raise TrainError("checkpoint_every must be >= 0, got %d" % ckpt_every)
+    if ckpt_every and step_mode and ckpt_every % int(cfg.window_steps):
+        raise TrainError(
+            "checkpoint_every (%d steps) must be a multiple of window_steps (%d), "
+            "so each periodic checkpoint carries its window's losses"
+            % (ckpt_every, int(cfg.window_steps)))
     if step_mode:
         meta["budget"] = dict(unit="optimizer_steps", max_steps=int(cfg.max_steps),
                               window_steps=int(cfg.window_steps),
@@ -1435,6 +1448,11 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
                     w_ext[k_] = w_ext.get(k_, 0.0) + float(v_) * int(count)
                 if step % int(cfg.window_steps) == 0:
                     _window_row()
+                    if ckpt_every and step % ckpt_every == 0:
+                        save_checkpoint(
+                            os.path.join(run_dir, "ckpt_step%07d.pt" % step),
+                            model, cfg, meta, epoch, history[-1]["train_loss"],
+                            history[-1]["val_loss"], step=step)
                     if cfg.stop_rule is not None:
                         fired = cfg.stop_rule.check(history)
                         if fired:
@@ -1483,6 +1501,10 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
                 best = watch
                 save_checkpoint(os.path.join(run_dir, "best.pt"), model, cfg, meta,
                                 epoch, train_loss, val_loss, selected_on=watch)
+            if ckpt_every and epoch % ckpt_every == 0:
+                save_checkpoint(os.path.join(run_dir, "ckpt_epoch%04d.pt" % epoch),
+                                model, cfg, meta, epoch, train_loss, val_loss,
+                                step=step)
             if cfg.log_every and (epoch % cfg.log_every == 0 or epoch == cfg.epochs):
                 print("  epoch %4d  train %.6f%s  (%.3fx zero, %.3fx copy)  %.1fs"
                       % (epoch, train_loss,
