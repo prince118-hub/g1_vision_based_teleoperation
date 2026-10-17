@@ -21,10 +21,8 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 ## 2. CURRENT BLOCKER
 
 **None. P1–P4 CLOSED** (PLAN.md numbering; P4 with a qualification, §8 2026-09-29). **Everything is still SCRIPTED data — no piloted
-episode exists** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). scripted_v1 (50 eps, lock rule v1) trained BC / ACT / ACT-LSTM
-(`runs/scripted_v1/`, 2dbf8da); closed loop on 20 spare seeds (`tools/deploy.py`): **2 / 180 succeed** — BC never closes the gripper,
-ACT / ACT-LSTM reach and push the box > 5 cm before the stillness rule ever locks. Hence **lock rule v2** (§8 2026-10-17). Those checkpoints
-are v1-trained: evaluate them with `deploy.py --lock-rule v1`. Episodes now carry demonstrator settings + lock rule; split/norm refuse mixes.
+episode exists** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). scripted_v1 (lock rule v1) models scored **2 / 180** closed loop
+(BC never grips; ACT / ACT-LSTM push the box before the lock) → **lock rule v2** (§8 2026-10-17); evaluate v1 runs with `--lock-rule v1`.
 
 **scripted_v2 READY (2026-10-17):** 50 eps, lock rule v2, setting A, commit 454a053, git_dirty false (51 attempted, seed 25 PLACE(upright));
 split 40 / 10 + norm (`*_scripted_v2.*`); backed up to `D:\thesis_backup\scripted_v2`. Replay 45/50 manipulation (5 misses = walk-in drift,
