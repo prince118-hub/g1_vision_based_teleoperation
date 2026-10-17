@@ -169,6 +169,89 @@ class ReplayPolicy:
         return self.actions[t].copy()
 
 
+# ─── per-episode diagnostics (observation only) ──────────────────────────────
+STANDOFF = float(DemoConfig().standoff)          # 0.32 m, scripted_demo.py:135
+NEAR_STANDOFF = 0.10                             # m: "near the standoff target"
+VEL_WINDOW = int(round(3.0 / TICK_S))            # 75 ticks = 3 s
+SMALL_V = 0.2                                    # legged_robot.py:306: |v| < 0.2 zeroed in training
+
+
+def _diagnostics(dg, states, lock_ticks, weld_tick) -> dict:
+    """Why an episode did or did not lock and weld. See the module docstring of
+    each source for the rules these are measured against:
+      lock  phases.LockConfig: disp <= 10 mm over 0.8 s, fwd in [0.26, 0.40] m,
+            |lat| <= 0.05 m, |head| <= 5 deg, all for 5 consecutive ticks
+      weld  grasp.GraspConfig: palms within 0.16 m (near), separation in
+            [0.12, 0.30] m (straddle), opposed dot <= -0.5 (opposite)
+    The standoff target is the demonstrator's walk-in target,
+    box_xy - (0.32, 0) (scripted_demo.py:1128-1131), on the LIVE box."""
+    c = LockConfig()
+    S = np.asarray(states)
+    T = len(S)
+    pre = lock_ticks[0] if lock_ticks else T                 # ticks before first lock
+    base = S[:, spec.BASE_POS][:, :2]
+    box = S[:, spec.BOX_POS][:, :2]
+    dist = np.linalg.norm(base - (box - np.array([STANDOFF, 0.0])), axis=1)
+    k_min = int(np.argmin(dist[:max(pre, 1)]))
+    terms = dg["terms"][:pre]
+    disp = np.array([t["disp"] for t in terms], dtype=np.float64)
+    ok = dict(
+        disp=np.array([t["disp"] <= c.disp_max for t in terms], dtype=bool),
+        fwd=np.array([c.fwd_lo <= t["fwd"] <= c.fwd_hi for t in terms], dtype=bool),
+        lat=np.array([abs(t["lat"]) <= c.lat_max for t in terms], dtype=bool),
+        head=np.array([abs(t["head"]) <= c.head_max_deg for t in terms], dtype=bool))
+    allc = (ok["disp"] & ok["fwd"] & ok["lat"] & ok["head"]) if pre else np.zeros(0, bool)
+    streak = run = 0
+    for x in allc:
+        run = run + 1 if x else 0
+        streak = max(streak, run)
+    # commanded velocity near the box
+    if lock_ticks:
+        lo, hi, src = max(0, pre - VEL_WINDOW), pre, "3 s before first lock"
+        idx = np.arange(lo, hi)
+    else:
+        near = np.flatnonzero(dist <= NEAR_STANDOFF)
+        if len(near):
+            idx, src = near[-VEL_WINDOW:], "last 3 s within %.2f m of the standoff target" % NEAR_STANDOFF
+        else:
+            idx = np.arange(max(0, k_min - VEL_WINDOW + 1), k_min + 1)
+            src = "3 s ending at closest approach (never within %.2f m)" % NEAR_STANDOFF
+    V = np.asarray(dg["vel"])[idx] if len(idx) else np.zeros((0, 3))
+    vp = np.linalg.norm(V[:, :2], axis=1) if len(V) else np.zeros(0)
+    grip = np.asarray(dg["grip"])
+    g_on = np.flatnonzero(grip >= ENGAGE)
+    first_grip = int(g_on[0]) if len(g_on) else -1
+    bd = np.asarray(dg["box_disp"])
+    upto = weld_tick if weld_tick >= 0 else T
+    gated = dg["gated"]
+    first_gate = min(gated) if gated else -1
+    fails = {}
+    for v in gated.values():
+        for f in v["failed"]:
+            fails[f] = fails.get(f, 0) + 1
+    def r(x, n=4):
+        return None if x is None or not np.isfinite(x) else round(float(x), n)
+    return dict(
+        standoff_dist_min_m=r(dist[:max(pre, 1)].min()), standoff_dist_min_tick=k_min,
+        standoff_dist_end_m=r(dist[-1]),
+        standoff_dist_at_lock_m=r(dist[pre]) if lock_ticks else None,
+        prelock_ticks=int(pre),
+        min_disp_08s_mm=r(1000 * np.nanmin(np.where(np.isfinite(disp), disp, np.nan)), 1)
+        if np.isfinite(disp).any() else None,
+        prelock_in_band_frac={k: r(v.mean(), 3) if len(v) else None for k, v in ok.items()},
+        prelock_all4_ticks=int(allc.sum()), prelock_all4_best_streak=int(streak),
+        vel_window=dict(source=src, ticks=int(len(idx)),
+                        mean_planar=r(vp.mean()) if len(vp) else None,
+                        frac_0_to_0p2=r(((vp > 0) & (vp < SMALL_V)).mean(), 3) if len(vp) else None,
+                        mean_abs_wz=r(np.abs(V[:, 2]).mean()) if len(V) else None),
+        first_grip_cmd_tick=first_grip,
+        box_disp_at_first_grip_mm=r(1000 * bd[first_grip], 1) if first_grip >= 0 else None,
+        box_disp_before_weld_max_mm=r(1000 * bd[:max(upto, 1)].max(), 1),
+        pushed_before_weld=bool(bd[:max(upto, 1)].max() > 0.05),     # D19 grasp_spawn_max
+        gate_refused_ticks=len(gated), first_refusal_tick=first_gate,
+        first_refusal=gated.get(first_gate), refusal_condition_counts=fails)
+
+
 # ─── one episode ─────────────────────────────────────────────────────────────
 def _stage(locked, welded, n_locks, released) -> str:
     """A LIVE stage for the overlay. The phase labels proper are derived offline
@@ -231,6 +314,10 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
     lock_ticks, release_ticks = [], []
     weld_tick = weld_release_tick = -1
     fell, fall_tick, end_reason, pass_run, success_tick = False, -1, "time_limit", 0, -1
+    # Diagnostics - OBSERVATION ONLY: the lock predicate's own terms (pure; it
+    # reads its history without appending) and the weld gate's measurements.
+    dg = dict(terms=[], vel=[], grip=[], gated={}, box_disp=[])
+    spawn_xy = np.asarray(meta["box_spawn_xy"], dtype=np.float64)
     phase = "WALK"
     i = 0
     t0 = time.perf_counter()
@@ -238,7 +325,11 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
     with ctx:
         for t in range(int(max_ticks)):
             # ---- lock predicate on the LIVE state ----------------------------
-            pred.update(sp.build_state(m, d, ix, sync=False))
+            live = sp.build_state(m, d, ix, sync=False)
+            dg["terms"].append(pred.terms(live))
+            dg["box_disp"].append(float(np.linalg.norm(
+                np.asarray(spec.box_pos(live))[:2] - spawn_xy)))
+            pred.update(live)
             if pred.locked and not lock.locked(d):
                 lock.lock(m, d)
                 locked_leg_pos = DEF.copy()
@@ -265,6 +356,8 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
             upper = spec.upper_ctrl_from_action(a)
             vel = a[spec.VEL_A]
             grip = float(a[spec.GRIP_L_A])
+            dg["vel"].append(np.array(vel, dtype=np.float64))
+            dg["grip"].append(grip)
             # ---- 20 physics steps --------------------------------------------
             for k in range(TICK):
                 lq, ldq = d.qpos[ix.leg_qpos], d.qvel[ix.leg_qvel]
@@ -272,7 +365,12 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
                 d.ctrl[ix.leg_ctrl] = (leg_target - lq) * KPS + (0.0 - ldq) * KDS
                 d.ctrl[ix.upper_ctrl] = upper
                 d.ctrl[ix.pad_ctrl] = 0.0                       # TR17
-                eng = weld.update(m, d, grip)[0]
+                eng, wm = weld.update(m, d, grip)
+                if wm.get("gated") and t not in dg["gated"]:
+                    dg["gated"][t] = dict(
+                        failed=[c for c in ("near", "straddle", "opposite") if not wm[c]],
+                        d_left=round(wm["d_left"], 4), d_right=round(wm["d_right"], 4),
+                        sep=round(wm["sep"], 4), opposed=round(wm["opposed"], 3))
                 if eng and weld_tick < 0:
                     weld_tick = t
                 if (not eng) and weld_tick >= 0 and weld_release_tick < 0:
@@ -339,6 +437,7 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         wall_seconds=round(wall, 3),
         sim_to_wall=round(len(states) * TICK_S / wall, 3) if wall > 0 else None,
         phase_boundaries=diag["boundaries"],
+        diagnostics=_diagnostics(dg, arrays["states"], lock_ticks, weld_tick),
         trajectory_sha256=hashlib.sha256(arrays["states"].tobytes()).hexdigest()[:16])
     return result, arrays
 
