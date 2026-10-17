@@ -212,6 +212,28 @@ def assert_successful(eps: Sequence[Episode]) -> None:
             "in its ledger):\n  %s" % (len(bad), "\n  ".join(bad)))
 
 
+def assert_uniform_lock_rule(eps: Sequence[Episode]) -> None:
+    """One lock rule across the episodes, or raise naming the groups.
+
+    The lock rule decides WHEN the base is held and the arms may work, so two
+    rules make two different demonstrations of the same phase (2026-10-17: v2
+    locks ~1.8 s earlier than v1). An episode without `lock_rule` was collected
+    under v1 (phases.lock_config_from_meta), so it groups with explicit v1.
+    """
+    from g1_data.phases import lock_config_from_meta, lock_rule_meta
+    groups: Dict[object, List[Episode]] = {}
+    for e in eps:
+        rule = lock_rule_meta(lock_config_from_meta(e.meta))
+        groups.setdefault(tuple(sorted(rule.items())), []).append(e)
+    if len(groups) > 1:
+        lines = ["%s (%s): %d episode(s), e.g. %s"
+                 % (dict(k)["version"], dict(k)["name"], len(v), os.path.basename(v[0].path))
+                 for k, v in groups.items()]
+        raise DatasetError("this dataset mixes lock rules - the base was held "
+                           "under different conditions; do not split or "
+                           "normalize across it:\n  " + "\n  ".join(lines))
+
+
 def heldout_leak(eps: Sequence[Episode], box_cfg=None) -> List[int]:
     """Seeds whose spawn falls inside the Objective 4 held-out patch."""
     from g1_teleop.box_reset import in_heldout

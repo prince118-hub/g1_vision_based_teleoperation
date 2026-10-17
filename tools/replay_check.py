@@ -58,7 +58,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from g1_data import spec
-from g1_data.phases import LockConfig, LockPredicate, PlatformGeometry
+from g1_data.phases import LockPredicate, PlatformGeometry, lock_config_from_meta
 from g1_data.recorder import load_episode
 from g1_data.reset import LocomotionCarryover, reset_episode, state_fingerprint
 from g1_teleop.base_lock import BaseLock
@@ -101,6 +101,9 @@ def replay(path: str, threshold: float = 0.01, negative_seed=None, verbose=True,
     states, actions = arrays["states"], arrays["actions"]
     seed = int(meta["seed"])
     T = len(actions)
+    # The lock rule the episode was COLLECTED under (no field = v1), never the
+    # current default: replaying a v1 episode under v2 would move its lock.
+    lock_rule = lock_config_from_meta(meta)
 
     cfg = TeleopConfig()
     model = load_model(cfg)
@@ -124,6 +127,7 @@ def replay(path: str, threshold: float = 0.01, negative_seed=None, verbose=True,
     fp = state_fingerprint(data, ix)
     fp_ok = (fp == meta["reset_fingerprint"])
     report = dict(path=path, seed=seed, ticks=T, reset_fingerprint_ok=fp_ok,
+                  lock_rule=lock_rule.version,
                   negative=negative_seed is not None)
     if verbose:
         print("\n=== %s  seed %d, %d ticks ===" % (os.path.basename(path), seed, T))
@@ -161,7 +165,7 @@ def replay(path: str, threshold: float = 0.01, negative_seed=None, verbose=True,
     shove_at_weld_mm = float("nan")
     weld = GraspWeld(model)
     lock = BaseLock(model)
-    pred = LockPredicate(PlatformGeometry.resolve(model), LockConfig())
+    pred = LockPredicate(PlatformGeometry.resolve(model), lock_rule)
     L = cfg.loco
     DEF = np.asarray(L.default_angles, dtype=np.float64)
     KPS = np.asarray(L.kps, dtype=np.float32)

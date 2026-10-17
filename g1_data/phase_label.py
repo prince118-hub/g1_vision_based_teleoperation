@@ -41,7 +41,7 @@ from g1_data.success import geometry
 _PLAT = {}
 
 
-def _lock_ticks(states) -> list:
+def _lock_ticks(states, cfg=None) -> list:
     """The ticks the base lock fires at, recomputed OFFLINE from recorded state.
 
     `LockPredicate` is a pure function of the 47-D vector (that is the whole
@@ -50,13 +50,17 @@ def _lock_ticks(states) -> list:
     and the 5-tick debounce. The SECOND lock is the MOVE -> LOWER boundary, and
     nothing else in the recording marks it: the recorder stores only the first
     engage and release.
+
+    `cfg` is the lock rule the episode was COLLECTED under
+    (`phases.lock_config_from_meta`); a different rule would place the lock
+    ticks - and so the REACH and LOWER boundaries - somewhere it never fired.
     """
-    from g1_data.phases import LockConfig, LockPredicate, PlatformGeometry
+    from g1_data.phases import LOCK_RULE_V1, LockPredicate, PlatformGeometry
     if "geo" not in _PLAT:
         from g1_teleop.config import TeleopConfig
         from g1_teleop.contact_contract import load_model
         _PLAT["geo"] = PlatformGeometry.resolve(load_model(TeleopConfig()))
-    pred = LockPredicate(_PLAT["geo"], LockConfig())
+    pred = LockPredicate(_PLAT["geo"], cfg if cfg is not None else LOCK_RULE_V1)
     out = []
     for t, st in enumerate(states):
         if pred.update(np.asarray(st, dtype=np.float64)) == "lock":
@@ -105,7 +109,8 @@ def label_episode(arrays: dict, meta: Optional[dict] = None, geo=None):
     meta = meta or {}
     spawn = np.asarray(meta.get("box_spawn_xy", box[0, :2]), dtype=np.float64)
     d_pickup = np.linalg.norm(box[:, :2] - spawn, axis=1)
-    locks = _lock_ticks(s)
+    from g1_data.phases import lock_config_from_meta
+    locks = _lock_ticks(s, lock_config_from_meta(meta))
 
     def first(mask, lo=0, default=T):
         idx = np.flatnonzero(mask[lo:])

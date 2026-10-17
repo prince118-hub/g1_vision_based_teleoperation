@@ -52,7 +52,7 @@ distinction that separates them. It costs one scene constant.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Optional, Tuple
 
 import numpy as np
@@ -126,17 +126,35 @@ class PlatformGeometry:
 
 @dataclass(frozen=True)
 class LockConfig:
-    """Thresholds, exactly as measured 2026-09-10. Do not re-tune casually.
+    """The lock rule. VERSIONED: every episode records the rule it was collected
+    under (`lock_rule_meta`), and replay, the phase labeller and deployment use
+    that episode's own rule (`lock_config_from_meta`); episodes from before the
+    field existed are v1.
 
-    Each one has a measured margin at the transition it governs (module
+      v1  "stance band + stillness" - the 2026-09-10 rule: the stance band below
+          AND base XY travel <= 10 mm over one gait period (0.8 s). Kept as
+          LOCK_RULE_V1 for every episode recorded under it (scripted_v1).
+      v2  "stance band only" - ADOPTED 2026-10-17 (CLAUDE.md section 8), the
+          default: fwd in [0.26, 0.40] m, |lat| <= 0.05 m, |head| <= 5 deg for
+          `debounce` consecutive ticks; disp_max = inf, so no stillness rule.
+          Measured on the 20 spare seeds, real pelvis lock: 19/20 (v1 20/20),
+          pickup lock at tick 32-48 (v1 62-92), box pushed before grasp <= 0.5
+          mm (v1 1.7), base speed at lock <= 0.26 m/s with pitch <= 3.1 deg in
+          the following second (no jolt). The PELVIS HOLD is what prevents the
+          pre-grasp push, not the stillness rule: with the lock removed entirely
+          the push was 52 mm median (2026-10-17 free-base test).
+
+    Each threshold has a measured margin at the transition it governs (module
     docstring). `lift_min` is the only one tied to another config value: it is
     a fraction of what the arm ACHIEVES of `DemoConfig.lift_h`, so changing the
     commanded lift means re-measuring the achieved lift and re-checking this.
+    `disp` is still computed (diagnostics, the teleop overlay) under v2.
     """
 
+    version: str = "v2"
     settle_window: int = 20        # ticks: 0.80 s = one GAIT_PERIOD (TR4)
     debounce: int = 5              # ticks: 0.20 s (TR8)
-    disp_max: float = 0.010        # m of base XY travel per gait period
+    disp_max: float = float("inf")  # v2: no stillness rule (v1: 0.010 m per gait period)
     fwd_lo: float = 0.26           # m, standoff band the arms can serve (O14)
     fwd_hi: float = 0.40
     lat_max: float = 0.05          # m, the head-on band grasping works in (O18)
@@ -145,6 +163,47 @@ class LockConfig:
     rest_tol: float = 0.020        # m: the box is down
     withdraw: float = 0.25         # m, worst palm to box centre: hands clear
     done_radius: float = 0.10      # m, the Q4 placement tolerance
+
+
+#: The two lock rules, by name. v2 is the default (`LockConfig()`).
+LOCK_RULE_V1 = LockConfig(version="v1", disp_max=0.010)
+LOCK_RULE_V2 = LockConfig(version="v2")
+LOCK_RULES = {"v1": LOCK_RULE_V1, "v2": LOCK_RULE_V2}
+LOCK_RULE_NAMES = {"v1": "stance band + stillness (10 mm / 0.8 s)",
+                   "v2": "stance band only"}
+
+
+def lock_rule_meta(cfg: "LockConfig") -> dict:
+    """Every LockConfig value, for an episode's metadata. disp_max = inf is
+    written as None (JSON null = "no stillness rule"), keeping the file valid
+    JSON for tools stricter than Python's."""
+    d = {f.name: getattr(cfg, f.name) for f in fields(cfg)}
+    if d["disp_max"] == float("inf"):
+        d["disp_max"] = None
+    d["name"] = LOCK_RULE_NAMES.get(cfg.version, "custom")
+    return d
+
+
+def lock_config_from_meta(meta: Optional[dict]) -> "LockConfig":
+    """The rule an episode was collected under. No `lock_rule` field = v1, the
+    only rule that existed before the field (2026-10-17). A recorded rule whose
+    values differ from its named version is refused rather than trusted."""
+    meta = meta or {}
+    if "lock_rule" not in meta:
+        return LOCK_RULE_V1
+    rule = meta["lock_rule"]
+    if rule is None:
+        raise ValueError("episode was collected WITHOUT a lock predicate (lock_rule "
+                         "null: the retired phase-set lock) - no rule to apply")
+    kw = {f.name: rule[f.name] for f in fields(LockConfig) if f.name in rule}
+    if kw.get("disp_max") is None:
+        kw["disp_max"] = float("inf")
+    cfg = LockConfig(**kw)
+    known = LOCK_RULES.get(cfg.version)
+    if known is not None and cfg != known:
+        raise ValueError("episode lock_rule says %r but its values differ from that "
+                         "rule: %r vs %r" % (cfg.version, cfg, known))
+    return cfg
 
 
 class LockPredicate:

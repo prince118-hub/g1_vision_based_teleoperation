@@ -84,6 +84,7 @@ def main():
         # per-tick detail is the `tracking_ok` array; this is the summary an
         # operator reads at ACCEPT time.
         degraded_ticks=sum(1 for v in rec.buf.tracking if not v),
+        lock_rule=rec.lock_rule,          # the rule in force (phases.lock_rule_meta)
         note="teleop: phase_labels are UNKNOWN by construction - derive them offline")
     rec.buf.save(a.out, meta)
     # `checks` mirrors the scripted recorder's shape (name -> bool). The fixture

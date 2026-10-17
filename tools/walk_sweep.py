@@ -116,7 +116,7 @@ sys.path.insert(0, ROOT)
 
 import walk_test as WT                                   # noqa: E402
 import run_integrated_combined as RIC                    # noqa: E402  live teleop hold
-from g1_data.phases import LockConfig                    # noqa: E402
+from g1_data.phases import LOCK_RULE_V1                  # noqa: E402
 from g1_data.reset import reset_policy_state             # noqa: E402
 from g1_data.scripted_demo import DemoConfig             # noqa: E402
 from g1_data import spec                                 # noqa: E402
@@ -135,7 +135,10 @@ YAW_NOISE = np.radians(5.0)
 XY_NOISE = 0.02
 LEG_NOISE = 0.02                       # rad, per leg joint
 OBSTACLE_BODIES = ("platform_pickup", "platform_goal", "box1")
-LOCK = LockConfig()
+# A STILLNESS metric, so it keeps the v1 rule's 10 mm / 0.8 s explicitly: the
+# lock rule itself dropped stillness in v2 (2026-10-17), which would make
+# every stop read as settled at once.
+LOCK = LOCK_RULE_V1
 TICK = spec.PHYSICS_STEPS_PER_TICK     # 20 steps = 25 Hz, the predicate's rate
 
 CSV_FIELDS = ["axis", "speed", "trial", "trial_seed", "noise", "stand_s",

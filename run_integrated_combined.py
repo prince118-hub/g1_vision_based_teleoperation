@@ -80,7 +80,7 @@ from g1_teleop.grasp import GraspWeld
 from g1_teleop.base_lock import BaseLock
 from g1_teleop import contact_contract as CC
 from g1_data import spec
-from g1_data.phases import LockConfig, LockPredicate, PlatformGeometry
+from g1_data.phases import LOCK_RULE_V2, LockPredicate, PlatformGeometry
 from locomotion_input import (PelvisVelocity, LeanJoystick, KeyboardCommand,
                               KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT)
 
@@ -342,7 +342,7 @@ def draw_minimal_panel(img, st):
         text(img, line, (x, y), sc, col)
     y += dy
     if st["locked"]:
-        text(img, "BASE LOCKED", (x, y), sc, GREEN)
+        text(img, "LOCKED", (x, y), sc, GREEN)
     else:
         act = lock_action(st["terms"], st["lcfg"]) if st["standoff"] < NEAR_BOX_M else None
         text(img, "BASE FREE" + ("   " + act if act else ""), (x, y), sc, AMBER)
@@ -367,7 +367,8 @@ def draw_operator_panel(img, x, y, st):
     dy = 24
     t, lc, g, d = st["terms"], st["lcfg"], st["weld"], st["diag"]
     if st["locked"]:
-        chips(img, x, y, [("BASE LOCKED", GREEN), ("legs held, policy off  |  u = abort", GREY)], 0.6)
+        chips(img, x, y, [("LOCKED", GREEN), ("rule %s" % lc.version, GREY),
+                          ("legs held, policy off  |  u = abort", GREY)], 0.6)
     else:
         items = [("BASE FREE", AMBER)]
         if st["inhibit"]:
@@ -376,13 +377,17 @@ def draw_operator_panel(img, x, y, st):
     y += dy
     if t:
         if not st["locked"]:
-            chips(img, x, y, [
-                ("lock needs:", GREY),
+            need = [
+                ("lock rule %s needs:" % lc.version, GREY),
                 ("fwd %.2f in [%.2f,%.2f]" % (t["fwd"], lc.fwd_lo, lc.fwd_hi), GREEN if lc.fwd_lo <= t["fwd"] <= lc.fwd_hi else RED),
-                ("lat %+.2f" % t["lat"], GREEN if abs(t["lat"]) <= lc.lat_max else RED),
-                ("head %+.1f" % t["head"], GREEN if abs(t["head"]) <= lc.head_max_deg else RED),
-                ("still %s" % ("--" if t["disp"] == float("inf") else "%.0fmm" % (1000 * t["disp"])),
-                 GREEN if t["disp"] <= lc.disp_max else RED)], 0.45)
+                ("lat %+.2f |<=%.2f|" % (t["lat"], lc.lat_max), GREEN if abs(t["lat"]) <= lc.lat_max else RED),
+                ("head %+.1f |<=%.0f|" % (t["head"], lc.head_max_deg), GREEN if abs(t["head"]) <= lc.head_max_deg else RED)]
+            # Stillness is a term only under a rule that has one (v1); v2 locks
+            # on the stance band alone, so showing it would ask for nothing.
+            if lc.disp_max != float("inf"):
+                need.append(("still %s" % ("--" if t["disp"] == float("inf") else "%.0fmm" % (1000 * t["disp"])),
+                             GREEN if t["disp"] <= lc.disp_max else RED))
+            chips(img, x, y, need, 0.45)
         elif t["welded"]:
             chips(img, x, y, [("releases when box lifted:", GREY),
                               ("%.3f >= %.3f m" % (t["box_lift"], lc.lift_min),
@@ -564,7 +569,9 @@ def main():
     # Base lock (D12), driven by the demonstrator's state predicate.
     base_lock = BaseLock(model)
     sp = spec.SpecLayout.resolve(model, ix)
-    pred = LockPredicate(PlatformGeometry.resolve(model), LockConfig())
+    # Lock rule v2 (stance band only, 2026-10-17) - the same rule the scripted
+    # demonstrator and deploy.py use. TeleopRecorder stores it per episode.
+    pred = LockPredicate(PlatformGeometry.resolve(model), LOCK_RULE_V2)
     locked_leg_pos = None          # DEFAULT_ANGLES while locked, else None
     relock_inhibit = False         # set by a manual abort
     lock_terms, n_abort = {}, 0

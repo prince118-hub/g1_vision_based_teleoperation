@@ -60,9 +60,11 @@ def test_natural_start_matches_the_demonstrators_tick_zero():
     if not os.path.exists(REC):
         print("      (skipped: no %s)" % REC)
         return
+    from g1_data.phases import lock_config_from_meta
     pol = D.ReplayPolicy(REC)
     res, arrays = D.deploy_episode(int(pol.meta["seed"]), pol, max_ticks=1,
-                                   early_success=False, raw_actions=True)
+                                   early_success=False, raw_actions=True,
+                                   lock_rule=lock_config_from_meta(pol.meta))
     assert res["reset_fingerprint"] == pol.meta["reset_fingerprint"]
     from g1_data.recorder import load_episode
     rec, _ = load_episode(REC)
@@ -80,9 +82,12 @@ def test_replayed_actions_through_the_deploy_loop_match_replay_check():
     rec, meta = load_episode(REC)
     pol = D.ReplayPolicy(REC)
     T = len(rec["actions"])
+    from g1_data.phases import lock_config_from_meta
     res, arrays = D.deploy_episode(
         int(meta["seed"]), pol, max_ticks=T, early_success=False, raw_actions=True,
-        initial_state=(rec["qpos"][0], rec["qvel"][0]))
+        initial_state=(rec["qpos"][0], rec["qvel"][0]),
+        lock_rule=lock_config_from_meta(meta))       # the episode's own rule: v1
+    assert res["lock_rule"]["version"] == "v1"
     rep = RC.replay(REC, verbose=False)
     div = np.abs(arrays["states"] - np.asarray(rec["states"], dtype=np.float64))
     assert res["ticks"] == T and not res["fell"]

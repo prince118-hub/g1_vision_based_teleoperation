@@ -63,7 +63,8 @@ from g1_data.paths import repo_relpath                              # noqa: E402
 from g1_data import phase_label as PL                               # noqa: E402
 from g1_data import spec                                            # noqa: E402
 from g1_data import success as SU                                   # noqa: E402
-from g1_data.phases import LockConfig, LockPredicate, PlatformGeometry  # noqa: E402
+from g1_data.phases import (LOCK_RULE_V2, LOCK_RULES, LockPredicate,  # noqa: E402
+                            PlatformGeometry, lock_rule_meta)
 from g1_data.reset import (LocomotionCarryover, reset_episode,      # noqa: E402
                            reset_policy_state, state_fingerprint)
 from g1_data.scripted_demo import DemoConfig                        # noqa: E402
@@ -176,16 +177,18 @@ VEL_WINDOW = int(round(3.0 / TICK_S))            # 75 ticks = 3 s
 SMALL_V = 0.2                                    # legged_robot.py:306: |v| < 0.2 zeroed in training
 
 
-def _diagnostics(dg, states, lock_ticks, weld_tick) -> dict:
+def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V2) -> dict:
     """Why an episode did or did not lock and weld. See the module docstring of
     each source for the rules these are measured against:
-      lock  phases.LockConfig: disp <= 10 mm over 0.8 s, fwd in [0.26, 0.40] m,
+      lock  phases.LockConfig, the rule in force (v2: no stillness term; v1:
+            disp <= 10 mm over 0.8 s), fwd in [0.26, 0.40] m,
             |lat| <= 0.05 m, |head| <= 5 deg, all for 5 consecutive ticks
       weld  grasp.GraspConfig: palms within 0.16 m (near), separation in
             [0.12, 0.30] m (straddle), opposed dot <= -0.5 (opposite)
+    `c` is the lock rule IN FORCE; under v2 the stillness column is always in
+    band (disp_max = inf) and min_disp_08s_mm is reported as a measurement.
     The standoff target is the demonstrator's walk-in target,
     box_xy - (0.32, 0) (scripted_demo.py:1128-1131), on the LIVE box."""
-    c = LockConfig()
     S = np.asarray(states)
     T = len(S)
     pre = lock_ticks[0] if lock_ticks else T                 # ticks before first lock
@@ -267,6 +270,7 @@ def _stage(locked, welded, n_locks, released) -> str:
 
 def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = None,
                    max_ticks: int = MAX_TICKS, early_success: bool = True,
+                   lock_rule=None,
                    raw_actions: bool = False, initial_state=None, view=None) -> dict:
     """Run ONE closed-loop episode. Returns (result, arrays).
 
@@ -299,12 +303,16 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         d.qvel[:] = initial_state[1]
         mujoco.mj_forward(m, d)
     lock = BaseLock(m)
-    pred = LockPredicate(PlatformGeometry.resolve(m), LockConfig())
+    # The lock rule: v2 (stance band only, 2026-10-17) unless stated. A policy
+    # must be evaluated under the rule its training data was collected under.
+    lock_rule = lock_rule if lock_rule is not None else LOCK_RULE_V2
+    pred = LockPredicate(PlatformGeometry.resolve(m), lock_rule)
     DEF = np.asarray(L.default_angles, dtype=np.float64)
     KPS = np.asarray(L.kps, dtype=np.float32)
     KDS = np.asarray(L.kds, dtype=np.float32)
     CMDS = np.asarray(L.cmd_scale, dtype=np.float32)
-    meta = dict(box_spawn_xy=[float(start.box_pos[0]), float(start.box_pos[1])])
+    meta = dict(box_spawn_xy=[float(start.box_pos[0]), float(start.box_pos[1])],
+                lock_rule=lock_rule_meta(lock_rule))
     policy.reset()
 
     states: List[np.ndarray] = []
@@ -437,7 +445,8 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         wall_seconds=round(wall, 3),
         sim_to_wall=round(len(states) * TICK_S / wall, 3) if wall > 0 else None,
         phase_boundaries=diag["boundaries"],
-        diagnostics=_diagnostics(dg, arrays["states"], lock_ticks, weld_tick),
+        lock_rule=meta["lock_rule"],
+        diagnostics=_diagnostics(dg, arrays["states"], lock_ticks, weld_tick, lock_rule),
         trajectory_sha256=hashlib.sha256(arrays["states"].tobytes()).hexdigest()[:16])
     return result, arrays
 
@@ -460,6 +469,9 @@ def main(argv=None):
     g.add_argument("--seed-list", help="comma-separated seeds, e.g. 60,63")
     ap.add_argument("--out", required=True, help="JSONL, one line per episode (refused if it exists)")
     ap.add_argument("--max-ticks", type=int, default=MAX_TICKS)
+    ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default="v2",
+                    help="lock rule (phases.LockConfig); the one the training data "
+                         "was collected under. v2 = stance band only (default)")
     ap.add_argument("--viewer", action="store_true")
     ap.add_argument("--realtime", action="store_true")
     ap.add_argument("--video-dir", default=None)
@@ -473,14 +485,29 @@ def main(argv=None):
     policy = CheckpointPolicy(a.run, a.ckpt)
     loco = torch.jit.load(W.POLICY_PATH)
     seeds = _seeds(a)
+    rule = LOCK_RULES[a.lock_rule]
+    # The rule the run's TRAINING episodes were collected under. Evaluating a
+    # policy under another rule tests it in conditions it never saw (the D18
+    # principle), so a mismatch is announced and recorded, not hidden.
+    from g1_data.phases import lock_config_from_meta
+    meta_json = json.load(open(os.path.join(a.run, "metadata.json"), encoding="utf-8"))
+    ep_dir = os.path.join(ROOT, meta_json["config"]["notes"]["data_paths"]["episodes"])
+    first = sorted(f for f in os.listdir(ep_dir) if f.endswith(".npz")) if os.path.isdir(ep_dir) else []
+    train_rule = lock_config_from_meta(DS.read_meta(os.path.join(ep_dir, first[0]))) if first else None
+    if train_rule is not None and train_rule.version != rule.version:
+        print("WARNING: evaluating under lock rule %s, but this run's training data (%s) "
+              "was collected under %s. Pass --lock-rule %s to match."
+              % (rule.version, repo_relpath(ep_dir), train_rule.version, train_rule.version))
     header = dict(run=a.run, ckpt=policy.ckpt_info, kind=policy.kind, K=policy.K,
+                  lock_rule=lock_rule_meta(rule),
+                  training_data_lock_rule=train_rule.version if train_rule else None,
                   obs_window=policy.W, norm=repo_relpath(policy.norm_path),
                   device=str(policy.device), max_ticks=a.max_ticks,
                   success_hold_ticks=SUCCESS_HOLD_TICKS, fall_z=FALL_Z,
                   git_commit=__import__("g1_data.recorder", fromlist=["_git_commit"])._git_commit(),
                   determinism=det.get("notes") if isinstance(det, dict) else None)
-    print("deploy %s (%s, K=%d, W_o=%d) on %d seed(s) -> %s"
-          % (policy.name, policy.kind, policy.K, policy.W, len(seeds), a.out))
+    print("deploy %s (%s, K=%d, W_o=%d, lock rule %s) on %d seed(s) -> %s"
+          % (policy.name, policy.kind, policy.K, policy.W, rule.version, len(seeds), a.out))
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     n_ok = 0
     with open(a.out, "w", encoding="utf-8") as fh:
@@ -493,7 +520,8 @@ def main(argv=None):
                 view = EpisodeView(seed, viewer=a.viewer, realtime=a.realtime,
                                    video_dir=a.video_dir, frame_name="deploy_episode",
                                    label=policy.name, stem=stem)
-            res, _ = deploy_episode(seed, policy, loco=loco, max_ticks=a.max_ticks, view=view)
+            res, _ = deploy_episode(seed, policy, loco=loco, max_ticks=a.max_ticks,
+                                    lock_rule=rule, view=view)
             if view is not None:
                 view.finalize(accepted=res["success"])
                 if view.video_path:

@@ -431,6 +431,10 @@ class ScriptedRecorder:
         self._box0 = None
         self._prev_weld = False
         self._prev_lock = False
+        #: The lock rule IN FORCE, read from the episode's own LockPredicate
+        #: (`pred`) on the first tick - never from a config default. None when
+        #: the episode ran without a predicate (the retired phase-set lock).
+        self.lock_rule = None
 
     # ---- attachment ----------------------------------------------------
     def __enter__(self) -> "ScriptedRecorder":
@@ -474,6 +478,10 @@ class ScriptedRecorder:
             self._lock_eq = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_EQUALITY,
                                               "base_lock")
             self._box0 = np.array(d.qpos[ix.box_qpos][:3], dtype=np.float64)
+            pred = L.get("pred")
+            if pred is not None:
+                from g1_data.phases import lock_rule_meta
+                self.lock_rule = lock_rule_meta(pred.cfg)
         welded = bool(d.eq_active[self._weld_eq])
         locked = bool(d.eq_active[self._lock_eq])
         tick = i // TICK
@@ -556,6 +564,10 @@ class ScriptedRecorder:
             reset_fingerprint=self.reset_fingerprint,
             contact_contract=contract_of(model),
             lock_predicate=bool(demo.lock_predicate),
+            # 2026-10-17: the full lock rule (phases.LockConfig + version).
+            # Replay, the phase labeller and deploy read it back
+            # (phases.lock_config_from_meta); a split refuses a mix of rules.
+            lock_rule=self.lock_rule,
             # 2026-10-17. The demonstrator settings that shape the trajectory,
             # written because they changed (CLAUDE.md section 8) and nothing in
             # the episode said which were used. build_dataset refuses to split

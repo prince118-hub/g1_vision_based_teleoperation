@@ -102,15 +102,16 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
-- 2026-10-17 — **O33: `NormStats.STD_FLOOR` 1e-6 → 1e-2, NO SPEC_VERSION bump** (a bump fails every load of the 50 scripted_v1 episodes; the
-  episodes are unaffected). The floor is stored in each stats file and checked on load instead. scripted_v1 refit: dims 9, 43, 44, 45 floored,
-  worst |z| base z 6.1 → 5.1, right wrist yaw 31.3 → 6.1; means and actions unchanged. **`norm_stats_v1.npz` predates the field and is now refused** — refit to use it.
-- 2026-10-17 — **SCRIPTED REHEARSAL SETTING "A": `reposition_s` 6.0 → 0.5 s, `hold_max` stays 0.80** (Charles; `tools/record_episodes.py`
-  `_setup`, `scripted_demo.py` untouched). REPOSITION was 6 s of dead time: it lets a FREE base close the standoff, but the base is locked there
-  (D12). First 50 train seeds, headless: **A 49/50** (seed 25 `PLACE(xy)`), 0.60/0.5 43/50 (7 placement fails, box y < −0.09), 0.40/0.5 49/50
-  but GOAL-platform clearance < 10 mm on 45/50 (seed 7 4.6 mm, < 5 mm `min_clearance`), old 0.80/6.0 50/50. A: **548–692 ticks**, so **D13's
-  694–846 no longer describes new recordings**; goal clearance min 6.4 mm. New **"demonstrator ok"** check: `--auto pass` had accepted demo
-  failures. Pre-existing, unchanged: a 0.50–0.71 rad one-tick arm-target jump 31 ticks into REACH. Detail: `NOTES.md` 2026-10-17.
+- 2026-10-17 — **LOCK RULE v2: stance band only (stillness rule dropped), real pelvis lock, pickup AND goal** (Charles). `phases.LockConfig` is
+  versioned (`LOCK_RULE_V1/V2`); new episodes store `lock_rule`; replay, the phase labeller and deploy apply the EPISODE's rule (no field = v1, so
+  all of scripted_v1, which replays bit-identically); split/norm refuse mixed rules; teleop uses v2. Why: policies reached before stillness held, and
+  the pelvis hold, not stillness, stops the pre-grasp push. Spare seeds: v2 19/20 (v1 20/20), lock tick 32–48 (v1 62–92), push ≤ 0.5 mm, pitch ≤ 3.1°.
+- 2026-10-17 — **O33: `STD_FLOOR` 1e-6 → 1e-2, no SPEC_VERSION bump** (it would fail every scripted_v1 load); the floor is stored in each stats file and
+  checked on load. scripted_v1 refit floors dims 9, 43, 44, 45 (worst |z| 31.3 → 6.1). **`norm_stats_v1.npz` predates the field: refused until refit.**
+- 2026-10-17 — **SCRIPTED SETTING "A": `reposition_s` 6.0 → 0.5 s (dead time under the D12 lock), `hold_max` stays 0.80** (`record_episodes._setup`).
+  First 50 train seeds: A 49/50, 0.60 m/s 43/50 (placement), 0.40 m/s 49/50 but goal clearance < 10 mm on 45/50, old 50/50. A runs **548–692 ticks:
+  D13's 694–846 no longer applies**. New "demonstrator ok" check (`--auto pass` had accepted demo failures). Pre-existing: a 0.50–0.71 rad one-tick
+  arm-target jump 31 ticks into REACH. Detail: `NOTES.md` 2026-10-17.
 - 2026-09-29 — **PHASE 4 CLOSED WITH A QUALIFICATION: all four PASS overfit-10 at W_o = 12** (O34 Option B: NVIDIA laptop, ab257e5,
   scripted): BC **0.632**, chunked BC **0.718**, ACT **0.720**, ACT-LSTM **0.600** (K=100 share ref 0.054265). **Neither ACT run converged:**
   both hit the 200k CAP still improving 1.6% / 2.1% per 10 windows (rule: 1%) — PASSES stand, **do not rank models on this gate**. Latent
@@ -335,8 +336,7 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   (TR16). **Qualified 2026-09-15:** measured with the capped scripted station-keeper; a human at full command overcame it (§8).
 - **O32. NEW — prediction: the ACT latent is ACTIVE on piloted data.** Scripted: KL 1e-05, z inert (§8 2026-09-22). Predicted on teleop:
   KL stays above zero and the z = 0 vs posterior-mean gap opens. If it collapses there too, beta (10; balance-matched 14.70) is the suspect.
-- **O33. RESOLVED 2026-10-17 (§8): `STD_FLOOR` 1e-6 → 1e-2**, the reference's clip (`reference/act/utils.py:97,102`). Floors state dims
-  9, 43, 44, 45 (pinned, D2/D10); no action dim. Stats files carry `std_floor`; a missing or different one is refused on load.
+- **O33. RESOLVED 2026-10-17 (§8):** `STD_FLOOR` 1e-2, the reference's clip (`reference/act/utils.py:97,102`); stats carry `std_floor`.
 - **O34. RESOLVED BY POLICY, NOT BY PHYSICS — the simulation does not reproduce bit-for-bit across machines.** Against the partner's
   `docs/measurements/bprime_gates_adopted_pred_40.json` (seeds 0–39): the CPU laptop at MuJoCo 3.14.0 / NumPy 2.4 matched 0/40 (to
   74.8 mm; seeds 38, 44 fail placement). With the partner's versions pinned (env `g1_match`, 2026-09-28): **26/40 agree to ≤ 0.0003 mm,
