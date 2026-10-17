@@ -113,26 +113,38 @@ def _free_camera() -> mujoco.MjvCamera:
     return cam
 
 
-def _run_episode_frame(depth: int = 4):
+def _run_episode_frame(name: str = "run_episode", depth: int = 4):
     f = sys._getframe(2)
     for _ in range(depth):
         if f is None:
             return None
-        if f.f_code.co_name == "run_episode":
+        if f.f_code.co_name == name:
             return f
         f = f.f_back
     return None
 
 
 class EpisodeView:
-    """Context manager around ONE `run_episode` call."""
+    """Context manager around ONE episode function call.
+
+    `frame_name` is the function whose `mj_step` calls are watched - the
+    scripted demonstrator's `run_episode` by default, `deploy_episode` for
+    tools/deploy.py. That function's locals must include `i` (the physics step
+    index, +1 per mj_step), `weld` (a GraspWeld) and `phase` (anything with a
+    `.name` or a str). `label` is appended to the overlay; `stem` names the
+    video file ("%04d" takes the seed).
+    """
 
     def __init__(self, seed: int, viewer: bool = False, realtime: bool = False,
-                 video_dir: Optional[str] = None):
+                 video_dir: Optional[str] = None, frame_name: str = "run_episode",
+                 label: str = "", stem: str = "ep_seed%04d"):
         self.seed = int(seed)
         self.want_viewer = viewer
         self.realtime = realtime
         self.video_dir = video_dir
+        self.frame_name = frame_name
+        self.label = label
+        self.stem = stem
         self.video_path = None          # final path, set by finalize()
         self.n_frames = 0
         self._partial = None
@@ -145,7 +157,7 @@ class EpisodeView:
         view = self
 
         def step_wrapper(m, d, *a, **k):
-            f = _run_episode_frame()
+            f = _run_episode_frame(view.frame_name)
             if f is None:
                 return view._real_step(m, d, *a, **k)
             # run_episode calls mj_step exactly once per loop index
@@ -200,7 +212,7 @@ class EpisodeView:
         if self.video_dir:
             os.makedirs(self.video_dir, exist_ok=True)
             self._partial = os.path.join(self.video_dir,
-                                         "ep_seed%04d.partial.mp4" % self.seed)
+                                         (self.stem % self.seed) + ".partial.mp4")
             self._renderer = mujoco.Renderer(m, height=VIDEO_H, width=VIDEO_W)
             self._writer = _VideoSink(self._partial)
         if self.want_viewer:
@@ -232,8 +244,9 @@ class EpisodeView:
         phase = getattr(phase, "name", str(phase))
         weld = "ON" if d.eq_active[self._weld_eq] else "off"
         lock = "ON" if (self._lock_eq >= 0 and d.eq_active[self._lock_eq]) else "off"
-        text = ("seed %d   tick %d   phase %s   weld %s   base lock %s"
-                % (self.seed, i // TICK, phase, weld, lock))
+        text = ("seed %d   tick %d   phase %s   weld %s   base lock %s%s"
+                % (self.seed, i // TICK, phase, weld, lock,
+                   ("   " + self.label) if self.label else ""))
         self._writer.put(rgb, text)
         self.n_frames += 1
 
@@ -242,7 +255,7 @@ class EpisodeView:
         """Name the video by outcome: ep_seedNNNN.mp4 or ep_seedNNNN_FAIL.mp4."""
         if not self._partial or not os.path.exists(self._partial):
             return None
-        name = "ep_seed%04d%s.mp4" % (self.seed, "" if accepted else "_FAIL")
+        name = (self.stem % self.seed) + ("" if accepted else "_FAIL") + ".mp4"
         self.video_path = os.path.join(self.video_dir, name)
         os.replace(self._partial, self.video_path)
         return self.video_path

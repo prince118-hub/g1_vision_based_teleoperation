@@ -515,9 +515,13 @@ def cmd_full(a, purpose="plumbing"):
     _report(res, res["baselines"], "TRAINING RESULT" if purpose == "train"
             else "FULL-SPLIT RESULT (plumbing only)")
     print("  against the neighbour-ambiguity references:")
-    print("    train %.6f / %.6f = %.4f   (reconstruction; TR29)"
-          % (res["final_recon_l1"], ref_tr.mean,
-             res["final_recon_l1"] / ref_tr.mean))
+    # TR30: the DEPLOYED function on the final weights, not the train-mode window
+    # mean (dropout on, weights moving). This line printed `final_recon_l1` until
+    # 2026-10-17 - for ACT 0.042531 / 0.029004 = 1.466 where the deployed
+    # function gives 0.032556 / 0.029004 = 1.122.
+    print("    train %.6f / %.6f = %.4f   (deployment recon, final weights; TR29/TR30)"
+          % (res["final_deployment_recon"], ref_tr.mean,
+             res["final_deployment_recon"] / ref_tr.mean))
     print("    val   %.6f / %.6f = %.4f"
           % (res["final_val_loss"], ref_va.mean,
              res["final_val_loss"] / ref_va.mean))
