@@ -26,8 +26,10 @@ episode exists** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). scri
 ACT / ACT-LSTM reach and push the box > 5 cm before the stillness rule ever locks. Hence **lock rule v2** (§8 2026-10-17). Those checkpoints
 are v1-trained: evaluate them with `deploy.py --lock-rule v1`. Episodes now carry demonstrator settings + lock rule; split/norm refuse mixes.
 
-**Next: scripted_v2** — record 50 demonstrator-ok episodes under v2 (setting A), rebuild split / norm, retrain (`tools/train_scripted_v2.ps1`),
-then select checkpoints by task success on spare seeds 60, 63–67, 69, 71–83. **ONE heavy process at a time: this laptop has 7.7 GB RAM.**
+**scripted_v2 READY (2026-10-17):** 50 eps, lock rule v2, setting A, commit 454a053, git_dirty false (51 attempted, seed 25 PLACE(upright));
+split 40 / 10 + norm (`*_scripted_v2.*`); backed up to `D:\thesis_backup\scripted_v2`. Replay 45/50 manipulation (5 misses = walk-in drift,
+bit-identical on re-run). **Next: train with `tools/train_scripted_v2.ps1`, then select checkpoints by task success on spare seeds
+60, 63–67, 69, 71–83 (`deploy.py`, lock rule v2).** ONE heavy process at a time: this laptop has 7.7 GB RAM.
 
 ## 3. Full pipeline (end to end)
 
