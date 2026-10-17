@@ -225,8 +225,13 @@ def cmd_record(a):
     ledger.append("session", label=label, seeds=pending, auto=a.auto,
                   spec_version=spec.SPEC_VERSION)
     print("session %r: %d seed(s) pending -> %s" % (label, len(pending), pending))
-    accepted = 0
+    accepted = attempted = 0
     for seed in pending:
+        # --until-accepted: stop once enough are SAVED; --count stays the cap on
+        # attempts, so a run of failures cannot consume the stream unbounded.
+        if a.until_accepted and accepted >= a.until_accepted:
+            break
+        attempted += 1
         while True:
             ledger.append("issue", seed=seed, label=label)
             print("\n=== seed %d ===" % seed)
@@ -268,7 +273,8 @@ def cmd_record(a):
                 break
             print("  RETRY (the scripted demonstrator is deterministic: the same "
                   "seed produces the same episode)")
-    print("\naccepted %d of %d; ledger %s" % (accepted, len(pending), ledger.path))
+    print("\naccepted %d of %d attempted (cap %d); ledger %s"
+          % (accepted, attempted, len(pending), ledger.path))
     print("\n".join("%-18s %s" % (k, v) for k, v in ledger.summary().items()))
     return 0
 
@@ -291,7 +297,10 @@ def decide(auto: str, recommend: bool) -> str:
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--count", type=int, default=1)
+    ap.add_argument("--count", type=int, default=1,
+                    help="seeds to attempt (the cap, with --until-accepted)")
+    ap.add_argument("--until-accepted", type=int, default=0,
+                    help="stop once this many episodes are accepted (0 = attempt all --count)")
     # No --label: it is derived from the recorder-set source (A2). An operator
     # flag that defaults to a provenance claim is a field that lies quietly.
     ap.add_argument("--seeds", default=None, help="JSON file of the pre-partitioned stream")

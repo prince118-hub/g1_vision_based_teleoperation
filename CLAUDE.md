@@ -20,15 +20,14 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. Phase numbers are PLAN.md's** (P3 recorder, P4 model code, P5 pilot); the model code was built ahead of its data (PLAN.md says
-why). **P1–P4 CLOSED.** P3's replay reproduces the manipulation channel only (`NOTES.md` 2026-09-16). **P4 closed WITH A QUALIFICATION
-(§8 2026-09-29):** BC, chunked BC, ACT and ACT-LSTM all pass overfit-10 at W_o = 12 on the NVIDIA laptop (O34 Option B), ACT and
-ACT-LSTM differing only in `use_lstm` — but **neither ACT run converged** (both hit the 200k-step cap, still improving). **Every model
-result is on SCRIPTED data — no piloted episode exists** (`data/raw/` is empty), so O31 and O32 stay open until P5. D8 awaits the adviser.
+**None. P1–P4 CLOSED** (PLAN.md numbering; P4 with a qualification, §8 2026-09-29). **Everything is still SCRIPTED data — no piloted
+episode exists** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). scripted_v1 (50 eps, lock rule v1) trained BC / ACT / ACT-LSTM
+(`runs/scripted_v1/`, 2dbf8da); closed loop on 20 spare seeds (`tools/deploy.py`): **2 / 180 succeed** — BC never closes the gripper,
+ACT / ACT-LSTM reach and push the box > 5 cm before the stillness rule ever locks. Hence **lock rule v2** (§8 2026-10-17). Those checkpoints
+are v1-trained: evaluate them with `deploy.py --lock-rule v1`. Episodes now carry demonstrator settings + lock rule; split/norm refuse mixes.
 
-**Next: P5 pilot, not started.** It must settle D12: the grasp worked free-based on 2026-09-15, so D12 may bind only the scripted
-demonstrator (§8). D18 is enforced at every reset (`g1_data/reset.py` raises on a contract mismatch; the recorder stores it per episode)
-— the evaluation harness, not yet built, must start its episodes through the same reset.
+**Next: scripted_v2** — record 50 demonstrator-ok episodes under v2 (setting A), rebuild split / norm, retrain (`tools/train_scripted_v2.ps1`),
+then select checkpoints by task success on spare seeds 60, 63–67, 69, 71–83. **ONE heavy process at a time: this laptop has 7.7 GB RAM.**
 
 ## 3. Full pipeline (end to end)
 
