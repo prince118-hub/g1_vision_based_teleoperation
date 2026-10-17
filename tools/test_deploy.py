@@ -127,6 +127,38 @@ def test_same_checkpoint_and_seed_twice_is_identical_act_lstm():
     _determinism("act_lstm_seed0", "best.pt", 60, 150)
 
 
+def test_no_ensemble_applies_the_newest_chunks_first_action():
+    """--no-ensemble (open item 32): query every tick, apply pred[0, 0]. With
+    one chunk in the buffer (tick 0) the ensemble IS that action; after it the
+    two must differ, or the flag does nothing."""
+    run = os.path.join(RUNS, "act_lstm_seed0")
+    if not (os.path.exists(os.path.join(run, "best.pt")) and os.path.exists(REC)):
+        print("      (skipped: needs act_lstm_seed0/best.pt and %s)" % REC)
+        return
+    import torch
+    from g1_data.recorder import load_episode
+    rec, _ = load_episode(REC)
+    off = D.CheckpointPolicy(run, "best.pt", ensemble=False)
+    on = D.CheckpointPolicy(run, "best.pt")
+    assert off.ensemble is False and off.ens is None and on.ensemble is True
+    off.reset(); on.reset()
+    window = np.zeros((off.W, spec.STATE_DIM), dtype=np.float32)
+    differs = False
+    for t in range(6):
+        s = rec["states"][t]
+        a_off, a_on = off.act(s, t), on.act(s, t)
+        z = off.st.normalize(np.asarray(s, np.float32).astype(np.float64)).astype(np.float32)
+        window = np.concatenate([window[1:], z[None]], axis=0)
+        with torch.no_grad():
+            first = off.model(torch.from_numpy(window).unsqueeze(0).to(off.device))[0, 0]
+        want = off.ac.denormalize(first.cpu().numpy().astype(np.float64))
+        assert np.array_equal(a_off, want), t
+        if t == 0:
+            assert np.allclose(a_on, a_off, atol=1e-6), "one chunk: ensemble == first action"
+        differs |= not np.allclose(a_on, a_off, atol=1e-6)
+    assert differs, "ensembling on and off gave identical actions for 6 ticks"
+
+
 def test_out_file_is_never_appended_to():
     import tempfile
     p = os.path.join(tempfile.mkdtemp(), "x.jsonl")

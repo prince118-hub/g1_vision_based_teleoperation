@@ -101,7 +101,8 @@ def post_process(a) -> np.ndarray:
 class CheckpointPolicy:
     """A trained checkpoint, with the run's own normalization and window."""
 
-    def __init__(self, run_dir: str, ckpt: str = "best.pt", device=None):
+    def __init__(self, run_dir: str, ckpt: str = "best.pt", device=None,
+                 ensemble: bool = True):
         import torch
         import train_bc as TB
         from g1_model import train as T
@@ -128,8 +129,12 @@ class CheckpointPolicy:
         self.model = model.to(self.device).eval()
         self.ckpt_info = dict(file=ckpt, step=ck.get("step"), epoch=ck.get("epoch"),
                               val_loss=ck.get("val_loss"), git_commit=ck.get("git_commit"))
+        # ensemble=False (open item 32): a chunked policy is still queried EVERY
+        # tick, but applies the NEWEST chunk's first action instead of the
+        # temporal ensemble - the Stage-3 convention (models.first_action).
+        self.ensemble = bool(ensemble) and self.K > 1
         self.ens = (TemporalEnsembler(self.K, m=TEMPORAL_ENSEMBLE_M)
-                    if self.K > 1 else None)
+                    if self.ensemble else None)
         self.name = "%s/%s" % (os.path.basename(os.path.normpath(run_dir)), ckpt)
 
     def reset(self) -> None:
@@ -469,6 +474,9 @@ def main(argv=None):
     g.add_argument("--seed-list", help="comma-separated seeds, e.g. 60,63")
     ap.add_argument("--out", required=True, help="JSONL, one line per episode (refused if it exists)")
     ap.add_argument("--max-ticks", type=int, default=MAX_TICKS)
+    ap.add_argument("--no-ensemble", action="store_true",
+                    help="chunked policies: query every tick and apply the newest "
+                         "chunk's first action (no temporal ensembling)")
     ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default="v2",
                     help="lock rule (phases.LockConfig); the one the training data "
                          "was collected under. v2 = stance band only (default)")
@@ -482,7 +490,7 @@ def main(argv=None):
     import torch
     from g1_model import train as T
     det = T.set_determinism(0, strict=True)
-    policy = CheckpointPolicy(a.run, a.ckpt)
+    policy = CheckpointPolicy(a.run, a.ckpt, ensemble=not a.no_ensemble)
     loco = torch.jit.load(W.POLICY_PATH)
     seeds = _seeds(a)
     rule = LOCK_RULES[a.lock_rule]
@@ -499,7 +507,7 @@ def main(argv=None):
               "was collected under %s. Pass --lock-rule %s to match."
               % (rule.version, repo_relpath(ep_dir), train_rule.version, train_rule.version))
     header = dict(run=a.run, ckpt=policy.ckpt_info, kind=policy.kind, K=policy.K,
-                  lock_rule=lock_rule_meta(rule),
+                  lock_rule=lock_rule_meta(rule), temporal_ensemble=policy.ensemble,
                   training_data_lock_rule=train_rule.version if train_rule else None,
                   obs_window=policy.W, norm=repo_relpath(policy.norm_path),
                   device=str(policy.device), max_ticks=a.max_ticks,
