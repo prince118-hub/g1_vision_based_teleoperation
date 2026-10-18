@@ -7116,3 +7116,16 @@ late.
   GPU 0.7-2.2 GB in use (desktop included). ACT-LSTM-160 2.71 steps/s, ACT-160 2.85 (windows of 100 incl. a val pass),
   n40 runs start ~25 s faster; the ambiguity reference on 88,384 samples is no problem. The first dry run caught a
   launcher bug (stderr log inside the run dir, refused by train_bc) - fixed by writing it beside the run.
+
+## 2026-10-18 — scripted_v3 training: the three 160 runs interrupted, rerun separately
+
+- First launch of `train_scripted_v3.ps1` (~13:26) was stopped by Ctrl+C: `act_lstm_160` reached 1,183 steps
+  (`result.json` status `crashed`, `best.pt`/`state.pt` kept), `act_160` and `bc_160` wrote only `metadata.json`.
+  The relaunch (13:43, commit cbebae7) found those folders non-empty, so `train_bc.py` refused all three (exit 1,
+  0.1 min each) and went on to `act_lstm_n40` and `act_n40`. The relaunch overwrote `summary.txt` and the three
+  `train.log` files, so the first launch's logs are gone.
+- The three folders and their `.stderr.log` files are kept in `runs/scripted_v3/_failed/`; none is a result.
+- `tools/train_scripted_v3_rest.ps1` runs only act_lstm_160, act_160, bc_160 with the same arguments and output
+  folders, appending to the same `summary.txt`. It waits (every 5 min) until no `train_bc.py` process exists on two
+  checks 60 s apart AND the main launcher has finished - read from `summary.txt`, because that launcher's window was
+  started with `-NoExit` and outlives the script.
