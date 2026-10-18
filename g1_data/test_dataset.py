@@ -316,6 +316,43 @@ def test_split_is_exactly_80_20_and_covers_every_bin():
     assert len(sp["bins"]) == 9 and not sp["bins_without_val"]
 
 
+def _grid_eps(n):
+    return [_ep(i, spawn=(1.44 + 0.12 * ((i % 10) / 9.0),
+                          -0.21 + 0.42 * (((i // 10) % 20) / 19.0))) for i in range(n)]
+
+
+def test_nested_split_is_a_stratified_subset_with_the_same_val():
+    """`nested_split`: exactly n_train seeds, all from the parent's train, the
+    parent's val untouched, every bin represented in proportion (within 1),
+    deterministic, and nested again it stays inside the first subset."""
+    eps = _grid_eps(200)
+    parent = DS.stratified_split(eps)
+    assert len(parent["train"]) == 160 and len(parent["val"]) == 40
+    sub = DS.nested_split(parent, eps, 40, parent_path="p.json")
+    assert len(sub["train"]) == 40 == len(set(sub["train"]))
+    assert set(sub["train"]) <= set(parent["train"])
+    assert sub["val"] == parent["val"] and not set(sub["train"]) & set(sub["val"])
+    assert sub["nested_from"] == dict(path="p.json", n_train=160,
+                                      spec_version=spec.SPEC_VERSION)
+    ptrain = set(parent["train"])
+    for cell, seeds in parent["bins"].items():
+        n_parent = len([s for s in seeds if s in ptrain])
+        assert abs(len(sub["bins"].get(cell, [])) - n_parent * 40 / 160.0) <= 1.0, cell
+    assert DS.nested_split(parent, list(reversed(eps)), 40) == DS.nested_split(parent, eps, 40)
+    mid = DS.nested_split(parent, eps, 80)
+    inner = DS.nested_split(mid, eps, 40)
+    assert set(inner["train"]) <= set(mid["train"]) <= ptrain and inner["val"] == parent["val"]
+
+
+def test_nested_split_refuses_a_bad_size_or_missing_episodes():
+    eps = _grid_eps(50)
+    parent = DS.stratified_split(eps)
+    _raises(DS.DatasetError, DS.nested_split, parent, eps, 0)
+    _raises(DS.DatasetError, DS.nested_split, parent, eps, len(parent["train"]))
+    e = _raises(DS.DatasetError, DS.nested_split, parent, eps[:30], 10)
+    assert "not among the episodes" in str(e)
+
+
 def test_split_is_deterministic():
     eps = [_ep(i, spawn=(1.44 + 0.012 * (i % 10), -0.2 + 0.04 * (i // 10)))
            for i in range(40)]

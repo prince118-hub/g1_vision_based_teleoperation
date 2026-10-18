@@ -277,6 +277,8 @@ def cmd_split(a):
     print("  rejected          : %s" % (cov["rejected"] or "none"))
     print("  spawn x %s  y %s" % (cov["spawn_x"], cov["spawn_y"]))
     print("  held-out leak     : %s" % (cov["heldout_accepted"] or "NONE - good"))
+    if a.nested_from:
+        return _nested(a, eps)
     sp = DS.stratified_split(eps, val_frac=a.val_frac, grid=(a.grid, a.grid))
     DS.save_splits(sp, path=_splits_path(a))
     occupied = {k: len(v) for k, v in sp["bins"].items()}
@@ -287,6 +289,28 @@ def cmd_split(a):
           "episodes every bin draws ~3)" % (sp["bins_without_val"] or "none"))
     print("  val seeds: %s" % sp["val"])
     print("  saved %s" % repo_relpath(_splits_path(a)))
+    return 0
+
+
+def _nested(a, eps):
+    """`split --nested-from PARENT --n-train N`: a stratified N-episode subset of
+    PARENT's train seeds, PARENT's val seeds unchanged (dataset.nested_split).
+    Fit its own norm stats afterwards: `norm --splits <this file> --norm ...`."""
+    if not a.n_train:
+        raise SystemExit("--nested-from needs --n-train")
+    if os.path.abspath(_splits_path(a)) == os.path.abspath(a.nested_from):
+        raise SystemExit("--splits must be a NEW file, not the parent %s" % a.nested_from)
+    parent = DS.load_splits(a.nested_from)
+    sp = DS.nested_split(parent, eps, a.n_train, parent_path=repo_relpath(a.nested_from))
+    DS.save_splits(sp, path=_splits_path(a))
+    counts = {k: len(v) for k, v in sp["bins"].items()}
+    print("nested split: %d train (of the parent's %d) / %d val (the parent's, unchanged)"
+          % (len(sp["train"]), len(parent["train"]), len(sp["val"])))
+    print("  per-bin train counts: %s" % counts)
+    ptrain = set(parent["train"])
+    print("  parent per-bin train counts: %s"
+          % {k: len([s for s in v if s in ptrain]) for k, v in parent.get("bins", {}).items()})
+    print("  saved %s (from %s)" % (repo_relpath(_splits_path(a)), repo_relpath(a.nested_from)))
     return 0
 
 
@@ -400,6 +424,11 @@ def main():
         if name in ("split", "check"):
             p.add_argument("--val-frac", type=float, default=0.2)
             p.add_argument("--grid", type=int, default=3)
+            p.add_argument("--nested-from", default=None,
+                           help="split only: a parent split file; write a stratified "
+                                "--n-train subset of its train seeds, same val")
+            p.add_argument("--n-train", type=int, default=0,
+                           help="with --nested-from: the subset's train size")
         if name in ("norm", "check"):
             p.add_argument("--allow-synthetic", action="store_true")
         if name in ("split", "norm", "check"):
@@ -414,7 +443,8 @@ def main():
     a = ap.parse_args()
     for k, v in (("sabotage", False), ("teleop", None), ("val_frac", 0.2),
                  ("grid", 3), ("allow_synthetic", False), ("source", None),
-                 ("episodes", None), ("splits", None), ("norm", None)):
+                 ("episodes", None), ("splits", None), ("norm", None),
+                 ("nested_from", None), ("n_train", 0)):
         if not hasattr(a, k):
             setattr(a, k, v)
     if a.ledger is None:

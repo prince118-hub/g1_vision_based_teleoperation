@@ -423,17 +423,7 @@ def stratified_split(eps: Sequence[Episode], val_frac: float = 0.2,
     `bins_without_val` is reported rather than hidden. At the planned 150
     episodes every bin draws ~3.
     """
-    from g1_teleop.config import TeleopConfig
-    cfg = box_cfg or TeleopConfig().box
-    ctr = np.asarray(cfg.pickup_center, dtype=float)[:2]
-    half = np.asarray(cfg.pickup_half, dtype=float)[:2]
-    lo, hi = ctr - half, ctr + half
-    bins: Dict[Tuple[int, int], List[Episode]] = {}
-    for e in sorted(eps, key=lambda e: e.seed):
-        f = (e.spawn - lo) / np.maximum(hi - lo, 1e-9)
-        cell = (int(np.clip(f[0] * grid[0], 0, grid[0] - 1)),
-                int(np.clip(f[1] * grid[1], 0, grid[1] - 1)))
-        bins.setdefault(cell, []).append(e)
+    bins = _spawn_bins(eps, grid, box_cfg)
     train, val, carry, empty = [], [], 0.0, []
     for cell in sorted(bins):
         members = bins[cell]
@@ -448,6 +438,73 @@ def stratified_split(eps: Sequence[Episode], val_frac: float = 0.2,
     return dict(train=[e.seed for e in train], val=[e.seed for e in val],
                 grid=list(grid), val_frac=val_frac, bins_without_val=empty,
                 bins={"%d,%d" % c: [e.seed for e in v] for c, v in sorted(bins.items())},
+                spec_version=spec.SPEC_VERSION)
+
+
+def _spawn_bins(eps: Sequence[Episode], grid: Tuple[int, int],
+                box_cfg=None) -> Dict[Tuple[int, int], List[Episode]]:
+    """Episodes by geometric spawn cell, each cell ordered by seed. The ONE
+    binning both `stratified_split` and `nested_split` use."""
+    from g1_teleop.config import TeleopConfig
+    cfg = box_cfg or TeleopConfig().box
+    ctr = np.asarray(cfg.pickup_center, dtype=float)[:2]
+    half = np.asarray(cfg.pickup_half, dtype=float)[:2]
+    lo, hi = ctr - half, ctr + half
+    bins: Dict[Tuple[int, int], List[Episode]] = {}
+    for e in sorted(eps, key=lambda e: e.seed):
+        f = (e.spawn - lo) / np.maximum(hi - lo, 1e-9)
+        cell = (int(np.clip(f[0] * grid[0], 0, grid[0] - 1)),
+                int(np.clip(f[1] * grid[1], 0, grid[1] - 1)))
+        bins.setdefault(cell, []).append(e)
+    return bins
+
+
+def nested_split(parent: dict, eps: Sequence[Episode], n_train: int,
+                 parent_path: str = "", box_cfg=None) -> dict:
+    """A stratified `n_train`-episode subset of `parent`'s TRAIN seeds, with the
+    parent's validation seeds UNCHANGED - a nested subset for the data-scaling
+    comparison (CLAUDE.md section 8 2026-09-11: nested 25 c 50 c 100 c 150).
+
+    Same geometric bins as `stratified_split` (the parent's grid); within each
+    bin the picks are evenly spaced by seed, and the per-bin quota carries its
+    remainder, so the subset has the parent's spatial spread and exactly
+    `n_train` episodes. Deterministic, no RNG. The parent may itself be nested,
+    so 40 c 80 c 160 holds by construction when each is taken from the next.
+
+    Normalization must be refitted on the subset's own train seeds
+    (`build_dataset norm --splits <the nested file>`): stats from the parent's
+    160 would leak the 120 episodes the subset is meant not to have seen.
+    """
+    pool_seeds = set(int(s) for s in parent["train"])
+    pool = [e for e in eps if e.seed in pool_seeds]
+    missing = sorted(pool_seeds - {e.seed for e in pool})
+    if missing:
+        raise DatasetError("nested split: %d parent training seed(s) not among the "
+                           "episodes: %s" % (len(missing), missing[:10]))
+    if not 0 < int(n_train) < len(pool):
+        raise DatasetError("nested split: n_train must be in 1..%d (the parent's "
+                           "train size - 1), got %r" % (len(pool) - 1, n_train))
+    grid = tuple(int(g) for g in parent["grid"])
+    bins = _spawn_bins(pool, grid, box_cfg)
+    frac = int(n_train) / float(len(pool))
+    picked, carry, per_bin = [], 0.0, {}
+    for cell in sorted(bins):
+        members = bins[cell]
+        want = len(members) * frac + carry
+        k = int(np.floor(want + 1e-9))
+        carry = want - k
+        take = {int((j + 0.5) * len(members) / k) for j in range(k)} if k else set()
+        chosen = [e.seed for i, e in enumerate(members) if i in take]
+        picked += chosen
+        per_bin["%d,%d" % cell] = chosen
+    if len(picked) != int(n_train):
+        raise DatasetError("nested split picked %d, not %d" % (len(picked), n_train))
+    return dict(train=picked, val=list(parent["val"]), grid=list(grid),
+                val_frac=parent.get("val_frac"),
+                bins_without_val=parent.get("bins_without_val", []),
+                bins=per_bin,
+                nested_from=dict(path=parent_path, n_train=len(pool),
+                                 spec_version=parent["spec_version"]),
                 spec_version=spec.SPEC_VERSION)
 
 
