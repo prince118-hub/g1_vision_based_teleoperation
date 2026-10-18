@@ -22,7 +22,8 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 **None. P1–P4 CLOSED** (PLAN.md; P4 qualified, §8 2026-09-29). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser).
 Closed loop: v1 2/180, v2 3/180; **g1-spec-1.2.0 (§8 2026-10-18) REFUSES every 1.1.0 file and run** (v1/v2 = evidence, `D:\thesis_backup\`).
-**Next: record `recordings/scripted_v3/` (~200, setting A, rule v2, auto), split 160/40 + nested 40, train, `deploy.py --selection`.** ONE heavy process at a time (7.7 GB RAM).
+**scripted_v3 READY (2026-10-18, d2cc417):** 200/208 (8 demo PLACE fails), split 160/40 + nested 40 (`*_scripted_v3*`), backup `D:\thesis_backup\scripted_v3`.
+**Next: `tools/train_scripted_v3.ps1` (5 runs, ~21–23 h), then `deploy.py --selection`.** ONE heavy process at a time (7.7 GB RAM).
 
 ## 3. Full pipeline (end to end)
 

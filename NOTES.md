@@ -7098,3 +7098,21 @@ late.
 
 **CLAUDE.md §10 archive (resolved):** "O33. RESOLVED 2026-10-17 (§8): `STD_FLOOR` 1e-2, the reference's clip
 (`reference/act/utils.py:97,102`); stats carry `std_floor`."
+
+## 2026-10-18 — scripted_v3 recorded, split, nested 40, training launcher
+
+- Recorded at d2cc417, `git_dirty` false, fully automatic: `record_episodes.py --seeds data/eval/train_seeds.json
+  --out-dir recordings/scripted_v3 --until-accepted 200 --count 230 --auto pass --video-dir D:/thesis_videos/scripted_v3`.
+  **200 accepted of 208 attempted**, 64.1 min (18.5 s per attempt with video). Discarded, all demonstrator failures at
+  PLACE: 25, 72 (upright); 101, 136, 142, 151, 211, 705 (xy, placement > 0.10 m; 142 and 705 also "box not dropped").
+  Seeds 0-239 then 702-712 of the train stream; none in select/exp1/exp2; no held-out spawn. 488-608 ticks (median 551).
+  All 200: spec 1.2.0, lock rule v2, grip_label next_weld_v1, setting A; every file 48-D, label == next weld bit, both
+  base_locked values present; max placement error 0.0764 m. 54 MB episodes, 1.4 GB video (208 MP4s, failures `_FAIL`).
+- Split 160/40, 3x3 stratified, every bin has val (`splits_scripted_v3.json`); norm on the 160 floors state 43, 44, 45.
+  Nested 40 (`build_dataset split --nested-from ... --n-train 40`, commit 57c6248): a stratified subset of the 160
+  (per bin 4 5 3 5 4 2 5 6 6), same 40 val, its own norm (`*_n40.*`).
+- Replay check, 10 episodes (every 20th): manipulation 10/10, dWeld 0 on all, dLock 0-4; whole task 2/10 (walk drift).
+- `tools/train_scripted_v3.ps1` dry run (200 steps each, deleted): all hard_cap, exit 0. Peak RAM 1.22-1.73 GB,
+  GPU 0.7-2.2 GB in use (desktop included). ACT-LSTM-160 2.71 steps/s, ACT-160 2.85 (windows of 100 incl. a val pass),
+  n40 runs start ~25 s faster; the ambiguity reference on 88,384 samples is no problem. The first dry run caught a
+  launcher bug (stderr log inside the run dir, refused by train_bc) - fixed by writing it beside the run.
