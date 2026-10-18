@@ -69,10 +69,13 @@ def test_resolves_against_the_real_model():
 
 
 def test_dimensions_and_names():
-    assert spec.STATE_DIM == 47 and spec.ACTION_DIM == 22
-    assert len(spec.STATE_NAMES) == 47
+    assert spec.STATE_DIM == 48 and spec.ACTION_DIM == 22
+    assert len(spec.STATE_NAMES) == 48
     assert len(spec.ACTION_NAMES) == 22
-    assert len(set(spec.STATE_NAMES)) == 47, "duplicate state name"
+    assert len(set(spec.STATE_NAMES)) == 48, "duplicate state name"
+    # 1.2.0: appended LAST, so every 1.1.0 index is where it was
+    assert spec.BASE_LOCKED == 47 and spec.STATE_NAMES[47] == "base_locked"
+    assert spec.STATE_NAMES[46] == "q_waist_pitch" and spec.GRIP_L == 28
     assert len(set(spec.ACTION_NAMES)) == 22, "duplicate action name"
     # the layout the brief fixes, spot-checked at every boundary
     assert spec.STATE_NAMES[0] == "box_pos_x"
@@ -164,6 +167,7 @@ def test_build_state_shape_and_sources():
     assert np.allclose(spec.arm_left_q(s), d.qpos[ix.left_arm_qpos])
     assert np.allclose(spec.arm_right_q(s), d.qpos[ix.right_arm_qpos])
     assert np.allclose(spec.waist_q(s), d.qpos[ix.waist_qpos])
+    assert spec.base_locked(s) == float(d.eq_active[sp.base_lock_id])
     q = np.zeros(4)
     mujoco.mju_mat2Quat(q, d.site_xmat[sp.site_left])
     assert np.allclose(spec.palm_left_quat(s), q)
@@ -217,7 +221,7 @@ def test_build_action_shape_and_gripper_and_velocity():
 def test_build_returns_the_pair():
     m, d, ix, sp = _fresh_data()
     s, a = sp.build(m, d, ix, act=np.zeros(3), cmd=0.0)
-    assert s.shape == (47,) and a.shape == (22,)
+    assert s.shape == (48,) and a.shape == (22,)
 
 
 def test_act_has_no_default():
@@ -267,7 +271,7 @@ def test_wrist_roll_and_pitch_stay_trainable():
 
 
 def test_no_state_mask():
-    assert spec.STATE_MASK.all() and spec.STATE_MASK.shape == (47,)
+    assert spec.STATE_MASK.all() and spec.STATE_MASK.shape == (48,)
 
 
 def test_masks_are_read_only():
@@ -277,24 +281,25 @@ def test_masks_are_read_only():
 
 # ─── accessors ────────────────────────────────────────────────────────────────
 def test_accessors_work_batched_and_reject_wrong_width():
-    s = np.arange(47, dtype=np.float64)
+    s = np.arange(48, dtype=np.float64)
     batch = np.tile(s, (5, 1))
     assert np.array_equal(spec.box_pos(s), [0, 1, 2])
     assert spec.box_pos(batch).shape == (5, 3)
     assert np.array_equal(spec.waist_q(s), [44, 45, 46])
     assert spec.grip_left(s) == 28 and spec.grip_right(s) == 29
+    assert spec.base_locked(s) == 47 and spec.base_locked(batch).shape == (5,)
     a = np.arange(22, dtype=np.float64)
     assert np.array_equal(spec.arm_left_cmd(a), np.arange(7))
     assert np.array_equal(spec.arm_right_cmd(a), np.arange(7, 14))
     assert np.array_equal(spec.waist_cmd(a), [14, 15, 16])
     assert np.array_equal(spec.velocity_cmd(a), [19, 20, 21])
     assert spec.velocity_cmd(np.tile(a, (3, 1))).shape == (3, 3)
-    _raises(ValueError, spec.box_pos, np.zeros(46))
+    _raises(ValueError, spec.box_pos, np.zeros(47))           # a 1.1.0 vector
     _raises(ValueError, spec.velocity_cmd, np.zeros(21))
 
 
 def test_state_and_action_groups_tile_the_vectors():
-    for groups, dim in ((spec.STATE_GROUPS, 47), (spec.ACTION_GROUPS, 22)):
+    for groups, dim in ((spec.STATE_GROUPS, 48), (spec.ACTION_GROUPS, 22)):
         seen = []
         for _, sl in groups:
             seen.extend(range(*sl.indices(dim)))
@@ -337,7 +342,7 @@ def test_spec_version_is_checked():
 
 
 def test_norm_stats_identity_and_shapes():
-    for kind, dim in (("state", 47), ("action", 22)):
+    for kind, dim in (("state", 48), ("action", 22)):
         st = spec.NormStats.identity(kind)
         x = np.arange(dim, dtype=np.float64)
         assert np.allclose(st.normalize(x), x)
@@ -537,9 +542,56 @@ def test_base_lock_resolves_and_is_not_the_grasp_weld():
         m, mujoco.mjtObj.mjOBJ_EQUALITY, BaseLockConfig().eq_name)
 
 
-def test_spec_version_is_1_1_0():
-    assert spec.SPEC_VERSION == "g1-spec-1.1.0"
+def test_spec_version_is_1_2_0():
+    assert spec.SPEC_VERSION == "g1-spec-1.2.0"
     _raises(AssertionError, spec.assert_spec_version, "g1-spec-1.0.0", "old file")
+    _raises(AssertionError, spec.assert_spec_version, "g1-spec-1.1.0", "old file")
+
+
+# ─── base_locked (spec 1.2.0) ─────────────────────────────────────────────────
+def test_base_locked_is_the_pelvis_weld_and_nothing_else_reads_it():
+    """Dim 47 follows the base-lock equality, and toggling the lock changes
+    dim 47 and no other state dim."""
+    m, d, ix, sp = _fresh_data()
+    d.eq_active[sp.base_lock_id] = 0
+    s0 = sp.build_state(m, d, ix)
+    d.eq_active[sp.base_lock_id] = 1
+    s1 = sp.build_state(m, d, ix)
+    d.eq_active[sp.base_lock_id] = 0
+    assert spec.base_locked(s0) == 0.0 and spec.base_locked(s1) == 1.0
+    others = [i for i in range(spec.STATE_DIM) if i != spec.BASE_LOCKED]
+    assert np.array_equal(s0[others], s1[others])
+    # the grasp weld does not drive it, and it does not drive the grasp dims
+    d.eq_active[sp.weld_id] = 1
+    s2 = sp.build_state(m, d, ix)
+    d.eq_active[sp.weld_id] = 0
+    assert spec.base_locked(s2) == 0.0 and spec.grip_left(s2) == 1.0
+
+
+# ─── the gripper label (spec 1.2.0, open item 29) ─────────────────────────────
+def _weld_episode(T=12, on=4, off=9):
+    S = np.zeros((T, spec.STATE_DIM), dtype=np.float32)
+    S[on:off, spec.GRIP_L] = S[on:off, spec.GRIP_R] = 1.0
+    A = np.zeros((T, spec.ACTION_DIM), dtype=np.float32)
+    A[:, spec.GRIP_L_A] = A[:, spec.GRIP_R_A] = S[:, spec.GRIP_L]   # the 1.1.0 leak
+    return S, A
+
+
+def test_grip_label_is_the_next_states_weld_bit():
+    S, A = _weld_episode()
+    B = spec.grip_label_next_weld(S, A)
+    assert np.array_equal(B[:-1, spec.GRIP_L_A], S[1:, spec.GRIP_L])
+    assert B[-1, spec.GRIP_L_A] == S[-1, spec.GRIP_L]               # held
+    assert np.array_equal(B[:, spec.GRIP_R_A], B[:, spec.GRIP_L_A])
+    others = [i for i in range(spec.ACTION_DIM) if i not in (spec.GRIP_L_A, spec.GRIP_R_A)]
+    assert np.array_equal(B[:, others], A[:, others])
+    assert np.array_equal(A[:, spec.GRIP_L_A], S[:, spec.GRIP_L]), "input not modified"
+    # at both transitions the label LEADS the observed bit by one tick
+    for k in (4, 9):
+        assert B[k - 1, spec.GRIP_L_A] != S[k - 1, spec.GRIP_L], k
+    assert spec.GRIP_LABEL == "next_weld_v1"
+    _raises(ValueError, spec.grip_label_next_weld, S[:, :47], A)    # a 1.1.0 state
+    assert np.array_equal(spec.next_weld_label(S[:, spec.GRIP_L])[:-1], S[1:, spec.GRIP_L])
 
 
 def _tests():

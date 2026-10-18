@@ -6,7 +6,7 @@ Decided 2026-09-08 and restated in spec.py: the recorder logs a phase label ever
 timestep and **no policy is conditioned on it**. Labels exist for the per-phase
 failure taxonomy and the data-scaling analysis, so they can be derived after the
 fact from the trajectory - every boundary the taxonomy needs is a function of
-quantities already in the 47-D state. Nothing in collection has to know the phase
+quantities already in the state vector. Nothing in collection has to know the phase
 while it is happening, and a live classifier would be a second thing to keep
 correct for no benefit.
 
@@ -44,7 +44,7 @@ _PLAT = {}
 def _lock_ticks(states, cfg=None) -> list:
     """The ticks the base lock fires at, recomputed OFFLINE from recorded state.
 
-    `LockPredicate` is a pure function of the 47-D vector (that is the whole
+    `LockPredicate` is a pure function of the state vector (that is the whole
     point of D12 being state-driven), so running it over a recording reproduces
     the demonstrator's own lock instants exactly - including the settle window
     and the 5-tick debounce. The SECOND lock is the MOVE -> LOWER boundary, and

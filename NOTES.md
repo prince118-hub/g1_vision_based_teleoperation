@@ -7026,3 +7026,75 @@ platform with a read-only `mj_step` hook (the demonstrator's own `min_clearance_
   the stored old episodes (`data/synthetic/ep_seed0000-0004`) too. Not investigated (`scripted_demo.py` off-limits).
 - The demonstrator is deterministic: a failing seed fails every time and stays first in the pending list, so record
   with `--count` = target + expected failures in ONE session.
+
+## 2026-10-18 — Spec g1-spec-1.2.0: `base_locked`, the gripper label, the release rule, selection seeds
+
+Four changes from the 2026-10-18 read-only investigation (items 29, 35, 36, 38/39), committed together because two
+of them change what an episode file contains. CLAUDE.md §8 2026-10-18, §7 D21/D22.
+
+**1. Place requires the weld released (item 35).** `success.evaluate` scored the final tick's place test without the
+weld: a box lowered onto the goal still welded, at rest and upright, was a placement, while `deploy.py`'s early end
+already required the release. Now `place` also needs `states[-1, GRIP_L] < 0.5`, reported as
+`place_detail["released"]`; fault injection `still_held` costs `place`. Demonstrations all end released, so no
+recorded verdict changes. Survey rescore, offline from the JSONLs (`weld_release_tick`, `end_reason`; no ambiguous
+cases): scripted_v2 5/180 -> 3/180 (ACT 60k 2/20 -> 0/20, seeds 64 and 74 still welded at tick 900); every other
+v2 checkpoint, both no-ensemble runs and all of scripted_v1 (2/180) unchanged.
+
+**2. Gripper action = the NEXT state's weld bit (item 29, D22).** Measured: the demonstrator sets the weld command
+every physics step (`scripted_demo.py:901-902`) and GRASP starts 10 steps into a tick under setting A
+(`reposition_s` 0.5 = 250 steps), so the weld engages mid-tick (seed 0: inside tick 197) and the recorder's step-0
+sample (`recorder.py` `_observe`) first shows BOTH the command and the weld bit at tick 198. The 1.1.0 gripper action
+therefore equalled state dim 28 on 58,638 / 58,638 scripted_v2 ticks and BC copied its input. In deploy a command at
+tick t engages from step 0 and is observed at t+1. The label is now `state[t+1, 28]` (last tick held),
+`spec.grip_label_next_weld` / `spec.next_weld_label`, applied in `EpisodeBuffer.save` for scripted AND teleop;
+`meta["grip_label"] = "next_weld_v1"`; the sampled command is kept as the `grip_cmd` array (a teleop press the gate
+refuses labels 0 - the label is the outcome). `dataset.assert_uniform_grip_label` refuses unlabelled or mixed
+episodes in `build_dataset split/norm` and the loader. `tools/convert_grip_label.py` writes relabelled COPIES
+(never in a source folder, never over a file, never twice) and leaves `spec_version` alone: a converted 1.1.0 file
+is still refused by this build, because `base_locked` cannot be recovered offline. On scripted_v2 seed 0 exactly
+two labels change (the tick before engage, the tick before release).
+
+**3. `base_locked`, state dim 47 (item 36/39, D21) - reverses §8 2026-09-11 (c).** Why: both demonstrators condition
+on the lock (the scripted one by construction, the operator by instruction: "do not reach until LOCKED"), and a
+learner that cannot see what the expert acts on can only guess the timing - learner and expert should share the
+state information the expert acts on (Swamy et al. 2022, NeurIPS). The 2026-10-18 probe (ACT 60k, v2, seeds 66/67/80
+against the demonstrator): the policy's arms opened during the walk-in (palm separation 0.33-0.41 m vs 0.22), the box
+moved > 5 mm 39-53 ticks BEFORE the lock, the policy locked at tick 129-145 against the demonstrator's 36-42, and seed
+80 has a training spawn 1 mm away - timing, not coverage. Filled in `SpecLayout.build_state` from
+`data.eq_active[base_lock_id]`, the same equality `build_action` reads for D17; appended LAST so no 1.1.0 index
+moved; `STATE_DIM` 48. `base_locked[t]` is the lock state at the instant `state[t]` is sampled. The predicate
+locks and releases only at a tick boundary before the sample (demonstrator, teleop, deploy), so it says "the action
+at t meets a held base"; a teleop manual ABORT (`run_integrated_combined.py` `abort_lock`) can release mid-tick and
+shows at the next sample. Deploy's observation is now the named
+function `deploy.observe` (the recorder's builder, same instant). Old checkpoints, norm stats and episodes are
+refused on version - no mixing.
+
+**4. Selection seeds leave the training stream (item 38).** The 20 spare seeds (60-83) used for checkpoint selection
+were INSIDE `train_seeds.json`; a 200-episode collection would have trained on them. `partition_seeds` now draws,
+after the three original streams end (seed 678), 20 in-region `select` seeds (679-701, `data/eval/select_seeds.json`)
+and then 100 more training seeds (702-818), held-out spawns skipped. `train[:200]`, exp1 and exp2 are unchanged
+(tested). Train stream 300; 249 of them were never issued by any ledger. `deploy.py --selection` evaluates on them, and
+`deploy.py` refuses any seed in the run's own train/val split (`--allow-train-seeds` for diagnostics), before loading.
+
+**Determinism unchanged, measured.** Seed 0 recorded under the new recorder (setting A, v2) against scripted_v2 seed 0
+(454a053): `states[:, :47]`, every non-gripper action dim, `qpos`, `qvel`, `phase_labels`, `gait_phase`,
+`step_index`, the outcome and every tick field bit-identical; `grip_cmd` == the old gripper action; the new label ==
+the converter's. Dim 47 rises at ticks 40 and 445 (meta `lock_engage_tick` 40) and velocity is zero on all 306
+locked ticks.
+
+**Fixtures re-derived, not converted.** The 40 staged episodes in `data/synthetic` (Phase 2, `reposition_s` 6.0,
+lock rule v1) were re-recorded at 1.2.0 under their original settings and written only when every 1.1.0 column was
+bit-identical: 40/40 identical, 0 mismatches. The 1.1.0 files are kept in `data/synthetic_g1-spec-1.1.0/` (with the
+old `norm_stats_v1.npz`); `splits_v1.json` regenerated and differs only in `spec_version`; `norm_stats_v1.npz`
+refit. (The ACT golden fingerprint test now pins `state_dim=47`, the width it was recorded at.)
+
+**Parity, and its limit.** A whole replayed episode does not reproduce its recording: the demonstrator changes its
+walking command every 10 physics steps, the file holds one per tick, so the walk-in drifts (seed 0 replayed through
+deploy: first lock at 43, recorded 40). What is tested (`tools/test_deploy.py`): `deploy.observe` equals the
+recorder's stored state on every tick of a full episode; tick 0 of a natural start is bit-identical in all 48 dims;
+dim 47 in deploy is 1 exactly while deploy holds the lock at the observation; and replayed through deploy the weld is
+observed on the SAME tick as in the recording (onset 198, release 496), while the 1.1.0 label is observed one tick
+late.
+
+**CLAUDE.md §10 archive (resolved):** "O33. RESOLVED 2026-10-17 (§8): `STD_FLOOR` 1e-2, the reference's clip
+(`reference/act/utils.py:97,102`); stats carry `std_floor`."

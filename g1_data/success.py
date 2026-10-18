@@ -31,7 +31,7 @@ quality metric.
 THE LIFT CRITERION IS VACUOUS AS WRITTEN (D20)
 ----------------------------------------------
 3.8.2 scores a lift as "box height exceeds platform + 0.05 m". Read as the box
-CENTRE - the obvious reading, and the one the 47-D state hands you - a 0.18 m box
+CENTRE - the obvious reading, and the one the state vector hands you - a 0.18 m box
 resting untouched on the platform is already 0.09 m above it, so the criterion is
 satisfied before the robot does anything. A deliberately injected "welded but
 never raised" episode passed it. Scored here on the box BOTTOM, which is
@@ -168,10 +168,18 @@ def evaluate(arrays: dict, meta: dict, cfg: Optional[SuccessConfig] = None,
         qv = np.asarray(arrays["qvel"], dtype=np.float64)
         speed = float(np.linalg.norm(qv[-1, -6:-3]))
         resting = resting and speed <= c.settled_speed
+    # Open item 35 (2026-10-18): the box is not placed while the hand still
+    # holds it. Every condition above can hold with the weld engaged - a box
+    # carried to the goal and lowered onto it, still welded, at rest - and that
+    # scored as a placement on the final tick. The early-end rule in
+    # tools/deploy.py already required the release; this makes the final-tick
+    # score agree with it. Recorded demonstrations all end released.
+    released = bool(s[-1, spec.GRIP_L] < 0.5)
     out["place"] = bool(out["transport"] and place_err <= c.place_radius
-                        and resting and tilt <= c.upright_deg)
+                        and resting and tilt <= c.upright_deg and released)
     out["place_detail"] = dict(placement_error_m=place_err, tilt_deg=tilt,
                                resting=bool(resting), final_box_speed=speed,
+                               released=released,
                                limit_m=c.place_radius, upright_limit_deg=c.upright_deg)
     out["episode_success"] = bool(out["place"])
     out["attributed_to"] = attribute(out, arrays)
@@ -242,15 +250,19 @@ def sabotage(arrays: dict, meta: dict, kind: str):
     elif kind == "never_lifted":                # welded but never raised
         eng = int(np.argmax(s[:, spec.GRIP_L] >= 0.5))
         s[eng:, spec.BOX_POS.start + 2] = geo["rest_z"]
+    elif kind == "still_held":                  # placed, but never let go
+        s[-1, spec.GRIP_L] = 1.0
+        s[-1, spec.GRIP_R] = 1.0
     else:
         raise ValueError("unknown sabotage %r" % kind)
     return a, m
 
 
 SABOTAGE_KINDS = ("no_weld", "box_dropped", "placement_out", "tipped",
-                  "bulldozed", "never_lifted")
+                  "bulldozed", "never_lifted", "still_held")
 #: What each injected fault must cost, so the test asserts the RIGHT failure and
 #: not merely "something failed".
 SABOTAGE_EXPECT = dict(no_weld="grasp", box_dropped="transport",
                        placement_out="place", tipped="place",
-                       bulldozed="grasp", never_lifted="lift")
+                       bulldozed="grasp", never_lifted="lift",
+                       still_held="place")

@@ -18,11 +18,20 @@ the state is the one it is applied from, so `state[t]` and `action[t]` are the
 pair "what the demonstrator saw, what it did about it". Both come from
 `SpecLayout.build`; nothing here hand-assembles a vector.
 
-WHAT IS LOGGED THAT THE 47-D STATE DOES NOT CARRY, AND WHY
+THE GRIPPER ACTION IS RELABELLED AT SAVE (spec 1.2.0, open item 29)
+-------------------------------------------------------------------
+The two gripper action dims are written as the weld bit of the NEXT state
+(`spec.grip_label_next_weld`, `meta["grip_label"]`), not the command sampled at
+the tick: the command flips mid-tick, so the sampled command and the weld bit
+changed on the same sample and the action was a copy of state dim 28. The
+sampled command is kept as the `grip_cmd` array. Both entry points, scripted
+and teleop, save through `EpisodeBuffer.save`, so both are relabelled there.
+
+WHAT IS LOGGED THAT THE STATE VECTOR DOES NOT CARRY, AND WHY
 ----------------------------------------------------------
 RAW `qpos` and `qvel` per tick. They are INSURANCE, not a policy input, and they
 are the reason the state design is the one dataset decision that cannot be
-regretted: almost anything one later wishes were in the 47-D vector is derivable
+regretted: almost anything one later wishes were in the state vector is derivable
 from raw state plus an observation window (velocity is a finite difference), but
 LEG JOINT ANGLES are not - proposal 3.4 excludes them, and once 150 episodes are
 collected without them they are gone.
@@ -195,8 +204,11 @@ class EpisodeBuffer:
         self.sp = sp or spec.SpecLayout.resolve(model, self.ix)
         self.states, self.actions, self.phases = [], [], []
         self.gait, self.qpos, self.qvel, self.ticks = [], [], [], []
+        #: The weld command as sampled at the tick - the 1.1.0 gripper action.
+        #: Kept beside the relabelled action (spec 1.2.0), never trained on.
+        self.grip_cmd = []
         # O28. Per tick: was the arm command backed by a LIVE tracked frame?
-        # An auxiliary array, not a state or action dim - the 47/22 layout and
+        # An auxiliary array, not a state or action dim - the state/action layout and
         # SPEC_VERSION are untouched (see `tracking_ok_of`). Written ONLY when
         # the source has a tracking path: a stored array means MEASURED
         # (`tracking_measured`), and the scripted demonstrator measures nothing.
@@ -220,6 +232,7 @@ class EpisodeBuffer:
             a[spec.VEL_A], where="recorded tick %d" % len(self.states))
         self.states.append(s)
         self.actions.append(a)
+        self.grip_cmd.append(float(cmd))
         self.phases.append(int(phase_label))
         phz = ((gait_counter * dt) % gait_period) / gait_period
         self.gait.append((np.sin(2 * np.pi * phz), np.cos(2 * np.pi * phz)))
@@ -234,20 +247,31 @@ class EpisodeBuffer:
         return len(self.states)
 
     def save(self, path: str, meta: dict) -> str:
-        """Write the episode. Float32 arrays, JSON metadata."""
+        """Write the episode. Float32 arrays, JSON metadata.
+
+        The gripper action dims are relabelled here, once, for every entry
+        point (`spec.grip_label_next_weld`); a caller cannot choose another
+        label."""
         if not self.states:
             raise ValueError("refusing to write an episode with no ticks")
+        if meta.get("grip_label", spec.GRIP_LABEL) != spec.GRIP_LABEL:
+            raise ValueError("grip_label is set by the recorder (%r), not by the "
+                             "caller (%r)" % (spec.GRIP_LABEL, meta["grip_label"]))
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         m = dict(meta)
+        m["grip_label"] = spec.GRIP_LABEL
         m.setdefault("spec_version", spec.SPEC_VERSION)
         m.setdefault("git_commit", _git_commit())
         m.setdefault("git_dirty", _git_dirty())
         m.setdefault("mujoco_version", mujoco.__version__)
         m.setdefault("python_version", sys.version.split()[0])
         m.setdefault("n_ticks", len(self.states))
+        states = np.asarray(self.states, dtype=np.float32)
         arrays = dict(
-            states=np.asarray(self.states, dtype=np.float32),
-            actions=np.asarray(self.actions, dtype=np.float32),
+            states=states,
+            actions=spec.grip_label_next_weld(
+                states, np.asarray(self.actions, dtype=np.float32)),
+            grip_cmd=np.asarray(self.grip_cmd, dtype=np.float32),
             phase_labels=np.asarray(self.phases, dtype=np.int8),
             gait_phase=np.asarray(self.gait, dtype=np.float32),
             qpos=np.asarray(self.qpos, dtype=np.float32),
@@ -284,7 +308,7 @@ def tracking_ok_of(arrays: dict, n_ticks: Optional[int] = None) -> np.ndarray:
     `z.files`, so an episode written before this array existed simply does not
     have the key - it does not fail to load, and nothing in `assert_uniform`
     (which reads metadata only) or the loader inspects the array set. No
-    SPEC_VERSION bump: the 47-D state and 22-D action layout, the masks, the
+    SPEC_VERSION bump: the state and 22-D action layout, the masks, the
     clips and the normalization contract are all untouched, and `fit_norm_stats`
     reads only `states` and `actions`.
 
@@ -330,7 +354,9 @@ PER_TICK_ARRAYS: Tuple[str, ...] = (
     "states", "actions", "phase_labels", "gait_phase", "qpos", "qvel",
     "step_index",
 )
-OPTIONAL_PER_TICK_ARRAYS: Tuple[str, ...] = ("tracking_ok",)
+#: `grip_cmd` (spec 1.2.0) is present in every 1.2.0 file; optional here only so
+#: that `tools/convert_grip_label.py` can length-check a 1.1.0 source.
+OPTIONAL_PER_TICK_ARRAYS: Tuple[str, ...] = ("tracking_ok", "grip_cmd")
 
 
 def assert_tick_lengths(arrays: dict, meta: Optional[dict] = None,

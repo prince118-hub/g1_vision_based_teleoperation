@@ -387,7 +387,7 @@ class ACTConfig:
 
     #: OURS, PROVISIONAL. The reference's action head is `Linear(hidden, 14)`
     #: (`detr_vae.py:52`, `state_dim = 14` hardcoded at `:230`). Our action is
-    #: 22-D and our state 47-D (`g1_data/spec.py`); pure dimensionality.
+    #: 22-D and our state 48-D (`g1_data/spec.py`); pure dimensionality.
     state_dim: int = spec.STATE_DIM
     action_dim: int = spec.ACTION_DIM
 
@@ -449,7 +449,7 @@ class ACTPolicy(nn.Module):
     Shape contract, identical to every other model in the ladder so that
     `train.train()` does not change between stages:
 
-        obs : (B, W_o, 47)   ->   action : (B, K, 22)
+        obs : (B, W_o, 48)   ->   action : (B, K, 22)
 
     `forward(obs)` is inference. `forward(obs, actions=..., action_mask=...)` is
     training and additionally returns `mu`/`logvar`. Which mode is in force is
@@ -458,7 +458,7 @@ class ACTPolicy(nn.Module):
     CVAE encoder at inference — it has nothing to run it on.
 
     ACT-LSTM, `use_lstm=True` (D8; CLAUDE.md §8 2026-09-25, Option B): an LSTM
-    reads the SAME (B, W_o, 47) window, oldest step first, starting from zero
+    reads the SAME (B, W_o, 48) window, oldest step first, starting from zero
     memory on EVERY call; its last layer's final hidden state is projected to
     `hidden_dim` and appended as a THIRD token, [latent, proprio, lstm], with its
     own one-entry position embedding. Nothing else moves: the CVAE encoder does
@@ -618,7 +618,7 @@ class ACTPolicy(nn.Module):
 
     # ---- the policy --------------------------------------------------------
     def _lstm_token(self, obs: torch.Tensor) -> torch.Tensor:
-        """(B, W_o, 47) -> (B, h): the LSTM's summary of the window.
+        """(B, W_o, 48) -> (B, h): the LSTM's summary of the window.
 
         NO (h0, c0) is passed, so every call starts from zero memory, and none is
         returned or stored: nothing crosses calls (Option B). `h_n[-1]` is the
@@ -655,7 +655,7 @@ class ACTPolicy(nn.Module):
 
     def forward(self, obs: torch.Tensor, actions: Optional[torch.Tensor] = None,
                 action_mask: Optional[torch.Tensor] = None):
-        """(B, W_o, 47) -> (B, K, 22), plus (mu, logvar) when training.
+        """(B, W_o, 48) -> (B, K, 22), plus (mu, logvar) when training.
 
         Mode is decided HERE, from whether an action chunk was supplied
         (`detr_vae.py:85`), not by a caller-set flag. At inference z is the prior

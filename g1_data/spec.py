@@ -1,4 +1,4 @@
-"""The 47-D state and the 22-D action, resolved from names. One definition.
+"""The 48-D state and the 22-D action, resolved from names. One definition.
 
 After this module lands, **no other file may hardcode a dimension index, a
 mask, a clip limit or a normalization rule.** Recorder, dataset, the three
@@ -93,6 +93,36 @@ Two things, and both alter what a file contains, which is why the version moves:
    untouched; `SCORED_OF` decides only which bucket a failed episode is charged
    to. See its comment.
 
+WHAT CHANGED IN 1.2.0 (from 1.1.0), 2026-10-18
+----------------------------------------------
+Two things, and both alter what a file contains:
+
+1. **State dim 47, `base_locked`: 1 while the pelvis weld (D12) is engaged**,
+   read from the model's own equality (`data.eq_active[base_lock_id]`) by
+   `build_state` - the one function the recorder AND tools/deploy.py call, so
+   collection and deployment cannot fill it differently. Appended LAST, so every
+   1.1.0 index is unchanged; STATE_DIM 47 -> 48. It reverses the 2026-09-11
+   schema decision (c) that kept the lock out of the state: the demonstrator
+   and the human operator both condition on the lock ("do not reach until
+   LOCKED"), and a learner that cannot see what the expert acts on can only
+   guess the timing (CLAUDE.md section 8, 2026-10-18). `base_locked[t]` is the
+   lock state at the instant state[t] is sampled. The predicate locks and
+   releases only at a 25 Hz tick boundary, before that sample (demonstrator,
+   teleop and tools/deploy.py alike), so there it says whether the action at t
+   meets a held base; a teleop manual ABORT can release mid-tick and shows at
+   the next sample.
+2. **The gripper ACTION is the weld bit of the NEXT state** (`GRIP_LABEL`,
+   `grip_label_next_weld`), not the command sampled at the tick. The command
+   flips mid-tick (GRASP begins 10 physics steps into a tick under setting A),
+   so the weld engaged inside the tick and the 1.1.0 command and weld bit first
+   showed 1 on the SAME sample - the action equalled state dim 28 on every tick
+   (open item 29), and BC learned to copy it. At deployment a command at tick t
+   engages at step 0 and is first VISIBLE at t+1; the label now says exactly
+   that. The command as sampled is kept beside it, as the `grip_cmd` array.
+
+A 1.1.0 file is refused (`assert_spec_version`): it has no dim 47, and its
+gripper action is the sampled command.
+
 A loader meeting a 1.0.0 file should assume: dims 19-21 may contain a stale
 station-keeper output during locked ticks, and the phase column - if present at
 all - has undocumented integers.
@@ -162,9 +192,9 @@ from g1_teleop.indices import ModelIndex
 #: changed, a clip changed. Every episode file carries it and the dataset
 #: loader must refuse to mix versions in one dataset - normalization stats
 #: fitted under one layout are silently wrong under another.
-SPEC_VERSION: str = "g1-spec-1.1.0"
+SPEC_VERSION: str = "g1-spec-1.2.0"
 
-STATE_DIM: int = 47
+STATE_DIM: int = 48
 ACTION_DIM: int = 22
 
 #: Record/policy rate (D4). Physics runs at 500 Hz; one recorded tick is
@@ -387,6 +417,8 @@ GRIP_R = 29
 ARM_L_Q = slice(30, 37)
 ARM_R_Q = slice(37, 44)
 WAIST_Q = slice(44, 47)
+#: 1.2.0: the pelvis weld (D12) is engaged. Last, so no 1.1.0 index moved.
+BASE_LOCKED = 47
 
 #: (name, slice) in vector order. Used by the load-time coverage assertion and
 #: by anything that wants to report per-group statistics.
@@ -397,6 +429,7 @@ STATE_GROUPS: Tuple[Tuple[str, slice], ...] = (
     ("palmR_pos", PALM_R_POS), ("palmR_quat", PALM_R_QUAT),
     ("gripper", slice(GRIP_L, GRIP_R + 1)),
     ("arm_left_q", ARM_L_Q), ("arm_right_q", ARM_R_Q), ("waist_q", WAIST_Q),
+    ("base_locked", slice(BASE_LOCKED, BASE_LOCKED + 1)),
 )
 
 _XYZ = ("x", "y", "z")
@@ -411,6 +444,7 @@ STATE_NAMES: Tuple[str, ...] = tuple(
     + [f"q_{_short(n)}" for n in C.LEFT_ARM_JOINTS]
     + [f"q_{_short(n)}" for n in C.RIGHT_ARM_JOINTS]
     + [f"q_{_short(n)}" for n in C.WAIST_JOINTS]
+    + ["base_locked"]
 )
 
 
@@ -505,6 +539,63 @@ VELOCITY_CLIP.flags.writeable = False
 #: with the hands in the wrong place does nothing.
 GRIP_CLIP: Tuple[float, float] = (0.0, 1.0)
 
+#: What the two gripper ACTION dims mean in a file, stored as
+#: `meta["grip_label"]` and refused when mixed or missing
+#: (`dataset.assert_uniform_grip_label`). 1.2.0, open item 29.
+GRIP_LABEL: str = "next_weld_v1"
+
+
+def grip_label_next_weld(states, actions) -> np.ndarray:
+    """`actions` with dims 17-18 replaced by the weld bit of the NEXT state.
+
+        action[t, 17:19] = state[t + 1, 28]        t < T - 1
+        action[T-1, 17:19] = state[T - 1, 28]      (nothing follows; held)
+
+    WHY. The weld command is set every physics step and flips mid-tick, so the
+    weld engages inside the tick and the sampled command and the weld bit
+    change on the SAME sample: under 1.1.0 the gripper action equalled state
+    dim 28 on all 58,638 scripted_v2 ticks (open item 29), and a policy that
+    copies its own input can never start a grasp. At deployment the command for
+    tick t is applied from step 0 and the result is first OBSERVED at t + 1,
+    so "the weld state the next observation will show" is the label whose
+    meaning is the same in the data and in the closed loop. A press the weld
+    gate refuses labels 0 here - the label is the outcome, which is what the
+    policy's command is judged by - and the sampled command is kept in the
+    `grip_cmd` array.
+
+    The last tick is the only label not observed. Every accepted episode ends
+    released and settled, so it holds 0 = the last observed bit.
+
+    The ONE definition: the recorder (`EpisodeBuffer.save`, scripted and
+    teleop) and `tools/convert_grip_label.py` both call this.
+    """
+    S = np.asarray(states)
+    A = np.array(actions, copy=True)
+    if S.ndim != 2 or S.shape[1] != STATE_DIM:
+        raise ValueError(f"states must be (T, {STATE_DIM}), got {S.shape}")
+    if A.ndim != 2 or A.shape[1] != ACTION_DIM or len(A) != len(S):
+        raise ValueError(f"actions must be ({len(S)}, {ACTION_DIM}), got {A.shape}")
+    nxt = next_weld_label(S[:, GRIP_L]).astype(A.dtype)
+    A[:, GRIP_L_A] = nxt
+    A[:, GRIP_R_A] = nxt
+    return A
+
+
+def next_weld_label(weld) -> np.ndarray:
+    """The label rule on the weld-bit column alone: `weld[t + 1]`, the last held.
+
+    Split out so `tools/convert_grip_label.py` can apply the SAME rule to a
+    1.1.0 file, whose 47-D state `grip_label_next_weld` refuses; the weld bit
+    (28) and the gripper action dims (17, 18) sit at the same indices in both.
+    """
+    w = np.asarray(weld)
+    if w.ndim != 1:
+        raise ValueError(f"weld must be one column (T,), got {w.shape}")
+    out = np.array(w, copy=True)
+    if len(w) > 1:
+        out[:-1] = w[1:]
+    return out
+
 #: Tolerance for CHECKING recorded data against VELOCITY_CLIP. Not slack in the
 #: limit - slack in the comparison.
 #
@@ -571,6 +662,7 @@ def grip_right(state): return _get(state, GRIP_R, STATE_DIM, "state")
 def arm_left_q(state): return _get(state, ARM_L_Q, STATE_DIM, "state")
 def arm_right_q(state): return _get(state, ARM_R_Q, STATE_DIM, "state")
 def waist_q(state): return _get(state, WAIST_Q, STATE_DIM, "state")
+def base_locked(state): return _get(state, BASE_LOCKED, STATE_DIM, "state")
 
 
 def arm_left_cmd(action): return _get(action, ARM_L_A, ACTION_DIM, "action")
@@ -876,7 +968,7 @@ class SpecLayout:
     # ---- builders -------------------------------------------------------
     def build_state(self, model, data, ix: Optional[ModelIndex] = None,
                     sync: bool = True) -> np.ndarray:
-        """The 47-D state from the STEPPED model. See module docstring.
+        """The 48-D state from the STEPPED model. See module docstring.
 
         `sync` refreshes forward kinematics first. Leave it on when building
         before `mj_step` (which is where the pair must be built): `site_xpos`
@@ -906,6 +998,9 @@ class SpecLayout:
         s[ARM_L_Q] = data.qpos[ix.left_arm_qpos]
         s[ARM_R_Q] = data.qpos[ix.right_arm_qpos]
         s[WAIST_Q] = data.qpos[ix.waist_qpos]
+        # 1.2.0. The same equality `build_action` reads to zero the velocity
+        # (D17), so the observation and the logged action cannot disagree on it.
+        s[BASE_LOCKED] = float(data.eq_active[self.base_lock_id])
         return s
 
     def build_action(self, data, ix: Optional[ModelIndex] = None, act=None,

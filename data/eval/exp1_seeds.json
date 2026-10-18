@@ -101,7 +101,7 @@
   352,
   353
  ],
- "spec_version": "g1-spec-1.1.0",
+ "spec_version": "g1-spec-1.2.0",
  "kind": "exp1",
- "note": "exp1 is disjoint from train (D16); exp2 is the held-out patch"
+ "note": "exp1 is disjoint from train (D16); exp2 is the held-out patch; select (checkpoint selection) is disjoint from all three and drawn after them, then the train extension"
 }

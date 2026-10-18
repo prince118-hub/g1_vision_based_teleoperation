@@ -462,17 +462,18 @@ def test_tracking_policy_rejects_a_nonsense_threshold():
 
 # ─── B7: what the loader must not do ──────────────────────────────────────────
 def test_loader_refuses_a_failed_episode_by_name():
-    """A copy of scripted_v1 seed 25 (demonstrator FAIL, accepted by mistake on
-    2026-10-17) must not reach training, even from a folder never split."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    failed = os.path.join(root, "recordings", "scripted_v1_rejected", "ep_seed0025.npz")
+    """A failed episode - what scripted_v1 seed 25 was (demonstrator FAIL,
+    accepted by mistake on 2026-10-17), rebuilt at the current spec by
+    `test_dataset.failed_copy` because the 1.1.0 file itself is refused on
+    version first - must not reach training, even from a folder never split."""
+    from g1_data.test_dataset import failed_copy
     staged = _staged()
-    if not (os.path.exists(failed) and staged):
-        print("      (skipped: needs %s and a staged episode)" % failed)
+    if not staged:
+        print("      (skipped: needs a staged episode)")
         return
     tmp = tempfile.mkdtemp()
     try:
-        shutil.copy2(failed, os.path.join(tmp, "ep_seed0025.npz"))
+        failed_copy(staged[1].path, os.path.join(tmp, "ep_seed0025.npz"))
         shutil.copy2(staged[0].path, os.path.join(tmp, "ep_seed0100.npz"))
         st, ac = _identity()
         cfg = LoaderConfig(chunk_size=8, obs_window=1, tracking=TrackingPolicy())

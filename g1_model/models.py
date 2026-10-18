@@ -34,7 +34,7 @@ THE SHAPE CONTRACT
 ------------------
 Every model in this file, and every model added later, takes
 
-    obs : (B, W_o, 47)      and returns      action : (B, K, 22)
+    obs : (B, W_o, 48)      and returns      action : (B, K, 22)
 
 so `train.train()` does not change between stages. BC is the W_o=1, K=1 corner
 of that contract, not a different interface: it flattens the window and emits one
@@ -211,7 +211,7 @@ class BCPolicy(nn.Module):
                 else dict(self._declared_training))
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        """(B, W_o, 47) -> (B, K, 22)."""
+        """(B, W_o, 48) -> (B, K, 22)."""
         if obs.dim() != 3 or obs.shape[-1] != spec.STATE_DIM:
             raise ValueError("obs must be (B, W_o, %d), got %s"
                              % (spec.STATE_DIM, tuple(obs.shape)))

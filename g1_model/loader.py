@@ -220,6 +220,9 @@ class ChunkDataset(Dataset):
         # here as well as in build_dataset, because a loader can be pointed at a
         # folder that was never split (dataset.assert_successful).
         DS.assert_successful(episodes)
+        # 2026-10-18, open item 29: an unlabelled episode's gripper action is a
+        # copy of its own weld bit; a mix means the dims mean two things.
+        DS.assert_uniform_grip_label(episodes)
 
         # A3: a normalizer from another split loads without complaint and shifts
         # every input by a constant. This is the only place that can notice.

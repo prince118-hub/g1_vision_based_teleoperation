@@ -68,7 +68,7 @@ def test_mixed_spec_version_raises():
     e = _raises(DS.DatasetError, DS.assert_uniform,
                 [_ep(0), _ep(1, version="g1-spec-1.0.0")])
     assert "SPEC_VERSION" in str(e)
-    assert "g1-spec-1.0.0" in str(e) and "g1-spec-1.1.0" in str(e)
+    assert "g1-spec-1.0.0" in str(e) and spec.SPEC_VERSION in str(e)
 
 
 def test_uniform_but_wrong_spec_version_raises():
@@ -119,12 +119,30 @@ def test_partial_demonstrator_settings_raise():
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FAILED_25 = os.path.join(ROOT, "recordings", "scripted_v1_rejected", "ep_seed0025.npz")
 
 
 def _good_episode_file():
     src = sorted(DS._npz(DS.SYNTHETIC))
     return src[0] if src else None
+
+
+def failed_copy(good, dst):
+    """A FAILED episode, made from a good one: what seed 25 was on 2026-10-17
+    (demonstrator ok=False, placement 0.1087 m). The real file
+    (recordings/scripted_v1_rejected/ep_seed0025.npz) is spec 1.1.0 and this
+    build refuses it before any success check could run, so the failure is
+    reproduced in BOTH places the checks read: the demonstrator's verdict in
+    the metadata, and the trajectory (final box 0.35 m off the goal)."""
+    from g1_data import success as SU
+    with np.load(good, allow_pickle=False) as z:
+        arrays = {k: z[k] for k in z.files if k != "meta"}
+        meta = json.loads(str(z["meta"]))
+    arrays, meta = SU.sabotage(arrays, meta, "placement_out")
+    meta["outcome"] = dict(meta.get("outcome") or {}, ok=False, fail_phase="PLACE(upright)",
+                           placement_error=0.1087)
+    meta["seed"] = 25
+    np.savez_compressed(dst, meta=np.array(json.dumps(meta)), **arrays)
+    return dst
 
 
 def _copy_with_meta(src, dst, drop=(), **meta_updates):
@@ -144,13 +162,13 @@ def test_failed_scripted_episode_is_refused_by_name():
     on 2026-10-17. A copy of it must be refused, named, and a good episode
     beside it must not be blamed."""
     good = _good_episode_file()
-    if not (os.path.exists(FAILED_25) and good):
-        print("      (skipped: needs %s and a staged episode)" % FAILED_25)
+    if not good:
+        print("      (skipped: needs a staged episode)")
         return
     tmp = tempfile.mkdtemp()
     try:
-        shutil.copy2(FAILED_25, os.path.join(tmp, "ep_seed0025.npz"))
-        shutil.copy2(good, os.path.join(tmp, "ep_seed0100.npz"))
+        failed_copy(good, os.path.join(tmp, "ep_seed0025.npz"))
+        _copy_with_meta(good, os.path.join(tmp, "ep_seed0100.npz"), seed=100)
         eps = [DS.Episode(p, DS.read_meta(p)) for p in sorted(DS._npz(tmp))]
         e = _raises(DS.DatasetError, DS.assert_successful, eps)
         assert "ep_seed0025.npz" in str(e) and "ep_seed0100.npz" not in str(e)
@@ -169,13 +187,14 @@ def test_failed_scripted_episode_is_refused_by_name():
 def test_human_episode_success_is_computed_from_the_trajectory():
     """A non-scripted episode stores no verdict; success.evaluate decides."""
     good = _good_episode_file()
-    if not (os.path.exists(FAILED_25) and good):
-        print("      (skipped: needs %s and a staged episode)" % FAILED_25)
+    if not good:
+        print("      (skipped: needs a staged episode)")
         return
     from g1_data import recorder as REC
     tmp = tempfile.mkdtemp()
     try:
-        bad = _copy_with_meta(FAILED_25, os.path.join(tmp, "ep_seed0025.npz"),
+        bad = _copy_with_meta(failed_copy(good, os.path.join(tmp, "f.npz")),
+                              os.path.join(tmp, "ep_seed0025.npz"),
                               drop=("outcome",), source=REC.SOURCE_TELEOP_FIXTURE)
         ok = _copy_with_meta(good, os.path.join(tmp, "ep_seed0100.npz"),
                              drop=("outcome",), source=REC.SOURCE_TELEOP_FIXTURE)
@@ -225,9 +244,17 @@ def test_partition_streams_are_disjoint_and_correctly_sided():
     from g1_teleop.box_reset import in_heldout, sample_box_pose
     from g1_teleop.config import TeleopConfig
     cfg = TeleopConfig().box
-    p = DS.partition_seeds(n_train=30, n_exp1=10, n_exp2=10)
-    tr, e1, e2 = set(p["train"]), set(p["exp1"]), set(p["exp2"])
-    assert len(tr) == 30 and len(e1) == 10 and len(e2) == 10
+    p = DS.partition_seeds(n_train=30, n_exp1=10, n_exp2=10, n_select=5, n_train_ext=7)
+    tr, e1, e2, sel = set(p["train"]), set(p["exp1"]), set(p["exp2"]), set(p["select"])
+    assert len(tr) == 37 and len(e1) == 10 and len(e2) == 10 and len(sel) == 5
+    # open item 38: selection overlaps nothing, and comes AFTER the three streams
+    assert not (sel & (tr | e1 | e2)), "checkpoint selection must use its own seeds"
+    assert min(sel) >= p["original_end"] and min(p["train"][30:]) > max(sel)
+    for s in sel:
+        assert not in_heldout(sample_box_pose(cfg, s)[0][:2], cfg)
+    # extending changes nothing already issued
+    q = DS.partition_seeds(n_train=30, n_exp1=10, n_exp2=10, n_select=0, n_train_ext=0)
+    assert q["train"] == p["train"][:30] and q["exp1"] == p["exp1"] and q["exp2"] == p["exp2"]
     assert not (tr & e2), "collection stream overlaps the held-out patch"
     assert not (tr & e1), "D16: Exp 1 seeds must be FRESH, not collection spawns"
     assert not (e1 & e2)
@@ -235,6 +262,45 @@ def test_partition_streams_are_disjoint_and_correctly_sided():
         assert not in_heldout(sample_box_pose(cfg, s)[0][:2], cfg)
     for s in e2:
         assert in_heldout(sample_box_pose(cfg, s)[0][:2], cfg)
+
+
+def test_seed_files_on_disk_are_the_partition():
+    """data/eval/*.json are exactly `partition_seeds()`: the first 200 training
+    seeds, exp1 and exp2 are the streams issued since 2026-09-11, and the 20
+    selection seeds sit above 678, in no other stream (open item 38)."""
+    p = DS.partition_seeds()
+    for key in ("train", "exp1", "exp2", "select"):
+        assert DS.load_seed_file(os.path.join(DS.EVAL, "%s_seeds.json" % key)) == p[key], key
+    assert p["train"][:200] == list(DS.partition_seeds(n_select=0, n_train_ext=0)["train"])
+    assert min(p["select"]) > 678 and len(p["select"]) == 20 and len(p["train"]) == 300
+    assert DS.SELECT_SEEDS.endswith("select_seeds.json")
+
+
+def test_grip_label_guard():
+    """Open item 29: a dataset of unlabelled episodes, or of mixed labels, is
+    refused, naming the groups; a uniformly labelled one passes."""
+    def lab(seed, label):
+        e = _ep(seed)
+        if label is not None:
+            e.meta["grip_label"] = label
+        return e
+    DS.assert_uniform_grip_label([lab(0, spec.GRIP_LABEL), lab(1, spec.GRIP_LABEL)])
+    e = _raises(DS.DatasetError, DS.assert_uniform_grip_label, [lab(0, None), lab(1, None)])
+    assert "NO grip_label" in str(e) and "convert_grip_label" in str(e)
+    e = _raises(DS.DatasetError, DS.assert_uniform_grip_label,
+                [lab(0, spec.GRIP_LABEL), lab(1, None)])
+    assert "NO grip_label" in str(e) and spec.GRIP_LABEL in str(e)
+    _raises(DS.DatasetError, DS.assert_uniform_grip_label,
+            [lab(0, spec.GRIP_LABEL), lab(1, "some_other_v9")])
+
+
+def test_grip_label_guard_is_wired_into_split_norm_and_the_loader():
+    import inspect
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import build_dataset as BD
+    from g1_model.loader import ChunkDataset
+    for fn in (BD.cmd_split, BD.cmd_norm, ChunkDataset.__init__):
+        assert "assert_uniform_grip_label" in inspect.getsource(fn), fn.__qualname__
 
 
 def test_split_is_exactly_80_20_and_covers_every_bin():

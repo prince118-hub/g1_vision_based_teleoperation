@@ -74,7 +74,8 @@ GROUPS = (("box", spec.BOX_POS), ("box_quat", spec.BOX_QUAT),
           ("palm_L", spec.PALM_L_POS), ("palm_R", spec.PALM_R_POS),
           ("gripper", slice(spec.GRIP_L, spec.GRIP_R + 1)),
           ("arm_L", spec.ARM_L_Q), ("arm_R", spec.ARM_R_Q),
-          ("waist", spec.WAIST_Q))
+          ("waist", spec.WAIST_Q),
+          ("base_locked", slice(spec.BASE_LOCKED, spec.BASE_LOCKED + 1)))
 POS_GROUPS = ("box", "base", "palm_L", "palm_R")
 GOAL_XY = np.array([1.5, -1.5])          # DemoConfig.goal_xy, scene.xml
 LIFT_M = 0.055                           # LockConfig.lift_min: "carrying"

@@ -248,6 +248,12 @@ def cmd_partition(a):
           % (len(part["exp1"]), part["exp1"][:8]))
     print("  exp2  %d seeds, e.g. %s  (the held-out patch)"
           % (len(part["exp2"]), part["exp2"][:8]))
+    print("  select %d seeds, %s  (checkpoint selection; disjoint from all three)"
+          % (len(part["select"]), part["select"]))
+    print("  train extension: %d seeds from %d on (train[:%d] unchanged)"
+          % (len(part["train"]) - part["n_train_original"],
+             part["train"][part["n_train_original"]],
+             part["n_train_original"]))
     print("  train n exp2 = %s" % (leaked or "empty - the guarantee, by construction"))
     for p in paths:
         print("  wrote %s" % repo_relpath(p))
@@ -259,6 +265,7 @@ def cmd_split(a):
     DS.assert_uniform(eps)
     DS.assert_uniform_demonstrator(eps)
     DS.assert_uniform_lock_rule(eps)
+    DS.assert_uniform_grip_label(eps)
     DS.assert_successful(eps)
     DS.assert_no_leak(eps)
     led = EpisodeLedger(a.ledger)
@@ -287,6 +294,7 @@ def cmd_norm(a):
     eps = _episodes(a)
     DS.assert_uniform_demonstrator(eps)
     DS.assert_uniform_lock_rule(eps)
+    DS.assert_uniform_grip_label(eps)
     DS.assert_successful(eps)
     sp_path = _splits_path(a)
     if os.path.exists(sp_path):

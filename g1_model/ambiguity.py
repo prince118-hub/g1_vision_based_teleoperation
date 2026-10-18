@@ -4,7 +4,7 @@ WHAT THIS MEASURES, AND WHY THE GATE NEEDS IT
 ----------------------------------------------
 "Train until the loss is near zero" is a valid gate only when the input
 determines the output. Here it does not. Two ticks 40 ms apart have nearly
-identical 47-D states and genuinely different commanded actions, and no
+identical states and genuinely different commanded actions, and no
 deterministic function of the state can produce both. A criterion of "near zero"
 therefore asks for something the data does not contain, and failing it says
 nothing about the model.
@@ -213,7 +213,7 @@ def observation_matrix(ds: ChunkDataset) -> np.ndarray:
         padded = np.concatenate(
             [np.zeros((W - 1, spec.STATE_DIM), dtype=np.float32), S], axis=0)
         win = np.lib.stride_tricks.sliding_window_view(
-            padded, (W, spec.STATE_DIM))          # (n, 1, W, 47)
+            padded, (W, spec.STATE_DIM))          # (n, 1, W, 48)
         out.append(win.reshape(n, W * spec.STATE_DIM))
     return np.ascontiguousarray(np.concatenate(out, axis=0))
 

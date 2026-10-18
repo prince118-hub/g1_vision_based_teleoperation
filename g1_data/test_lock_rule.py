@@ -23,7 +23,10 @@ from g1_data import dataset as DS                                   # noqa: E402
 from g1_data.phases import (LOCK_RULE_V1, LOCK_RULE_V2, LOCK_RULES,  # noqa: E402
                             LockConfig, lock_config_from_meta, lock_rule_meta)
 
-REC0 = os.path.join(ROOT, "recordings", "scripted_v1", "ep_seed0000.npz")
+#: A v1 episode at the current spec: the staged fixtures were recorded under v1
+#: and re-derived at 1.2.0 (2026-10-18) with every 1.1.0 column bit-identical.
+#: (recordings/scripted_v1 is spec 1.1.0, which this build refuses.)
+REC0 = os.path.join(ROOT, "data", "synthetic", "ep_seed0000.npz")
 SPARE = [60, 63, 64, 65, 66, 67, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83]
 
 
@@ -36,7 +39,8 @@ def _raises(exc, fn, *a, **k):
 
 
 def _ep(seed, rule=None, drop=False):
-    meta = dict(seed=seed, spec_version="g1-spec-1.1.0", contact_contract="x",
+    from g1_data import spec
+    meta = dict(seed=seed, spec_version=spec.SPEC_VERSION, contact_contract="x",
                 box_spawn_xy=[1.5, -0.1])
     if not drop:
         meta["lock_rule"] = lock_rule_meta(rule)
@@ -98,17 +102,31 @@ def test_scripted_episode_records_the_rule_in_force():
 
 
 def test_v1_episode_replays_with_its_own_rule():
-    """scripted_v1 has no lock_rule field: replay must apply v1 and reproduce
-    the recorded lock tick (seed 0: dLock 0). Bit-identity against the pre-change
-    code was checked once on 2026-10-17 (seeds 0, 1, 43)."""
+    """A v1 episode with NO lock_rule field (as all of scripted_v1 was): replay
+    must apply v1 and reproduce the recorded lock tick (seed 0: dLock 0).
+    Bit-identity against the pre-change code was checked once on 2026-10-17
+    (seeds 0, 1, 43). The field is dropped from a temp copy of a staged v1
+    episode, so both readings - explicit v1 and "no field" - are exercised."""
     if not os.path.exists(REC0):
         print("      (skipped: no %s)" % REC0)
         return
+    import shutil
+    import tempfile
     import replay_check as RC
     from g1_data.recorder import load_episode
     _, meta = load_episode(REC0)
-    assert "lock_rule" not in meta and lock_config_from_meta(meta) == LOCK_RULE_V1
-    r = RC.replay(REC0, verbose=False)
+    assert lock_config_from_meta(meta) == LOCK_RULE_V1, meta.get("lock_rule")
+    tmp = tempfile.mkdtemp()
+    try:
+        with np.load(REC0, allow_pickle=False) as z:
+            arrays = {k: z[k] for k in z.files if k != "meta"}
+        meta.pop("lock_rule", None)
+        p = os.path.join(tmp, os.path.basename(REC0))
+        np.savez_compressed(p, meta=np.array(json.dumps(meta)), **arrays)
+        assert "lock_rule" not in load_episode(p)[1]
+        r = RC.replay(p, verbose=False)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     assert r["lock_rule"] == "v1"
     assert r["lock_tick"] == meta["lock_engage_tick"], (r["lock_tick"], meta["lock_engage_tick"])
 

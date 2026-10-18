@@ -576,6 +576,10 @@ def test_checkpoint_round_trips_to_identical_predictions():
 #: was added, by the same procedure as `_fingerprint` - not by the code under
 #: test (TR32: an equivalence claim runs the OLD code on one side). CPU,
 #: torch 2.14.0. `state_sha256` covers every parameter and buffer, by name.
+#: Recorded at the 1.1.0 state width, so the procedure PINS it: spec 1.2.0 added
+#: `base_locked` (48-D), and the claim this guards - `use_lstm=False` is the old
+#: model to the bit - is about the architecture, not the input width.
+_GOLDEN_STATE_DIM = 47
 _GOLDEN_ACT = {
     1: dict(n_tensors=120, n_params=300758,
             state_sha256="edd0a9cd6b69b4e3b3179bdfb4b93c44cf11a824094bf30f8b71337b5cb74c06",
@@ -595,14 +599,14 @@ def _fingerprint(W, **kw):
     import hashlib
     import math
     torch.manual_seed(0)
-    m = ACTPolicy(_cfg(K=8, W=W, **kw)).eval()
+    m = ACTPolicy(_cfg(K=8, W=W, state_dim=_GOLDEN_STATE_DIM, **kw)).eval()
     sd = m.state_dict()
     h = hashlib.sha256()
     for k in sorted(sd):
         h.update(k.encode())
         h.update(sd[k].detach().cpu().contiguous().numpy().tobytes())
     g = torch.Generator().manual_seed(123)
-    obs = torch.randn(3, W, spec.STATE_DIM, generator=g)
+    obs = torch.randn(3, W, _GOLDEN_STATE_DIM, generator=g)
     with torch.no_grad():
         out = m(obs)
     return dict(n_tensors=len(sd), n_params=sum(p.numel() for p in m.parameters()),

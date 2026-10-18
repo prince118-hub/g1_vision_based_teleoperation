@@ -20,25 +20,20 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. P1–P4 CLOSED** (PLAN.md numbering; P4 with a qualification, §8 2026-09-29). **Everything is still SCRIPTED data — no piloted
-episode exists** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). scripted_v1 (lock rule v1) models scored **2 / 180** closed loop
-(BC never grips; ACT / ACT-LSTM push the box before the lock) → **lock rule v2** (§8 2026-10-17); evaluate v1 runs with `--lock-rule v1`.
-
-**scripted_v2 READY (2026-10-17):** 50 eps, lock rule v2, setting A, commit 454a053, git_dirty false (51 attempted, seed 25 PLACE(upright));
-split 40 / 10 + norm (`*_scripted_v2.*`); backed up to `D:\thesis_backup\scripted_v2`. Replay 45/50 manipulation (5 misses = walk-in drift,
-bit-identical on re-run). **Next: train with `tools/train_scripted_v2.ps1`, then select checkpoints by task success on spare seeds
-60, 63–67, 69, 71–83 (`deploy.py`, lock rule v2).** ONE heavy process at a time: this laptop has 7.7 GB RAM.
+**None. P1–P4 CLOSED** (PLAN.md; P4 qualified, §8 2026-09-29). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser).
+Closed loop: v1 2/180, v2 3/180; **g1-spec-1.2.0 (§8 2026-10-18) REFUSES every 1.1.0 file and run** (v1/v2 = evidence, `D:\thesis_backup\`).
+**Next: record `recordings/scripted_v3/` (~200, setting A, rule v2, auto), split 160/40 + nested 40, train, `deploy.py --selection`.** ONE heavy process at a time (7.7 GB RAM).
 
 ## 3. Full pipeline (end to end)
 
 ```
 [EXISTS] ZED (30 Hz, BODY_38) -> One-Euro -> scaling -> DLS IK -> arms; waist pinned | KeyboardCommand -> LSTM policy -> legs; 500 Hz physics
 [EXISTS] WELD grasp (D11) + base lock (D12) + B-prime exclusion (D18) + seeded spawn; teleop under stepped physics, full task by a live operator
-[EXISTS] scripted demonstrator (g1_data/scripted_demo.py) 12/12 and 40/40; g1_data/spec.py frozen at g1-spec-1.1.0
+[EXISTS] scripted demonstrator (g1_data/scripted_demo.py) 12/12 and 40/40; g1_data/spec.py at g1-spec-1.2.0 (2026-10-18)
 [EXISTS] recorder @25 Hz -> success detection -> offline phase labels -> dataset -> loader -> shared train loop + masked-L1 loss -> neighbour-ambiguity gate -> BC and chunked BC (ONE class, K=1 vs K>1; overfit-10 PASS 0.632 / 0.718 at W_o = 12): g1_data/{recorder,success,phase_label,dataset}.py + g1_model/{loader,train,ambiguity,models}.py
 [EXISTS] ACT, state-only, one decoder layer (bit-identical to the reference's 7, audit 2026-09-23); overfit-10 PASS 0.720 at W_o = 12, 200k cap, NOT converged: g1_model/act.py
 [EXISTS] ACT-LSTM = ACT with `use_lstm=True` (Option B, third token); overfit-10 PASS 0.600 at W_o = 12, 200k cap, NOT converged: g1_model/act.py, tools/train_bc.py --model act_lstm
-[MISSING] autonomous deployment -> Exp 1 in-distribution, Exp 2 held-out patch
+[EXISTS] closed-loop deployment, tools/deploy.py (train/deploy parity tested) | [MISSING] Exp 1 in-distribution, Exp 2 held-out patch runs
 ```
 
 ## 4. Current state — the measurements a fresh session cannot re-derive
@@ -55,20 +50,19 @@ is deliberately NOT repeated here — `NOTES.md`, the suites and the run directo
 
 ## 5. Not yet built
 
-Autonomous deployment and the Exp 1 / Exp 2 evaluation harness. The learning stack is built (§3, `g1_model/`) and all four models pass the overfit-10 gate at W_o = 12 (§8 2026-09-29).
-Dataset and evaluation design — 150 episodes, splits, fixed eval seeds, nested scaling subsets, the statistical limit — is in PLAN.md and `NOTES.md` "PHASE 2 CLOSEOUT".
+The Exp 1 / Exp 2 evaluation runs (the closed-loop harness is `tools/deploy.py`). Dataset and evaluation design — 150 episodes, splits, fixed eval seeds, nested scaling subsets, the statistical limit — is in PLAN.md and `NOTES.md` "PHASE 2 CLOSEOUT".
 
 ## 6. State and action vectors
 
 **Defined once, in `g1_data/spec.py`.** Summary only; that module is authoritative.
 
-**State — 47-D (Table 3.3):** box pos+quat 7, base pos+quat 7, L/R palm-site pos+quat 14, L/R gripper 2 (both = the weld bit, D14), arm joints
-14, waist 3 (constant 0, D10). **No state dim is constant.** Palm poses come from `*_palm_site`, not the pad.
+**State — 48-D (Table 3.3 + D21):** box pos+quat 7, base pos+quat 7, L/R palm-site pos+quat 14, L/R gripper 2 (both = the weld bit, D14), arm
+joints 14, waist 3 (constant 0, D10), **`base_locked` 1 (dim 47, the D12 pelvis weld)**. **No state dim is constant.** Palm poses: `*_palm_site`.
 
 **Action — 22-D (Table 3.4):** arms 7+7, waist 3, grippers 1+1, walking velocity 3. **Log `data.ctrl`, not twin qpos.** 6 dims are excluded
 from loss and normalization — 6, 13 (wrist yaw), 14, 15, 16 (waist), 18 (`a_gR`, correlation exactly 1.0 with 17) — leaving **16 trainable**.
 Velocity dims 19–21 are logged **ZERO while the base lock is engaged** (D17). Clips ±0.80 / ±0.80 / ±0.60 (D15). Timing: `action[t]` is the
-command applied FROM `state[t]`; build the pair at ONE point in the loop, before `mj_step`.
+command applied FROM `state[t]`; build the pair at ONE point in the loop, before `mj_step`. **Gripper dims 17/18 = the NEXT state's weld bit** (D22).
 
 **Phase labels** are logged every timestep and **no policy is conditioned on them**; they can be derived offline from the trajectory, so teleop needs no live phase classifier.
 
@@ -94,6 +88,8 @@ command applied FROM `state[t]`; build the pair at ONE point in the loop, before
 | D16 | Exp 1 reads as replaying collection spawns | fresh seeds from the same region | reproducing 150 memorised spawns is not in-distribution execution | 3.8 |
 | D17 | velocity dims always logged | dims 19–21 **ZERO while locked** | the station-keeping block does not run while locked: `act` is not consumed (`carry.obs[6:9]` sits inside the skipped block) and not applied (legs PD-held); locked vs PD-held agreed on 15336/15336 ticks. Logging it writes a phantom — vy = −0.732 held constant through REACH→LIFT, 36.4% of every episode. Lock state read from the model's own equality | 3.4 |
 | D18 | full contact everywhere | **hand ↔ `platform_pickup` contact excluded** (B-prime): `wrist_pitch_link`, `wrist_yaw_link`, pads, both sides; hand↔hand, hand↔goal-platform, hand↔box all survive | a SIMULATION-ONLY RELAXATION that must apply to collection AND evaluation identically or policies are tested in physics they never learned. Without it the teleoperated grasp does not happen at all: the wrist hooks the slab, jams at 1.42 rad, the weld never engages | 3.3 + limits |
+| D21 | Table 3.3 47-D state | **48-D: + `base_locked`** (dim 47, 1.2.0) | the demonstrator and the operator act on the lock; the learner must see it (§8 2026-10-18) | 3.4 |
+| D22 | Table 3.4 gripper = the command | gripper action = **next state's weld bit** (`grip_label` `next_weld_v1`) | the sampled command flips mid-tick and equalled state dim 28 on every tick (§8 2026-10-18) | 3.4 |
 
 D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are resolved; D12 and D18 belong in the limitations.
 
@@ -101,12 +97,17 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
+- 2026-10-18 — **g1-spec-1.2.0: `base_locked` state dim 47, REVERSING 2026-09-11 (c)** (Charles): demonstrator and operator condition on the
+  lock ("do not reach until LOCKED"), so the learner must see it (Swamy et al. 2022, NeurIPS: share the state the expert acts on). Symptom: ACT
+  (v2) opened its arms 39–53 ticks before the lock, 1 mm from a training spawn — timing, not coverage. One builder: recorder and `deploy.observe`.
+  **D22** gripper label = next weld bit (`grip_cmd` kept; `tools/convert_grip_label.py` copies). **Place needs the release** (v2 survey 5 → 3/180).
+  **`select_seeds.json` 679–701**, train stream 300 (`train[:200]`, exp1, exp2 unchanged). 1.1.0 refused, never converted. `NOTES.md` 2026-10-18.
+
 - 2026-10-17 — **LOCK RULE v2: stance band only (stillness rule dropped), real pelvis lock, pickup AND goal** (Charles). `phases.LockConfig` is
   versioned (`LOCK_RULE_V1/V2`); new episodes store `lock_rule`; replay, the phase labeller and deploy apply the EPISODE's rule (no field = v1, so
   all of scripted_v1, which replays bit-identically); split/norm refuse mixed rules; teleop uses v2. Why: policies reached before stillness held, and
   the pelvis hold, not stillness, stops the pre-grasp push. Spare seeds: v2 19/20 (v1 20/20), lock tick 32–48 (v1 62–92), push ≤ 0.5 mm, pitch ≤ 3.1°.
-- 2026-10-17 — **O33: `STD_FLOOR` 1e-6 → 1e-2, no SPEC_VERSION bump** (it would fail every scripted_v1 load); the floor is stored in each stats file and
-  checked on load. scripted_v1 refit floors dims 9, 43, 44, 45 (worst |z| 31.3 → 6.1). **`norm_stats_v1.npz` predates the field: refused until refit.**
+- 2026-10-17 — **O33 RESOLVED: `STD_FLOOR` 1e-6 → 1e-2** (`reference/act/utils.py:97,102`), stored in every stats file, checked on load; no bump. Dims 9, 43–45 floor.
 - 2026-10-17 — **SCRIPTED SETTING "A": `reposition_s` 6.0 → 0.5 s (dead time under the D12 lock), `hold_max` stays 0.80** (`record_episodes._setup`).
   First 50 train seeds: A 49/50, 0.60 m/s 43/50 (placement), 0.40 m/s 49/50 but goal clearance < 10 mm on 45/50, old 50/50. A runs **548–692 ticks:
   D13's 694–846 no longer applies**. New "demonstrator ok" check (`--auto pass` had accepted demo failures). Pre-existing: a 0.50–0.71 rad one-tick
@@ -201,7 +202,7 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
 - 2026-09-15 — D18 adopted as `<contact><exclude>` pairs. Archived: `NOTES.md` "2026-09-22 — CLAUDE.md §8 ARCHIVE".
 - 2026-09-11 — **Schema frozen** at `g1-spec-1.1.0`. Four decisions: (a) box position stored WORLD frame, base-relative derived in the loader;
   (b) **gait phase EXCLUDED** from the state, logged as per-timestep metadata — it is a clock, and giving every policy a clock hands BC the
-  temporal capability ACT-LSTM is meant to supply, collapsing the RQ2/RQ3 gap; (c) the base lock is neither a state nor an action dim —
+  temporal capability ACT-LSTM is meant to supply, collapsing the RQ2/RQ3 gap; (c) [REVERSED 2026-10-18] the base lock is neither a state nor an action dim —
   episode metadata plus an observable predicate; (d) the O10 cap comes from the measured distribution.
 - 2026-09-11 — **Phase vocabulary frozen in `spec.py`.** `Phase` (10) and `ScoredPhase` (5) are IntEnums with EXPLICIT integers;
   **`REPOSITION=8` and `APPROACH=9` are out of execution order and must NEVER be renumbered** — tidying them silently relabels every recorded
@@ -335,7 +336,6 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   (TR16). **Qualified 2026-09-15:** measured with the capped scripted station-keeper; a human at full command overcame it (§8).
 - **O32. NEW — prediction: the ACT latent is ACTIVE on piloted data.** Scripted: KL 1e-05, z inert (§8 2026-09-22). Predicted on teleop:
   KL stays above zero and the z = 0 vs posterior-mean gap opens. If it collapses there too, beta (10; balance-matched 14.70) is the suspect.
-- **O33. RESOLVED 2026-10-17 (§8):** `STD_FLOOR` 1e-2, the reference's clip (`reference/act/utils.py:97,102`); stats carry `std_floor`.
 - **O34. RESOLVED BY POLICY, NOT BY PHYSICS — the simulation does not reproduce bit-for-bit across machines.** Against the partner's
   `docs/measurements/bprime_gates_adopted_pred_40.json` (seeds 0–39): the CPU laptop at MuJoCo 3.14.0 / NumPy 2.4 matched 0/40 (to
   74.8 mm; seeds 38, 44 fail placement). With the partner's versions pinned (env `g1_match`, 2026-09-28): **26/40 agree to ≤ 0.0003 mm,

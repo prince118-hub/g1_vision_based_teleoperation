@@ -1140,7 +1140,7 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
     """Train any model on any ChunkDataset. Knows nothing about BC or ACT.
 
     The model's contract is the whole interface: it takes `obs` of shape
-    (B, W_o, 47) and returns actions of shape (B, K, 22). BC is K=1 and W_o=1;
+    (B, W_o, 48) and returns actions of shape (B, K, 22). BC is K=1 and W_o=1;
     ACT is K=100. Nothing here changes between them.
 
     BUILD THE MODEL WITH `seeded_build`, not by calling its constructor. Seeding

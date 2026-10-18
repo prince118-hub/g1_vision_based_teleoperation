@@ -1,5 +1,6 @@
 """Closed-loop evaluation: run a trained checkpoint in MuJoCo, one seed per episode.
 
+    python tools/deploy.py --run runs/scripted_v3/act_seed0 --ckpt ckpt_step0060000.pt         --selection --out select_act_60k.jsonl          # checkpoint selection
     python tools/deploy.py --run runs/scripted_v1/bc_seed0 --seed-list 60,63 --out eval.jsonl
     python tools/deploy.py --run runs/scripted_v1/act_lstm_seed0 --ckpt ckpt_step0200000.pt \
         --seeds data/eval/exp1_seeds.json --out exp1_act_lstm.jsonl
@@ -9,8 +10,10 @@
 THE LOOP IS THE REPLAY LOOP (tools/replay_check.py:155-232) with the recorded
 action swapped for the policy's. Tick order, as in collection:
 
-    lock predicate on the live 47-D state (sync=False) -> base lock / release
-    -> observation: the 47-D state (sync=True, float32 as the recorder stores it),
+    lock predicate on the live state (sync=False) -> base lock / release
+    -> observation: the 48-D state (sync=True, float32 as the recorder stores it),
+       built AFTER the lock update, as the recorder samples it, so `base_locked`
+       (spec 1.2.0, dim 47) says whether this tick's action meets a held base,
        normalized with the RUN's own stats, in a 12-tick window whose early ticks
        are ZEROS in normalized space (loader.py:371-379; the model never sees a mask)
     -> policy, eval mode, no grad: BC applies its single action (first_action);
@@ -24,7 +27,10 @@ action swapped for the policy's. Tick order, as in collection:
 POST-PROCESSING, after denormalizing - the masked dims are untrained (excluded
 from the loss), so their outputs are noise and are overwritten:
     dims 6, 13 (wrist yaw), 14-16 (waist)  = 0.0   (hard-constant in every episode)
-    dim 17 (weld)                           = 1 if >= 0.5 else 0
+    dim 17 (weld)                           = 1 if >= 0.5 else 0  (the label is the
+                                              NEXT state's weld bit, spec 1.2.0:
+                                              a 1 here engages from step 0 and is
+                                              observed at t+1, as in the data)
     dim 18                                  = dim 17 (bit-identical by construction)
     dims 19-21 (velocity)                   = spec.clip_velocity(...)
 While the base is locked the velocity is not consumed (the walking policy is not
@@ -97,6 +103,18 @@ def post_process(a) -> np.ndarray:
     return a
 
 
+def observe(sp, m, d, ix) -> np.ndarray:
+    """The policy's observation: the recorder's state, built the recorder's way.
+
+    `EpisodeBuffer.tick` builds the training state with `SpecLayout.build(...,
+    sync=True)` at `mj_step` entry, after the tick's lock update; this is the
+    same builder at the same point of deploy's tick. `base_locked` (spec 1.2.0)
+    is filled inside it from the base-lock equality, so it cannot be filled
+    differently here. tools/test_deploy.py checks the two agree to the bit on
+    every tick of a recorded episode."""
+    return sp.build_state(m, d, ix, sync=True)
+
+
 # ─── policies ────────────────────────────────────────────────────────────────
 class CheckpointPolicy:
     """A trained checkpoint, with the run's own normalization and window."""
@@ -143,7 +161,7 @@ class CheckpointPolicy:
             self.ens.reset()
 
     def act(self, state, t: int) -> np.ndarray:
-        """Raw 47-D state -> denormalized 22-D action (before post_process)."""
+        """Raw 48-D state -> denormalized 22-D action (before post_process)."""
         torch = self.torch
         s32 = np.asarray(state, dtype=np.float32)            # as the recorder stores it
         z = self.st.normalize(s32.astype(np.float64)).astype(np.float32)
@@ -354,7 +372,7 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
                 carry.target_leg_pos = DEF.copy()
                 release_ticks.append(t)
             # ---- observation and action --------------------------------------
-            s = sp.build_state(m, d, ix, sync=True)
+            s = observe(sp, m, d, ix)
             raw = policy.act(s, t)
             a = np.asarray(raw, dtype=np.float64) if raw_actions else post_process(raw)
             locked_now = bool(lock.locked(d))
@@ -460,8 +478,16 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
 def _seeds(a) -> List[int]:
     if a.seed_list:
         return [int(s) for s in str(a.seed_list).split(",") if s.strip()]
-    data = json.load(open(a.seeds, encoding="utf-8"))
-    return [int(s) for s in (data["seeds"] if isinstance(data, dict) else data)]
+    return DS.load_seed_file(a.seeds)
+
+
+def _run_data_seeds(meta_json: dict) -> List[int]:
+    """Every seed the run TRAINED or VALIDATED on, from its own splits file."""
+    p = meta_json["config"]["notes"]["data_paths"].get("splits")
+    if not p or not os.path.exists(os.path.join(ROOT, p)):
+        return []
+    sp = json.load(open(os.path.join(ROOT, p), encoding="utf-8"))
+    return sorted(int(x) for x in sp.get("train", []) + sp.get("val", []))
 
 
 def main(argv=None):
@@ -472,6 +498,9 @@ def main(argv=None):
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--seeds", help="JSON file of seeds ({'seeds': [...]} or a list)")
     g.add_argument("--seed-list", help="comma-separated seeds, e.g. 60,63")
+    g.add_argument("--selection", action="store_true",
+                   help="CHECKPOINT SELECTION: the seeds in data/eval/select_seeds.json "
+                        "(disjoint from train, exp1 and exp2; open item 38)")
     ap.add_argument("--out", required=True, help="JSONL, one line per episode (refused if it exists)")
     ap.add_argument("--max-ticks", type=int, default=MAX_TICKS)
     ap.add_argument("--no-ensemble", action="store_true",
@@ -480,20 +509,33 @@ def main(argv=None):
     ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default="v2",
                     help="lock rule (phases.LockConfig); the one the training data "
                          "was collected under. v2 = stance band only (default)")
+    ap.add_argument("--allow-train-seeds", action="store_true",
+                    help="diagnostics only: allow seeds the run trained or validated on")
     ap.add_argument("--viewer", action="store_true")
     ap.add_argument("--realtime", action="store_true")
     ap.add_argument("--video-dir", default=None)
     a = ap.parse_args(argv)
+    if a.selection:
+        a.seeds = DS.SELECT_SEEDS
     if os.path.exists(a.out):
         raise SystemExit("--out %s exists - refusing to append to another evaluation" % a.out)
+
+    seeds = _seeds(a)
+    rule = LOCK_RULES[a.lock_rule]
+    # A seed the run trained or validated on scores memorisation, not the task;
+    # for checkpoint selection that would pick the checkpoint that memorised best.
+    # Checked before anything is loaded.
+    seen = sorted(set(seeds) & set(_run_data_seeds(
+        json.load(open(os.path.join(a.run, "metadata.json"), encoding="utf-8")))))
+    if seen and not a.allow_train_seeds:
+        raise SystemExit("refusing: %d seed(s) are in this run's own train/val split: %s "
+                         "(--allow-train-seeds for diagnostics)" % (len(seen), seen[:10]))
 
     import torch
     from g1_model import train as T
     det = T.set_determinism(0, strict=True)
     policy = CheckpointPolicy(a.run, a.ckpt, ensemble=not a.no_ensemble)
     loco = torch.jit.load(W.POLICY_PATH)
-    seeds = _seeds(a)
-    rule = LOCK_RULES[a.lock_rule]
     # The rule the run's TRAINING episodes were collected under. Evaluating a
     # policy under another rule tests it in conditions it never saw (the D18
     # principle), so a mismatch is announced and recorded, not hidden.
@@ -507,6 +549,9 @@ def main(argv=None):
               "was collected under %s. Pass --lock-rule %s to match."
               % (rule.version, repo_relpath(ep_dir), train_rule.version, train_rule.version))
     header = dict(run=a.run, ckpt=policy.ckpt_info, kind=policy.kind, K=policy.K,
+                  seed_set=("select" if a.selection else
+                            repo_relpath(a.seeds) if a.seeds else "list"),
+                  train_seeds_evaluated=seen,
                   lock_rule=lock_rule_meta(rule), temporal_ensemble=policy.ensemble,
                   training_data_lock_rule=train_rule.version if train_rule else None,
                   obs_window=policy.W, norm=repo_relpath(policy.norm_path),

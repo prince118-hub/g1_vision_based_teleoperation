@@ -234,6 +234,36 @@ def assert_uniform_lock_rule(eps: Sequence[Episode]) -> None:
                            "normalize across it:\n  " + "\n  ".join(lines))
 
 
+def assert_uniform_grip_label(eps: Sequence[Episode]) -> None:
+    """Every episode's gripper action is `spec.GRIP_LABEL`, or raise naming them.
+
+    Open item 29 (2026-10-18): the gripper action used to be the command
+    sampled at the tick, which equalled the weld bit in the same state on every
+    tick, and BC learned to copy its input. 1.2.0 labels it with the NEXT
+    state's weld bit (`spec.grip_label_next_weld`). Two refusals:
+      * an episode with NO `grip_label` - written before the relabel, so its
+        gripper action is the leaked copy; convert it with
+        `tools/convert_grip_label.py` (writes copies) or re-record;
+      * a mix of labels - the gripper dims would mean two different things.
+    """
+    groups: Dict[object, List[Episode]] = {}
+    for e in eps:
+        groups.setdefault(e.meta.get("grip_label"), []).append(e)
+    bad = {k: v for k, v in groups.items() if k != spec.GRIP_LABEL}
+    if not bad:
+        return
+    lines = ["%s: %d episode(s), e.g. %s"
+             % ("NO grip_label (the sampled command, open item 29)" if k is None
+                else repr(k), len(v), os.path.basename(v[0].path))
+             for k, v in groups.items()]
+    raise DatasetError(
+        "gripper action label: this build trains on %r only; the dataset has\n  %s\n"
+        "Unlabelled episodes carry the sampled weld command, which equals the "
+        "weld bit in the same state. Convert them (tools/convert_grip_label.py "
+        "writes copies) or re-record; do not split, normalize or train across a mix."
+        % (spec.GRIP_LABEL, "\n  ".join(lines)))
+
+
 def heldout_leak(eps: Sequence[Episode], box_cfg=None) -> List[int]:
     """Seeds whose spawn falls inside the Objective 4 held-out patch."""
     from g1_teleop.box_reset import in_heldout
@@ -276,8 +306,18 @@ def coverage(ledger, eps: Sequence[Episode]) -> dict:
 
 
 # ─── the pre-partitioned seed streams ────────────────────────────────────────
+#: 2026-10-18 (open item 38). Checkpoint selection used "spare" seeds 60-83,
+#: which sat INSIDE the training stream - a 200-episode collection would have
+#: trained on them. Selection now has its own stream, and the training stream is
+#: extended, both drawn AFTER the original three streams end (seed 678, the last
+#: exp2 seed), so train[:200], exp1 and exp2 are exactly what they were.
+N_SELECT = 20
+N_TRAIN_EXT = 100
+
+
 def partition_seeds(n_train: int = 200, n_exp1: int = 100, n_exp2: int = 100,
-                    start: int = 0, box_cfg=None) -> dict:
+                    start: int = 0, box_cfg=None, n_select: int = N_SELECT,
+                    n_train_ext: int = N_TRAIN_EXT) -> dict:
     """Split the seed space into collection / Exp 1 / Exp 2 streams, BEFORE any
     collection happens.
 
@@ -293,6 +333,16 @@ def partition_seeds(n_train: int = 200, n_exp1: int = 100, n_exp2: int = 100,
       exp1   in-region seeds DISJOINT from train (D16: fresh seeds, not the
              collection spawns replayed back)
       exp2   held-out-patch seeds, which collection must never see
+      select in-region seeds for CHECKPOINT SELECTION (tools/deploy.py
+             --selection), disjoint from all three: choosing a checkpoint on
+             training seeds rewards memorisation, and on exp1/exp2 it leaks
+             the test set into the model choice
+      train  + `n_train_ext` in-region seeds appended after `select`
+
+    The extension is drawn after the three original quotas are filled, from
+    the next seed on, held-out spawns skipped (exp2 is full). So the first
+    `n_train` train seeds, exp1 and exp2 do not depend on `n_select` or
+    `n_train_ext` - a seed already issued never changes stream.
     """
     from g1_teleop.box_reset import in_heldout, sample_box_pose
     from g1_teleop.config import TeleopConfig
@@ -311,22 +361,44 @@ def partition_seeds(n_train: int = 200, n_exp1: int = 100, n_exp2: int = 100,
         seed += 1
         if seed - start > 10 ** 6:
             raise DatasetError("seed space exhausted - check the spawn config")
-    return dict(train=train, exp1=exp1, exp2=exp2, start=start,
-                spec_version=spec.SPEC_VERSION,
-                note="exp1 is disjoint from train (D16); exp2 is the held-out patch")
+    original_end = seed                       # first seed after the three streams
+    select, ext = [], []
+    while len(select) < n_select or len(ext) < n_train_ext:
+        pos, _ = sample_box_pose(cfg, seed)
+        if not bool(in_heldout(pos[:2], cfg)):
+            (select if len(select) < n_select else ext).append(seed)
+        seed += 1
+        if seed - start > 10 ** 6:
+            raise DatasetError("seed space exhausted - check the spawn config")
+    return dict(train=train + ext, exp1=exp1, exp2=exp2, select=select,
+                start=start, original_end=original_end,
+                n_train_original=n_train, spec_version=spec.SPEC_VERSION,
+                note="exp1 is disjoint from train (D16); exp2 is the held-out patch; "
+                     "select (checkpoint selection) is disjoint from all three and "
+                     "drawn after them, then the train extension")
 
 
 def save_partition(part: dict) -> List[str]:
     ensure_layout()
     out = []
     for name, key in (("train_seeds.json", "train"), ("exp1_seeds.json", "exp1"),
-                      ("exp2_seeds.json", "exp2")):
+                      ("exp2_seeds.json", "exp2"), ("select_seeds.json", "select")):
         p = os.path.join(EVAL, name)
         with open(p, "w", encoding="utf-8") as fh:
             json.dump(dict(seeds=part[key], spec_version=spec.SPEC_VERSION,
                            kind=key, note=part["note"]), fh, indent=1)
         out.append(p)
     return out
+
+
+SELECT_SEEDS = os.path.join(EVAL, "select_seeds.json")
+
+
+def load_seed_file(path: str) -> List[int]:
+    """The `seeds` list of a data/eval stream file (or a bare JSON list)."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    return [int(s) for s in (data["seeds"] if isinstance(data, dict) else data)]
 
 
 # ─── split ───────────────────────────────────────────────────────────────────

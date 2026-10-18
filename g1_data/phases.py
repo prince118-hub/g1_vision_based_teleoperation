@@ -1,4 +1,4 @@
-"""Event-driven base lock (D12), as an observable predicate over the 47-D state.
+"""Event-driven base lock (D12), as an observable predicate over the spec state vector.
 
 WHY THE LOCK CANNOT BE A PHASE TRANSITION
 -----------------------------------------
@@ -207,7 +207,7 @@ def lock_config_from_meta(meta: Optional[dict]) -> "LockConfig":
 
 
 class LockPredicate:
-    """Two-state latch driven by the 47-D state. One call per 25 Hz tick.
+    """Two-state latch driven by the spec state. One call per 25 Hz tick.
 
     Usage, from the control loop::
 
@@ -217,7 +217,7 @@ class LockPredicate:
         if event == "lock":   base_lock.lock(model, data)
         elif event == "release": base_lock.release(model, data, policy)
 
-    `state` must be the spec 47-D vector built from the STEPPED model. The
+    `state` must be the spec state vector built from the STEPPED model. The
     predicate never sees a phase, a tick index or an elapsed time, by
     construction: nothing in this class has access to one.
     """
