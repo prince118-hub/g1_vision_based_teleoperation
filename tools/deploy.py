@@ -1,6 +1,7 @@
 """Closed-loop evaluation: run a trained checkpoint in MuJoCo, one seed per episode.
 
-    python tools/deploy.py --run runs/scripted_v3/act_seed0 --ckpt ckpt_step0060000.pt         --selection --out select_act_60k.jsonl          # checkpoint selection
+    python tools/deploy.py --run runs/scripted_v3/act_seed0 --ckpt ckpt_step0060000.pt \
+        --selection --out select_act_60k.jsonl          # checkpoint selection
     python tools/deploy.py --run runs/scripted_v1/bc_seed0 --seed-list 60,63 --out eval.jsonl
     python tools/deploy.py --run runs/scripted_v1/act_lstm_seed0 --ckpt ckpt_step0200000.pt \
         --seeds data/eval/exp1_seeds.json --out exp1_act_lstm.jsonl
