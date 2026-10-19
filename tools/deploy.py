@@ -250,6 +250,8 @@ def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V2) -> dict:
     first_grip = int(g_on[0]) if len(g_on) else -1
     bd = np.asarray(dg["box_disp"])
     upto = weld_tick if weld_tick >= 0 else T
+    pushed = np.flatnonzero(bd[:max(upto, 1)] > 0.05)
+    push_tick = int(pushed[0]) if len(pushed) else -1
     gated = dg["gated"]
     first_gate = min(gated) if gated else -1
     fails = {}
@@ -275,6 +277,11 @@ def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V2) -> dict:
         box_disp_at_first_grip_mm=r(1000 * bd[first_grip], 1) if first_grip >= 0 else None,
         box_disp_before_weld_max_mm=r(1000 * bd[:max(upto, 1)].max(), 1),
         pushed_before_weld=bool(bd[:max(upto, 1)].max() > 0.05),     # D19 grasp_spawn_max
+        # WHEN the pre-weld push happened, against the first lock: -1 = no push.
+        # push_minus_lock < 0 means the box was shoved during the walk-in.
+        push_tick=push_tick, push_minus_lock=(push_tick - pre) if (push_tick >= 0 and lock_ticks) else None,
+        push_vs_lock=("none" if push_tick < 0 else "no lock" if not lock_ticks
+                      else "before" if push_tick < pre else "after"),
         gate_refused_ticks=len(gated), first_refusal_tick=first_gate,
         first_refusal=gated.get(first_gate), refusal_condition_counts=fails)
 
