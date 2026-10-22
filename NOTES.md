@@ -7178,3 +7178,32 @@ Per-tick re-runs of ACT-160 200k and ACT-LSTM-160 120k on the 20 selection seeds
   (covariate shift; the scripted demonstrator never shows a recovery from a lateral/heading error).
 - Open item 40: traces `analysis/traces/` - ACT-LSTM-160 120k seed 679 (success) and 680 (failure: walks the
   welded box away from the goal and drops it), each with the demonstrator on the same seed, npz + figures.
+
+## 2026-10-24b — branch freeze-fixes: lock rule v3 (item 43), deploy metrics (item 46), scripted walk-in (item 44)
+
+Commits a2f0952, 43bd9cb, 3dfc62c, e8ef76e (branch `freeze-fixes` from main 473a7d7; run_integrated_combined.py
+and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/` and `runs/scripted_v3/walkin_scripted/`.
+- **Lock rule v3** (`phases.LOCK_RULE_V3`, `carry_release_goal=False`): the "welded box > lift_min (0.055 m) above
+  rest releases the base" rule applies only to a lock engaged WITHOUT the weld (pickup); a lock engaged welded (goal)
+  ends only by placed-and-withdrawn. Versioned, stored, old v2 metadata still reads as v2; `deploy --lock-rule v3`.
+  Default stays v2 (`LockConfig()`), so the demonstrator and teleop are unchanged. FOLLOW-UP after PR #2: switch
+  teleop (and decide whether new scripted recordings use v3).
+- (a) Re-recording 10 scripted_v3 seeds (0-9) under v3: 9/10 bit-identical (only `lock_rule` metadata differs).
+  Seed 6 differs from tick 334: the DEMONSTRATOR locked at the goal with the box 0.061 m up and v2 released it for 5
+  ticks (re-lock at 339); under v3 the lock holds; still success, placement 0.0418 vs 0.0412 m. In all 200
+  scripted_v3 episodes this happens 4 times (seeds 6, 14, 146, 206; box 0.058-0.065 m, 5-tick release).
+- (b) v3 vs v2, 20 selection seeds: ACT-160 200k 2/20 -> 5/20 (gained 679, 681, 700; none lost), stage-wise
+  grasp/lift/transport/place 60/60/20/10% -> 60/60/30/25%; ACT-LSTM-160 120k 3 -> 5/20 (gained 692, 696), 70/70/20/15%
+  -> 70/70/35/25%. Goal locks dropped by the carry release: 4 and 5 -> 0. (Evaluated under a rule the training data
+  was not collected under - deploy warns; the demonstrations differ only in 4/200 episodes.)
+- **Item 46** (deploy, observation only): palm_box_min_m (farther palm, pre-weld; the gate's `near`),
+  palm_box_nearest_min_m, final_box_goal_m (= placement error), closest_box_goal_m + tick. v3 runs: median closest
+  farther palm 0.150 / 0.141 m (gate 0.16); median final box-goal 0.429 / 0.218 m.
+- **Item 44** (`deploy --walkin scripted`, DIAGNOSTIC): the demonstrator's walk-in controller (read-only copy of
+  scripted_demo's SETTLE branch) drives the base until the first lock, arms at the post-reset command, then the policy.
+  Test: reproduces the demonstrator's states AND logged actions bit for bit up to the lock (tick 40, seed 0). Results:
+  ACT-160 200k 10/20, ACT-LSTM-160 120k 8/20 (both rules identical, trajectories 20/20 equal): grasp 100%, no pushes,
+  lock at tick 40 on every seed. All 18 remaining failures are TRANSPORT "released before any goal lock" - the box
+  passes within a median 0.037-0.044 m of the goal and is released before the base locks there: the policy's
+  lower/release still runs on its own schedule, not on the lock.
+- Reading: the walk-in costs roughly 5-8 successes in 20; after it, the release timing at the goal costs ~9 in 20.

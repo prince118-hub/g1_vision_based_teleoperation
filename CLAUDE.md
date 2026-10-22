@@ -22,7 +22,7 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 **None. P1–P4 CLOSED** (PLAN.md; P4 qualified, §8 2026-09-29). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser).
 Closed loop: v1 2/180, v2 3/180; **g1-spec-1.2.0 (§8 2026-10-18) REFUSES every 1.1.0 file and run** (v1/v2 = evidence, `D:\thesis_backup\`).
-**scripted_v3 TRAINED + SURVEYED**: 14/300; TRAINING seeds no better (2/20, 0/20) and `--ensemble-horizon` changes nothing - walk-in steering (|lat| 0.125 m, 21 deg vs 5 mm, 0.9 deg) and arm motions not gated by the lock. `NOTES.md` 2026-10-24.
+**scripted_v3** (14/300 survey): branch `freeze-fixes` - lock rule v3 (goal-lock fix: ACT 2→5, LSTM 3→5 /20; NOT default, teleop after PR #2) and `--walkin scripted` (8–10/20). Decisions pending. `NOTES.md` 2026-10-24b.
 
 ## 3. Full pipeline (end to end)
 
