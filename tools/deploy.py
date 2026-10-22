@@ -210,6 +210,37 @@ VEL_WINDOW = int(round(3.0 / TICK_S))            # 75 ticks = 3 s
 SMALL_V = 0.2                                    # legged_robot.py:306: |v| < 0.2 zeroed in training
 
 
+def episode_metrics(states, weld_tick: int) -> dict:
+    """Per-episode distances, OBSERVATION ONLY (open item 46, 2026-10-24).
+
+      palm_box_min_m          before the weld: the closest the FARTHER palm got
+                              to the box centre - what GraspWeld's `near` test
+                              reads (both palms within 0.16 m)
+      palm_box_nearest_min_m  before the weld: the closest EITHER palm got
+      final_box_goal_m        final box xy distance to the goal centre (the
+                              quantity success.py scores as placement error)
+      closest_box_goal_m      the nearest the box xy ever came to the goal, and
+      closest_box_goal_tick   when - a box carried past the goal and dropped
+                              shows a small closest and a large final distance
+
+    "Before the weld" is every observation up to and including the tick the
+    weld engaged in (it is first visible one tick later); the whole episode
+    when it never engaged. Distances in metres, rounded to 0.1 mm."""
+    from g1_data.success import geometry
+    S = np.asarray(states, dtype=np.float64)
+    upto = (weld_tick + 1) if weld_tick >= 0 else len(S)
+    box = S[:upto, spec.BOX_POS]
+    dl = np.linalg.norm(S[:upto, spec.PALM_L_POS] - box, axis=1)
+    dr = np.linalg.norm(S[:upto, spec.PALM_R_POS] - box, axis=1)
+    goal = np.asarray(geometry()["goal_xy"], dtype=np.float64)
+    dg = np.linalg.norm(S[:, spec.BOX_POS][:, :2] - goal, axis=1)
+    k = int(np.argmin(dg))
+    return dict(palm_box_min_m=round(float(np.maximum(dl, dr).min()), 4),
+                palm_box_nearest_min_m=round(float(np.minimum(dl, dr).min()), 4),
+                final_box_goal_m=round(float(dg[-1]), 4),
+                closest_box_goal_m=round(float(dg[k]), 4), closest_box_goal_tick=k)
+
+
 def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V2) -> dict:
     """Why an episode did or did not lock and weld. See the module docstring of
     each source for the rules these are measured against:
@@ -487,7 +518,8 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         phase_boundaries=diag["boundaries"],
         lock_rule=meta["lock_rule"],
         diagnostics=_diagnostics(dg, arrays["states"], lock_ticks, weld_tick, lock_rule),
-        trajectory_sha256=hashlib.sha256(arrays["states"].tobytes()).hexdigest()[:16])
+        trajectory_sha256=hashlib.sha256(arrays["states"].tobytes()).hexdigest()[:16],
+        **episode_metrics(arrays["states"], weld_tick))
     return result, arrays
 
 

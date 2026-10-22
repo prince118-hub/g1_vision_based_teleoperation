@@ -391,6 +391,41 @@ def test_ensemble_horizon_averages_only_the_last_n_chunks():
     _raises(SystemExit, _policy, "act_lstm", ensemble_horizon=9)
 
 
+def test_episode_metrics_on_a_hand_built_trajectory():
+    """Open item 46. Palms approach the box until the weld at tick 3; after it
+    they are on the box (ignored). The box passes 0.05 m from the goal at tick 5
+    and ends 0.40 m from it."""
+    from g1_data.success import geometry
+    goal = np.asarray(geometry()["goal_xy"], float)
+    T = 8
+    S = np.zeros((T, spec.STATE_DIM))
+    S[:, spec.BOX_POS] = [1.5, 0.0, 0.9]
+    far = [0.50, 0.40, 0.30, 0.20, 0.0, 0.0, 0.0, 0.0]       # left palm, x offset
+    near = [0.30, 0.25, 0.20, 0.10, 0.0, 0.0, 0.0, 0.0]      # right palm
+    for t in range(T):
+        S[t, spec.PALM_L_POS] = S[t, spec.BOX_POS] + [far[t], 0, 0]
+        S[t, spec.PALM_R_POS] = S[t, spec.BOX_POS] + [0, near[t], 0]
+    S[5, spec.BOX_POS.start:spec.BOX_POS.start + 2] = goal + [0.05, 0.0]
+    S[7, spec.BOX_POS.start:spec.BOX_POS.start + 2] = goal + [0.0, 0.40]
+    m = D.episode_metrics(S, weld_tick=3)
+    assert m["palm_box_min_m"] == 0.20 and m["palm_box_nearest_min_m"] == 0.10, m
+    assert m["final_box_goal_m"] == 0.40 and m["closest_box_goal_m"] == 0.05, m
+    assert m["closest_box_goal_tick"] == 5
+    m = D.episode_metrics(S, weld_tick=1)                     # only ticks 0-1 count
+    assert m["palm_box_min_m"] == 0.40 and m["palm_box_nearest_min_m"] == 0.25, m
+    m = D.episode_metrics(S, weld_tick=-1)                    # never welded: all ticks
+    assert m["palm_box_min_m"] == 0.0
+
+
+def test_episode_metrics_in_a_deployed_episode():
+    """In the deploy result: the final box-goal distance is the scored placement
+    error, and an episode that welded had both palms near the box before it."""
+    res, _ = _replay()
+    assert abs(res["final_box_goal_m"] - res["placement_error_m"]) < 1e-4
+    assert res["weld_engage_tick"] >= 0 and res["palm_box_min_m"] < 0.20, res["palm_box_min_m"]
+    assert res["closest_box_goal_m"] <= res["final_box_goal_m"]
+
+
 # ─── seeds (open item 38) ────────────────────────────────────────────────────
 def test_selection_uses_its_own_seed_file():
     a = argparse.Namespace(seed_list=None, seeds=DS.SELECT_SEEDS)
