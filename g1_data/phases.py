@@ -152,9 +152,13 @@ class LockConfig:
           that release applies only to a lock engaged WITHOUT the weld - the
           pickup lock; a lock engaged while welded (the goal lock: a welded
           lock targets the goal) is released only by the placed-and-withdrawn
-          test. Identical to v2 for every scripted demonstration, which always
-          arrives lowered (0.011-0.039 m < lift_min). NOT the default: the
-          demonstrator and teleop still build `LockConfig()` = v2.
+          test. NOT identical to v2 for every demonstration: 4 of the 200
+          scripted_v3 episodes (seeds 6, 14, 146, 206) lock at the goal with
+          the box 0.058-0.065 m up and v2 releases them for 5 ticks before
+          re-locking; re-recorded under v3, seed 6 diverges from tick 334 and
+          still succeeds (placement 0.0418 vs 0.0412 m). Seeds 0-5, 7-9 are
+          bit-identical (2026-10-24). NOT the default: the demonstrator and
+          teleop still build `LockConfig()` = v2.
 
     Each threshold has a measured margin at the transition it governs (module
     docstring). `lift_min` is the only one tied to another config value: it is
