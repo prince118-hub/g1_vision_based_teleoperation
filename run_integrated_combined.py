@@ -84,14 +84,18 @@ from g1_data.phases import LOCK_RULE_V2, LockPredicate, PlatformGeometry
 from locomotion_input import (PelvisVelocity, LeanJoystick, KeyboardCommand,
                               KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT)
 
-# ── Paths (EDIT THESE) ────────────────────────────────────────────────────────
-# G1_POLICY_PATH overrides the policy path per machine; unset keeps the original.
+# ── Paths ─────────────────────────────────────────────────────────────────────
+# G1_POLICY_PATH / G1_SCENE_PATH override the paths per machine. Unset, both
+# resolve against THIS file's directory (the repo root), so a checkout anywhere
+# finds its own tracked `motion.pt` and `scene.xml`. The old fallback was the
+# absolute "D:\Charles_Aninon\Thesis Project\..." path: for a checkout AT that
+# path this resolves to the same files; anywhere else the old one did not exist.
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 POLICY_PATH = os.environ.get(
     "G1_POLICY_PATH",
-    r"D:\Charles_Aninon\Thesis Project\unitree_rl_gym\deploy\pre_train\g1\motion.pt")
-# G1_SCENE_PATH overrides the scene path per machine; unset keeps the original.
+    os.path.join(_REPO_DIR, "unitree_rl_gym", "deploy", "pre_train", "g1", "motion.pt"))
 SCENE_PATH = os.environ.get(
-    "G1_SCENE_PATH", r"D:\Charles_Aninon\Thesis Project\scene.xml")
+    "G1_SCENE_PATH", os.path.join(_REPO_DIR, "scene.xml"))
 
 # ── Display ───────────────────────────────────────────────────────────────────
 PANEL_H = 620

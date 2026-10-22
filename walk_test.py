@@ -49,14 +49,18 @@ from locomotion_input import (
 
 CMD_STEP = 0.1          # per key press, on vx, vy and wz
 
-# ── Paths (EDIT THESE) ────────────────────────────────────────────────────────
-# G1_POLICY_PATH overrides the policy path per machine; unset keeps the original.
+# ── Paths ─────────────────────────────────────────────────────────────────────
+# G1_POLICY_PATH / G1_SCENE_PATH override the paths per machine. Unset, both
+# resolve against THIS file's directory (the repo root), so a checkout anywhere
+# finds its own tracked `motion.pt` and `scene.xml`. The old fallback was the
+# absolute "D:\Charles_Aninon\Thesis Project\..." path: for a checkout AT that
+# path this resolves to the same files; anywhere else the old one did not exist.
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 POLICY_PATH = os.environ.get(
     "G1_POLICY_PATH",
-    r"D:\Charles_Aninon\Thesis Project\unitree_rl_gym\deploy\pre_train\g1\motion.pt")
-# G1_SCENE_PATH overrides the scene path per machine; unset keeps the original.
+    os.path.join(_REPO_DIR, "unitree_rl_gym", "deploy", "pre_train", "g1", "motion.pt"))
 SCENE_PATH = os.environ.get(
-    "G1_SCENE_PATH", r"D:\Charles_Aninon\Thesis Project\scene.xml")
+    "G1_SCENE_PATH", os.path.join(_REPO_DIR, "scene.xml"))
 
 # ── Policy config (from unitree_rl_gym deploy/deploy_mujoco/configs/g1.yaml) ──
 SIM_DT = 0.002
