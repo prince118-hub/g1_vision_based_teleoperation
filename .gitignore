@@ -31,3 +31,11 @@ runs/
 # Cloned upstream references (e.g. tonyzhaozh/act). Read-only, never vendored
 # into the tracked tree; the commit hash in NOTES.md is what makes them citable.
 reference/
+*.pt
+!unitree_rl_gym/deploy/pre_train/**/*.pt
+*.pth
+*.mp4
+*.avi
+*.svo
+*.svo2
+.env
