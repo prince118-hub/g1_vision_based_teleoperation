@@ -192,8 +192,17 @@ def test_recorder_reproduces_scripted_v2_seed0_in_every_old_column():
         print("      (skipped: no %s)" % V2_SEED0)
         return
     import record_episodes as RE
+    from g1_data import scripted_demo as SD
+    from g1_data.phases import lock_config_from_meta
+    with np.load(V2_SEED0) as z:
+        rule = lock_config_from_meta(json.loads(str(z["meta"])))      # v2 (v3 is the default)
     cfg, demo, book, loco = RE._setup()
-    r, rec = RE.run_one(0, cfg, demo, book, loco)
+    orig = SD.LockConfig
+    SD.LockConfig = lambda: rule
+    try:
+        r, rec = RE.run_one(0, cfg, demo, book, loco)
+    finally:
+        SD.LockConfig = orig
     tmp = tempfile.mkdtemp()
     try:
         p = os.path.join(tmp, "ep.npz")
@@ -213,8 +222,10 @@ def test_recorder_reproduces_scripted_v2_seed0_in_every_old_column():
     for k in ("qpos", "qvel", "phase_labels", "gait_phase", "step_index"):
         assert np.array_equal(new[k], old[k]), k
     for k in ("outcome", "weld_engage_tick", "weld_release_tick", "lock_engage_tick",
-              "lock_release_tick", "reset_fingerprint", "lock_rule", "demonstrator"):
+              "lock_release_tick", "reset_fingerprint", "demonstrator"):
         assert meta[k] == old_meta[k], k
+    # the RULE, not the dict: the stored v2 predates the carry_release_goal field
+    assert lock_config_from_meta(meta) == lock_config_from_meta(old_meta) == rule
     import convert_grip_label as CG
     want = spec.next_weld_label(old["states"][:, spec.GRIP_L])
     assert np.array_equal(A[:, spec.GRIP_L_A], want) and CG.KNOWN["g1-spec-1.1.0"] == 47

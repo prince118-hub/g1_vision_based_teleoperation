@@ -70,7 +70,7 @@ from g1_data.paths import repo_relpath                              # noqa: E402
 from g1_data import phase_label as PL                               # noqa: E402
 from g1_data import spec                                            # noqa: E402
 from g1_data import success as SU                                   # noqa: E402
-from g1_data.phases import (LOCK_RULE_V2, LOCK_RULES, LockPredicate,  # noqa: E402
+from g1_data.phases import (LOCK_RULE_V3, LOCK_RULES, LockPredicate,  # noqa: E402
                             PlatformGeometry, lock_rule_meta)
 from g1_data.reset import (LocomotionCarryover, reset_episode,      # noqa: E402
                            reset_policy_state, state_fingerprint)
@@ -263,7 +263,7 @@ def episode_metrics(states, weld_tick: int) -> dict:
                 closest_box_goal_m=round(float(dg[k]), 4), closest_box_goal_tick=k)
 
 
-def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V2) -> dict:
+def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V3) -> dict:
     """Why an episode did or did not lock and weld. See the module docstring of
     each source for the rules these are measured against:
       lock  phases.LockConfig, the rule in force (v2: no stillness term; v1:
@@ -411,9 +411,9 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         d.qvel[:] = initial_state[1]
         mujoco.mj_forward(m, d)
     lock = BaseLock(m)
-    # The lock rule: v2 (stance band only, 2026-10-17) unless stated. A policy
+    # The lock rule: v3 (the default since 2026-10-24) unless stated. A policy
     # must be evaluated under the rule its training data was collected under.
-    lock_rule = lock_rule if lock_rule is not None else LOCK_RULE_V2
+    lock_rule = lock_rule if lock_rule is not None else LOCK_RULE_V3
     pred = LockPredicate(PlatformGeometry.resolve(m), lock_rule)
     DEF = np.asarray(L.default_angles, dtype=np.float64)
     KPS = np.asarray(L.kps, dtype=np.float32)
@@ -609,9 +609,9 @@ def main(argv=None):
     ap.add_argument("--no-ensemble", action="store_true",
                     help="chunked policies: query every tick and apply the newest "
                          "chunk's first action (no temporal ensembling)")
-    ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default="v2",
-                    help="lock rule (phases.LockConfig); the one the training data "
-                         "was collected under. v2 = stance band only (default)")
+    ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default="v3",
+                    help="lock rule (phases.LockConfig). v3 = stance band only, carry "
+                         "release at pickup only (default); v2 = stance band only")
     ap.add_argument("--walkin", choices=("policy", "scripted"), default="policy",
                     help="DIAGNOSTIC (item 44): 'scripted' = the demonstrator's walk-in "
                          "controller drives until the first lock, then the policy")

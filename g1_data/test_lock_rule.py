@@ -48,8 +48,11 @@ def _ep(seed, rule=None, drop=False):
     return DS.Episode("mem://seed%d.npz" % seed, meta)
 
 
-def test_v2_is_the_default_and_v1_is_kept():
-    assert LockConfig() == LOCK_RULE_V2 and LOCK_RULE_V2.version == "v2"
+def test_v3_is_the_default_and_v1_v2_are_kept():
+    """v3 is the default since 2026-10-24 (deploy and new scripted recordings);
+    v1 and v2 stay selectable and keep the carry release at every lock."""
+    assert LockConfig() == LOCK_RULE_V3 and LOCK_RULE_V3.version == "v3"
+    assert LOCK_RULE_V2.version == "v2"
     assert LOCK_RULE_V2.disp_max == float("inf")
     assert LOCK_RULE_V1.version == "v1" and LOCK_RULE_V1.disp_max == 0.010
     # Everything but the stillness term is shared.
@@ -58,7 +61,7 @@ def test_v2_is_the_default_and_v1_is_kept():
         assert getattr(LOCK_RULE_V1, f) == getattr(LOCK_RULE_V2, f), f
     assert set(LOCK_RULES) == {"v1", "v2", "v3"}
     # v3 is v2 with the carry release restricted to the pickup lock - nothing else
-    assert LOCK_RULE_V3 == LockConfig(version="v3", carry_release_goal=False)
+    assert LOCK_RULE_V3 == LockConfig(version="v3", carry_release_goal=False) == LockConfig()
     assert LOCK_RULE_V2.carry_release_goal is True and LOCK_RULE_V1.carry_release_goal is True
 
 
@@ -163,7 +166,7 @@ def test_scripted_episode_records_the_rule_in_force():
         finally:
             SD.LockConfig = orig
         meta = rec.metadata(rec.model, r, cfg, demo, 60, extra={})
-        want = rule or LOCK_RULE_V2
+        want = rule or LOCK_RULE_V3
         assert meta["lock_rule"]["version"] == want.version, meta["lock_rule"]
         assert lock_config_from_meta(meta) == want
 
@@ -208,13 +211,18 @@ def test_slow_v2_on_the_spare_seeds_reproduces_19_of_20():
     from g1_data import scripted_demo as SD
     cfg, demo, book, policy = RE._setup()
     ok, fails, locks = 0, [], []
-    for s in SPARE:
-        r, rec = RE.run_one(s, cfg, demo, book, policy)
-        ok += bool(r["ok"])
-        locks.append(rec.lock_engage_tick)
-        if not r["ok"]:
-            fails.append((s, r["fail_phase"]))
-        assert rec.lock_rule["version"] == "v2"
+    orig = SD.LockConfig
+    SD.LockConfig = lambda: LOCK_RULE_V2          # v2 explicitly: v3 is the default now
+    try:
+        for s in SPARE:
+            r, rec = RE.run_one(s, cfg, demo, book, policy)
+            ok += bool(r["ok"])
+            locks.append(rec.lock_engage_tick)
+            if not r["ok"]:
+                fails.append((s, r["fail_phase"]))
+            assert rec.lock_rule["version"] == "v2"
+    finally:
+        SD.LockConfig = orig
     print("      v2 spare seeds: %d/20, failures %s, pickup lock ticks %d-%d"
           % (ok, fails, min(locks), max(locks)))
     assert ok == 19 and fails == [(72, "PLACE(upright)")], (ok, fails)

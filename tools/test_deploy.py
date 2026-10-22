@@ -211,8 +211,8 @@ def test_replayed_actions_through_the_deploy_loop_match_replay_check():
     res, arrays = D.deploy_episode(
         SEED, pol, loco=loco, max_ticks=T, early_success=False, raw_actions=True,
         initial_state=(rec["qpos"][0], rec["qvel"][0]),
-        lock_rule=lock_config_from_meta(meta))       # the episode's own rule: v2
-    assert res["lock_rule"]["version"] == "v2"
+        lock_rule=lock_config_from_meta(meta))       # the episode's own rule: v3 (default)
+    assert res["lock_rule"]["version"] == "v3"
     rep = RC.replay(path, verbose=False)
     div = np.abs(arrays["states"] - np.asarray(rec["states"], dtype=np.float64))
     assert res["ticks"] == T and not res["fell"]

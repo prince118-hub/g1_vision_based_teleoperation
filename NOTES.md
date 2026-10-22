@@ -7207,3 +7207,17 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
   passes within a median 0.037-0.044 m of the goal and is released before the base locks there: the policy's
   lower/release still runs on its own schedule, not on the lock.
 - Reading: the walk-in costs roughly 5-8 successes in 20; after it, the release timing at the goal costs ~9 in 20.
+
+## 2026-10-24c — freeze-fixes merged into main; lock rule v3 is the default
+
+- `freeze-fixes` fast-forwarded into main (no conflicts; main had not moved since 473a7d7).
+- `LockConfig()` is v3 (`carry_release_goal=False`): the scripted demonstrator (`scripted_demo.py:787` builds
+  `LockConfig()`) records v3 from now on, and `deploy.py` defaults to `--lock-rule v3` (and `deploy_episode`'s
+  default rule). v1/v2 remain in `LOCK_RULES` and stay selectable; `LOCK_RULE_V1/V2` now set
+  `carry_release_goal=True` explicitly, and `lock_config_from_meta` reads a stored rule WITHOUT the field as True
+  (every v1/v2 episode up to 2026-10-24), so scripted_v1/v2/v3 metadata still reads back as v1/v2 exactly.
+- Teleop unchanged: `run_integrated_combined.py:574` passes LOCK_RULE_V2 explicitly; switch it after PR #2.
+- Consequence: a NEW scripted recording is v3 and `dataset.assert_uniform_lock_rule` refuses to split/normalize it
+  together with scripted_v3 (v2). Policies trained on scripted_v3 are evaluated under v3 by default (deploy prints
+  the rule-mismatch warning); pass `--lock-rule v2` to reproduce the 2026-10-23 survey.
+- The slow v2 adoption test now forces LOCK_RULE_V2 explicitly.
