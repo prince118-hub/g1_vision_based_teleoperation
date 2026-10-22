@@ -275,7 +275,9 @@ def test_metadata_is_complete():
     assert not missing, missing
     assert meta["spec_version"] == "g1-spec-1.2.0"
     assert meta["grip_label"] == spec.GRIP_LABEL == "next_weld_v1"
-    assert meta["lock_rule"]["version"] == meta["lock_rule_id"] == "v2"
+    # the DEFAULT rule (LockConfig(): v3 since 2026-10-24, CLAUDE.md section 8)
+    from g1_data.phases import LockConfig
+    assert meta["lock_rule"]["version"] == meta["lock_rule_id"] == LockConfig().version == "v3"
     assert meta["source"] == "teleop_live_fake" and meta["operator"] == "tester"
     assert meta["d18"]["hand_pickup_exclusion"] is True
     from g1_teleop.contact_contract import expected_contract
@@ -317,7 +319,7 @@ def test_ledger_rows_for_a_failed_and_a_discarded_episode():
     rows = EpisodeLedger(os.path.join(out, "ledger.jsonl")).rows()
     assert [r["event"] for r in rows] == ["session", "issue", "discard"], rows
     s, d = rows[0], rows[2]
-    assert s["source"] == "teleop_live_fake" and s["lock_rule"] == "v2" and s["operator"] == "tester"
+    assert s["source"] == "teleop_live_fake" and s["lock_rule"] == "v3" and s["operator"] == "tester"
     assert d["seed"] == SEED and d["reason"].startswith("failed")
     assert _abs(d["saved"]) == os.path.normpath(path)
     assert os.path.exists(_abs(d["keypoints"]))
