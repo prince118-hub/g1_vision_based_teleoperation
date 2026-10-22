@@ -70,7 +70,7 @@ from g1_data.paths import repo_relpath                              # noqa: E402
 from g1_data import phase_label as PL                               # noqa: E402
 from g1_data import spec                                            # noqa: E402
 from g1_data import success as SU                                   # noqa: E402
-from g1_data.phases import (LOCK_RULE_V2, LOCK_RULES, LockPredicate,  # noqa: E402
+from g1_data.phases import (LOCK_RULE_V3, LOCK_RULES, LockPredicate,  # noqa: E402
                             PlatformGeometry, lock_rule_meta)
 from g1_data.reset import (LocomotionCarryover, reset_episode,      # noqa: E402
                            reset_policy_state, state_fingerprint)
@@ -210,7 +210,60 @@ VEL_WINDOW = int(round(3.0 / TICK_S))            # 75 ticks = 3 s
 SMALL_V = 0.2                                    # legged_robot.py:306: |v| < 0.2 zeroed in training
 
 
-def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V2) -> dict:
+def scripted_walkin_cmd(d, ix, demo) -> np.ndarray:
+    """The demonstrator's walk-in velocity command (scripted_demo.py SETTLE
+    branch, read-only copy): position P on the standoff target box - (standoff,
+    0) in the WORLD frame, rotated into the body frame and clipped to hold_max;
+    heading P towards the box, clipped to hold_max_yaw; both with deadbands.
+    Open item 44 diagnostic only."""
+    base = np.asarray(d.qpos[ix.base_xy_qpos], dtype=np.float64)
+    box = np.asarray(d.qpos[ix.box_qpos][:2], dtype=np.float64)
+    yaw = W.yaw_from_quat(d.qpos[ix.base_quat_qpos])
+    err = (box - np.array([demo.standoff, 0.0])) - base
+    act = np.zeros(3, dtype=np.float64)
+    if np.linalg.norm(err) >= demo.hold_deadband:
+        act[0:2] = np.clip(demo.hold_kp * W.world_to_body(err, yaw), -demo.hold_max, demo.hold_max)
+    to_box = box - base
+    if np.linalg.norm(to_box) > 1e-6:
+        e_yaw = float(np.arctan2(np.sin(np.arctan2(to_box[1], to_box[0]) - yaw),
+                                 np.cos(np.arctan2(to_box[1], to_box[0]) - yaw)))
+        if abs(e_yaw) >= demo.hold_deadband_yaw:
+            act[2] = float(np.clip(demo.hold_kp_yaw * e_yaw, -demo.hold_max_yaw, demo.hold_max_yaw))
+    return act
+
+
+def episode_metrics(states, weld_tick: int) -> dict:
+    """Per-episode distances, OBSERVATION ONLY (open item 46, 2026-10-24).
+
+      palm_box_min_m          before the weld: the closest the FARTHER palm got
+                              to the box centre - what GraspWeld's `near` test
+                              reads (both palms within 0.16 m)
+      palm_box_nearest_min_m  before the weld: the closest EITHER palm got
+      final_box_goal_m        final box xy distance to the goal centre (the
+                              quantity success.py scores as placement error)
+      closest_box_goal_m      the nearest the box xy ever came to the goal, and
+      closest_box_goal_tick   when - a box carried past the goal and dropped
+                              shows a small closest and a large final distance
+
+    "Before the weld" is every observation up to and including the tick the
+    weld engaged in (it is first visible one tick later); the whole episode
+    when it never engaged. Distances in metres, rounded to 0.1 mm."""
+    from g1_data.success import geometry
+    S = np.asarray(states, dtype=np.float64)
+    upto = (weld_tick + 1) if weld_tick >= 0 else len(S)
+    box = S[:upto, spec.BOX_POS]
+    dl = np.linalg.norm(S[:upto, spec.PALM_L_POS] - box, axis=1)
+    dr = np.linalg.norm(S[:upto, spec.PALM_R_POS] - box, axis=1)
+    goal = np.asarray(geometry()["goal_xy"], dtype=np.float64)
+    dg = np.linalg.norm(S[:, spec.BOX_POS][:, :2] - goal, axis=1)
+    k = int(np.argmin(dg))
+    return dict(palm_box_min_m=round(float(np.maximum(dl, dr).min()), 4),
+                palm_box_nearest_min_m=round(float(np.minimum(dl, dr).min()), 4),
+                final_box_goal_m=round(float(dg[-1]), 4),
+                closest_box_goal_m=round(float(dg[k]), 4), closest_box_goal_tick=k)
+
+
+def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V3) -> dict:
     """Why an episode did or did not lock and weld. See the module docstring of
     each source for the rules these are measured against:
       lock  phases.LockConfig, the rule in force (v2: no stillness term; v1:
@@ -311,7 +364,8 @@ def _stage(locked, welded, n_locks, released) -> str:
 def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = None,
                    max_ticks: int = MAX_TICKS, early_success: bool = True,
                    lock_rule=None,
-                   raw_actions: bool = False, initial_state=None, view=None) -> dict:
+                   raw_actions: bool = False, initial_state=None, view=None,
+                   walkin: str = "policy") -> dict:
     """Run ONE closed-loop episode. Returns (result, arrays).
 
     Test hooks, never used by the CLI: `raw_actions` applies the policy's action
@@ -319,7 +373,21 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
     its float32 rail values 0.80000001 -> 0.8 would break bit-identity with
     replay_check); `initial_state` = (qpos, qvel) starts from a recorded row 0,
     as replay_check does.
+
+    `walkin="scripted"` (open item 44, a DIAGNOSTIC, never an evaluation): until
+    the FIRST lock engages, the demonstrator's walk-in controller drives the
+    base (`scripted_walkin_cmd`: P on the standoff box - (0.32, 0), heading to
+    the box, DemoConfig gains and clips, recomputed at every 50 Hz locomotion
+    query as the demonstrator does) and the arms hold the post-reset command,
+    which is the demonstrator's walk-in arm command in every scripted_v3
+    episode (max deviation 0); the gripper is 0. The policy is still queried
+    every tick, so its window and temporal ensemble are warm when it takes
+    over; its outputs are discarded until the lock. From the lock on, the
+    policy acts alone. What it measures: how much of the task the policy can do
+    when the approach is the demonstrator's.
     """
+    if walkin not in ("policy", "scripted"):
+        raise ValueError("walkin must be 'policy' or 'scripted', got %r" % (walkin,))
     import torch
     cfg = cfg or TeleopConfig()
     L = cfg.loco
@@ -343,9 +411,9 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         d.qvel[:] = initial_state[1]
         mujoco.mj_forward(m, d)
     lock = BaseLock(m)
-    # The lock rule: v2 (stance band only, 2026-10-17) unless stated. A policy
+    # The lock rule: v3 (the default since 2026-10-24) unless stated. A policy
     # must be evaluated under the rule its training data was collected under.
-    lock_rule = lock_rule if lock_rule is not None else LOCK_RULE_V2
+    lock_rule = lock_rule if lock_rule is not None else LOCK_RULE_V3
     pred = LockPredicate(PlatformGeometry.resolve(m), lock_rule)
     DEF = np.asarray(L.default_angles, dtype=np.float64)
     KPS = np.asarray(L.kps, dtype=np.float32)
@@ -353,6 +421,10 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
     CMDS = np.asarray(L.cmd_scale, dtype=np.float32)
     meta = dict(box_spawn_xy=[float(start.box_pos[0]), float(start.box_pos[1])],
                 lock_rule=lock_rule_meta(lock_rule))
+    walk_upper = np.array(d.ctrl[ix.upper_ctrl], dtype=np.float64)   # item 44
+    demo_cfg = DemoConfig()
+    scripted_ticks = 0
+    walk_cmd = np.zeros(3)      # the scripted command IN FORCE (zero before the first query)
     policy.reset()
 
     states: List[np.ndarray] = []
@@ -392,6 +464,13 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
             s = observe(sp, m, d, ix)
             raw = policy.act(s, t)
             a = np.asarray(raw, dtype=np.float64) if raw_actions else post_process(raw)
+            scripted_now = walkin == "scripted" and not lock_ticks
+            if scripted_now:                                    # item 44
+                a = a.copy()
+                a[spec.UPPER_A] = spec.action_from_upper_ctrl(walk_upper)
+                a[spec.GRIP_L_A] = a[spec.GRIP_R_A] = 0.0
+                a[spec.VEL_A] = walk_cmd                          # logged as the demonstrator logs it
+                scripted_ticks += 1
             locked_now = bool(lock.locked(d))
             a_log = a.copy()
             if locked_now:
@@ -431,7 +510,9 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
                     phz = ((carry.counter * L.sim_dt) % L.gait_period) / L.gait_period
                     carry.obs[:3] = d.qvel[ix.base_angvel_qvel] * L.ang_vel_scale
                     carry.obs[3:6] = W.get_gravity_orientation(d.qpos[ix.base_quat_qpos])
-                    carry.obs[6:9] = vel * CMDS
+                    if scripted_now:
+                        walk_cmd = scripted_walkin_cmd(d, ix, demo_cfg)
+                    carry.obs[6:9] = (walk_cmd if scripted_now else vel) * CMDS
                     carry.obs[9:9 + n] = (d.qpos[ix.leg_qpos] - DEF) * L.dof_pos_scale
                     carry.obs[9 + n:9 + 2 * n] = d.qvel[ix.leg_qvel] * L.dof_vel_scale
                     carry.obs[9 + 2 * n:9 + 3 * n] = carry.action
@@ -487,7 +568,9 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         phase_boundaries=diag["boundaries"],
         lock_rule=meta["lock_rule"],
         diagnostics=_diagnostics(dg, arrays["states"], lock_ticks, weld_tick, lock_rule),
-        trajectory_sha256=hashlib.sha256(arrays["states"].tobytes()).hexdigest()[:16])
+        trajectory_sha256=hashlib.sha256(arrays["states"].tobytes()).hexdigest()[:16],
+        walkin=walkin, scripted_walkin_ticks=scripted_ticks,
+        **episode_metrics(arrays["states"], weld_tick))
     return result, arrays
 
 
@@ -526,9 +609,12 @@ def main(argv=None):
     ap.add_argument("--no-ensemble", action="store_true",
                     help="chunked policies: query every tick and apply the newest "
                          "chunk's first action (no temporal ensembling)")
-    ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default="v2",
-                    help="lock rule (phases.LockConfig); the one the training data "
-                         "was collected under. v2 = stance band only (default)")
+    ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default="v3",
+                    help="lock rule (phases.LockConfig). v3 = stance band only, carry "
+                         "release at pickup only (default); v2 = stance band only")
+    ap.add_argument("--walkin", choices=("policy", "scripted"), default="policy",
+                    help="DIAGNOSTIC (item 44): 'scripted' = the demonstrator's walk-in "
+                         "controller drives until the first lock, then the policy")
     ap.add_argument("--allow-train-seeds", action="store_true",
                     help="diagnostics only: allow seeds the run trained or validated on")
     ap.add_argument("--viewer", action="store_true")
@@ -575,6 +661,7 @@ def main(argv=None):
                   train_seeds_evaluated=seen,
                   lock_rule=lock_rule_meta(rule), temporal_ensemble=policy.ensemble,
                   ensemble_horizon=policy.H if policy.ensemble else None,
+                  walkin=a.walkin,
                   training_data_lock_rule=train_rule.version if train_rule else None,
                   obs_window=policy.W, norm=repo_relpath(policy.norm_path),
                   device=str(policy.device), max_ticks=a.max_ticks,
@@ -596,7 +683,7 @@ def main(argv=None):
                                    video_dir=a.video_dir, frame_name="deploy_episode",
                                    label=policy.name, stem=stem)
             res, _ = deploy_episode(seed, policy, loco=loco, max_ticks=a.max_ticks,
-                                    lock_rule=rule, view=view)
+                                    lock_rule=rule, view=view, walkin=a.walkin)
             if view is not None:
                 view.finalize(accepted=res["success"])
                 if view.video_path:

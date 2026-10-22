@@ -143,6 +143,23 @@ class LockConfig:
           the following second (no jolt). The PELVIS HOLD is what prevents the
           pre-grasp push, not the stillness rule: with the lock removed entirely
           the push was 52 mm median (2026-10-17 free-base test).
+      v3  "stance band only, carry-release at pickup only" - 2026-10-24 (open
+          item 43). v2's "welded box > lift_min above rest -> release the base"
+          (carrying: the legs take over) fired at the GOAL lock too: a policy
+          that arrives with the box still at carry height was locked for 5
+          ticks, then released, walked off and dropped the box 0.14-0.82 m away
+          (4/20 episodes each for ACT-160 200k and ACT-LSTM-160 120k). Under v3
+          that release applies only to a lock engaged WITHOUT the weld - the
+          pickup lock; a lock engaged while welded (the goal lock: a welded
+          lock targets the goal) is released only by the placed-and-withdrawn
+          test. NOT identical to v2 for every demonstration: 4 of the 200
+          scripted_v3 episodes (seeds 6, 14, 146, 206) lock at the goal with
+          the box 0.058-0.065 m up and v2 releases them for 5 ticks before
+          re-locking; re-recorded under v3, seed 6 diverges from tick 334 and
+          still succeeds (placement 0.0418 vs 0.0412 m). Seeds 0-5, 7-9 are
+          bit-identical (2026-10-24). THE DEFAULT since 2026-10-24
+          (`LockConfig()` = v3): new scripted recordings and tools/deploy.py.
+          Teleop still passes LOCK_RULE_V2 explicitly until PR #2 is merged.
 
     Each threshold has a measured margin at the transition it governs (module
     docstring). `lift_min` is the only one tied to another config value: it is
@@ -151,7 +168,7 @@ class LockConfig:
     `disp` is still computed (diagnostics, the teleop overlay) under v2.
     """
 
-    version: str = "v2"
+    version: str = "v3"
     settle_window: int = 20        # ticks: 0.80 s = one GAIT_PERIOD (TR4)
     debounce: int = 5              # ticks: 0.20 s (TR8)
     disp_max: float = float("inf")  # v2: no stillness rule (v1: 0.010 m per gait period)
@@ -163,14 +180,20 @@ class LockConfig:
     rest_tol: float = 0.020        # m: the box is down
     withdraw: float = 0.25         # m, worst palm to box centre: hands clear
     done_radius: float = 0.10      # m, the Q4 placement tolerance
+    #: v1/v2: True - the carry release (welded, box above lift_min) applies at
+    #: every lock. v3 (the default): False - only at a lock engaged without
+    #: the weld (pickup). A stored rule without the field predates it: True.
+    carry_release_goal: bool = False
 
 
-#: The two lock rules, by name. v2 is the default (`LockConfig()`).
-LOCK_RULE_V1 = LockConfig(version="v1", disp_max=0.010)
-LOCK_RULE_V2 = LockConfig(version="v2")
-LOCK_RULES = {"v1": LOCK_RULE_V1, "v2": LOCK_RULE_V2}
+#: The lock rules, by name. v3 is the default (`LockConfig()`, 2026-10-24).
+LOCK_RULE_V1 = LockConfig(version="v1", disp_max=0.010, carry_release_goal=True)
+LOCK_RULE_V2 = LockConfig(version="v2", carry_release_goal=True)
+LOCK_RULE_V3 = LockConfig(version="v3", carry_release_goal=False)
+LOCK_RULES = {"v1": LOCK_RULE_V1, "v2": LOCK_RULE_V2, "v3": LOCK_RULE_V3}
 LOCK_RULE_NAMES = {"v1": "stance band + stillness (10 mm / 0.8 s)",
-                   "v2": "stance band only"}
+                   "v2": "stance band only",
+                   "v3": "stance band only, carry-release at pickup only"}
 
 
 def lock_rule_meta(cfg: "LockConfig") -> dict:
@@ -198,6 +221,9 @@ def lock_config_from_meta(meta: Optional[dict]) -> "LockConfig":
     kw = {f.name: rule[f.name] for f in fields(LockConfig) if f.name in rule}
     if kw.get("disp_max") is None:
         kw["disp_max"] = float("inf")
+    # Written before the field existed (every v1/v2 episode up to 2026-10-24):
+    # the carry release then applied at every lock.
+    kw.setdefault("carry_release_goal", True)
     cfg = LockConfig(**kw)
     known = LOCK_RULES.get(cfg.version)
     if known is not None and cfg != known:
@@ -238,6 +264,9 @@ class LockPredicate:
         self._run = 0
         self.n_lock = 0
         self.n_release = 0
+        #: Was the box welded when the CURRENT lock engaged? (v3: a welded lock
+        #: is the goal lock, which the carry release does not apply to.)
+        self.locked_welded = False
 
     # ---- terms ---------------------------------------------------------
     def terms(self, state) -> dict:
@@ -291,6 +320,8 @@ class LockPredicate:
     def release_ok(self, t: dict) -> bool:
         c = self.cfg
         if t["welded"]:
+            if self.locked_welded and not c.carry_release_goal:
+                return False                              # v3: goal lock holds
             return bool(t["box_lift"] >= c.lift_min)      # carrying: legs take over
         return bool(t["to_goal"] <= c.done_radius
                     and abs(t["box_lift"]) <= c.rest_tol
@@ -309,6 +340,7 @@ class LockPredicate:
         self.locked = not self.locked
         if self.locked:
             self.n_lock += 1
+            self.locked_welded = bool(t["welded"])
             return "lock"
         self.n_release += 1
         return "release"
