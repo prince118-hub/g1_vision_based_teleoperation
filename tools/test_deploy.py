@@ -426,6 +426,27 @@ def test_episode_metrics_in_a_deployed_episode():
     assert res["closest_box_goal_m"] <= res["final_box_goal_m"]
 
 
+def test_scripted_walkin_is_the_demonstrators_walkin():
+    """Item 44 diagnostic. Up to the first lock the scripted walk-in IS the
+    demonstrator: states and logged actions bit-identical to the recording, and
+    the lock fires on the recorded tick. (The policy here is a replay; its
+    walk-in outputs are discarded, so only the controller is being tested.)"""
+    from g1_data.phases import lock_config_from_meta
+    from g1_data.recorder import load_episode
+    path, _, loco = _recorded()
+    rec, meta = load_episode(path)
+    lk = meta["lock_engage_tick"]
+    res, arr = D.deploy_episode(SEED, D.ReplayPolicy(path), loco=loco, max_ticks=lk + 2,
+                                early_success=False, raw_actions=True,
+                                lock_rule=lock_config_from_meta(meta), walkin="scripted")
+    assert res["lock_ticks"][0] == lk and res["scripted_walkin_ticks"] == lk
+    assert np.array_equal(arr["states"][:lk + 1].astype(np.float32), rec["states"][:lk + 1])
+    assert np.array_equal(arr["actions"][:lk].astype(np.float32), rec["actions"][:lk])
+    assert res["walkin"] == "scripted"
+    _raises(ValueError, D.deploy_episode, SEED, D.ReplayPolicy(path), loco=loco, max_ticks=1,
+            walkin="teleport")
+
+
 # ─── seeds (open item 38) ────────────────────────────────────────────────────
 def test_selection_uses_its_own_seed_file():
     a = argparse.Namespace(seed_list=None, seeds=DS.SELECT_SEEDS)
