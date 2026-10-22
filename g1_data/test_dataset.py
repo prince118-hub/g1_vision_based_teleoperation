@@ -472,8 +472,14 @@ def test_repo_relpath_survives_a_cross_drive_path():
 
     got = repo_relpath(other)
     assert isinstance(got, str) and got, got
-    assert os.path.isabs(got) or not got.startswith(".."), got
 
+    if os.name != "nt":
+        # POSIX has no drive letters: relpath cannot raise, and a path outside
+        # the repo legitimately comes back as "../..". What must hold there is
+        # that it still names the same file.
+        assert os.path.normpath(os.path.join(ROOT, got)) == os.path.abspath(other), got
+    else:
+        assert os.path.isabs(got) or not got.startswith(".."), got
     if os.name == "nt":
         # the guarded branch is real on this platform, and IS the branch taken
         _raises(ValueError, os.path.relpath, other, ROOT)   # relpath-ok: the point
@@ -661,10 +667,12 @@ def test_every_registered_source_declares_whether_it_is_real():
         assert isinstance(src, str) and src
         assert set(info) == {"label", "real"}, info
         assert isinstance(info["real"], bool)
-    # Neither entry point that exists today produces real demonstrations, so
-    # nothing can currently route into data/raw/train. That is correct: no human
-    # demonstration has been collected yet.
-    assert not any(i["real"] for i in REC.SOURCES.values())
+    # Exactly ONE source produces real demonstrations: the live recorder with
+    # the camera (tools/record_teleop_live.py, 2026-10-22). Its fake-camera mode
+    # is a separate, non-real source, so a dry run can never route into training.
+    real = sorted(s for s, i in REC.SOURCES.items() if i["real"])
+    assert real == [REC.SOURCE_TELEOP_LIVE], real
+    assert REC.SOURCES[REC.SOURCE_TELEOP_LIVE_FAKE]["real"] is False
 
 
 def test_unknown_source_is_refused_not_guessed():

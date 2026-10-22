@@ -101,6 +101,12 @@ def _episode():
     return _CACHE["ep"]
 
 
+def _abs(p: str) -> str:
+    """A ledger / metadata path (repo-relative, or absolute off the repo's
+    drive - g1_data.paths.repo_relpath) back to an absolute path."""
+    return os.path.normpath(p if os.path.isabs(p) else os.path.join(ROOT, p))
+
+
 def _npz_under(d):
     return sorted(glob.glob(os.path.join(d, "**", "*.npz"), recursive=True))
 
@@ -177,6 +183,24 @@ def test_recording_changes_nothing_step_for_step():
     out = os.path.join(_tmp(), "invariance")
     assert RT.main(_argv(out, _grasp_script(12.0), extra=["--invariance"])) == 0
     assert not _npz_under(out), "--invariance must write no episode"
+
+
+def test_invariance_check_catches_a_recorder_that_writes():
+    """Negative control: a recorder that nudges one velocity by 1e-9 on one tick
+    must make --invariance fail, or the check above proves nothing."""
+    out = os.path.join(_tmp(), "invariance_neg")
+    real = RT.LiveRecorder._observe_teleop
+
+    def leaky(self, m, d, L):
+        real(self, m, d, L)
+        if self.buf is not None and len(self.buf) == 50 and not getattr(self, "_leaked", False):
+            self._leaked = True
+            d.qvel[0] += 1e-9
+    RT.LiveRecorder._observe_teleop = leaky
+    try:
+        assert RT.main(_argv(out, "4.0:e", extra=["--invariance"])) == 1
+    finally:
+        RT.LiveRecorder._observe_teleop = real
 
 
 # ─── the saved file ──────────────────────────────────────────────────────────
@@ -266,8 +290,7 @@ def test_metadata_is_complete():
     assert meta["termination"]["max_ticks"] == 900
     assert meta["weld_engage_tick"] > meta["lock_engage_tick"] >= 0
     assert len(meta["reset_fingerprint"]) == 32
-    kp = os.path.join(ROOT, meta["keypoints_file"]) if not os.path.isabs(meta["keypoints_file"]) \
-        else meta["keypoints_file"]
+    kp = _abs(meta["keypoints_file"])
     from g1_teleop.synthetic_source import load_recording
     rec = load_recording(kp)
     assert len(rec) > 0 and rec.meta["seq_at_arm"] == 0
@@ -278,8 +301,7 @@ def test_raw_keypoints_replay_to_the_frames_the_arms_used():
     is the s-th delivered row, and those rows equal the take's frames."""
     _, _, arrays, meta = _episode()
     from g1_teleop.synthetic_source import load_recording
-    kp = load_recording(os.path.join(ROOT, meta["keypoints_file"])
-                        if not os.path.isabs(meta["keypoints_file"]) else meta["keypoints_file"])
+    kp = load_recording(_abs(meta["keypoints_file"]))
     take = load_recording(_take()[0])
     seq = arrays["frame_seq"]
     assert (np.diff(seq) >= 0).all() and seq.max() > 0
@@ -297,7 +319,8 @@ def test_ledger_rows_for_a_failed_and_a_discarded_episode():
     s, d = rows[0], rows[2]
     assert s["source"] == "teleop_live_fake" and s["lock_rule"] == "v2" and s["operator"] == "tester"
     assert d["seed"] == SEED and d["reason"].startswith("failed")
-    assert os.path.join(ROOT, d["saved"]) == path or d["saved"] == path
+    assert _abs(d["saved"]) == os.path.normpath(path)
+    assert os.path.exists(_abs(d["keypoints"]))
     assert d["checks"]["grasp"] is True and d["checks"]["place"] is False
     led = EpisodeLedger(os.path.join(out, "ledger.jsonl"))
     assert led.pending([SEED]) == [SEED], "a failed seed stays pending (re-recordable)"
@@ -359,8 +382,7 @@ def test_dropout_ticks_are_marked_and_the_arms_hold():
     d = np.abs(np.diff(arrays["actions"][lo + 2:hi - 1, :14], axis=0)).max()
     assert d == 0, d
     from g1_teleop.synthetic_source import load_recording, STATUS_NO_BODY
-    kp = load_recording(os.path.join(ROOT, meta["keypoints_file"])
-                        if not os.path.isabs(meta["keypoints_file"]) else meta["keypoints_file"])
+    kp = load_recording(_abs(meta["keypoints_file"]))
     assert int((kp.status == STATUS_NO_BODY).sum()) == 50
 
 
