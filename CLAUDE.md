@@ -20,7 +20,7 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, `tools/record_teleop_live.py`): next `docs/LIVE_RECORDING_CHECKLIST.md` with the ZED.
+**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, merged, fake-tested): `docs/LIVE_RECORDING_CHECKLIST.md` steps 2–5 BLOCKED - no ZED available (2026-10-24).
 scripted_v3 (rule v2) survey 14/300; **lock rule v3 is the default** (ACT 2→5, LSTM 3→5 /20). FREEZE 2026-10-23: no walk-in fix, no release gate, β 10 (`NOTES.md`). g1-spec-1.2.0 refuses 1.1.0. ONE heavy process at a time.
 
 ## 3. Full pipeline (end to end)
@@ -96,7 +96,7 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
-- 2026-10-24 — **LOCK RULE v3 = DEFAULT** (`LockConfig()`; deploy `--lock-rule` default v3; new scripted recordings): the carry release (welded box > 0.055 m up) applies at the PICKUP lock only — at the goal it dropped the lock and the base walked off (ACT-160 2→5/20, ACT-LSTM-160 3→5/20, none lost). 4/200 scripted_v3 demos differ under v3 (seeds 6, 14, 146, 206). v1/v2 selectable; stored rules without the field read as v1/v2. Teleop keeps LOCK_RULE_V2 until PR #2. `NOTES.md` 2026-10-24b.
+- 2026-10-24 — **LOCK RULE v3 = DEFAULT** (`LockConfig()`; deploy `--lock-rule` default v3; new scripted recordings): the carry release (welded box > 0.055 m up) applies at the PICKUP lock only — at the goal it dropped the lock and the base walked off (ACT-160 2→5/20, ACT-LSTM-160 3→5/20, none lost). 4/200 scripted_v3 demos differ under v3 (seeds 6, 14, 146, 206). v1/v2 selectable; stored rules without the field read as v1/v2. Teleop on v3 too since PR #2 merged (2026-10-24). `NOTES.md` 2026-10-24b.
 - 2026-10-18 — **g1-spec-1.2.0: `base_locked` state dim 47, REVERSING 2026-09-11 (c)** (Charles): demonstrator and operator condition on the
   lock ("do not reach until LOCKED"), so the learner must see it (Swamy et al. 2022, NeurIPS: share the state the expert acts on). Symptom: ACT
   (v2) opened its arms 39–53 ticks before the lock, 1 mm from a training spawn — timing, not coverage. One builder: recorder and `deploy.observe`.

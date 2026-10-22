@@ -73,7 +73,7 @@ python -c "import glob,json; from g1_data.recorder import load_episode; p=sorted
 
 Also, during that session, check by eye and write down:
 - the HUD shows `REC teleop-live seed 0 tick n/900` and the lock indicator
-  (`lock rule v2 needs: fwd ... lat ... head ...`, `LOCKED` once locked) in the MINIMAL view;
+  (`lock rule v3 needs: fwd ... lat ... head ...`, `LOCKED` once locked) in the MINIMAL view;
 - pressing `b` while recording prints `b ignored: B-prime cannot change while recording`
   and B-PRIME stays ON; the episode's `d18.toggle_blocked_attempts_s` lists the press;
 - step out of frame for ~2 s: `TRACKING LOST` appears, the arms hold, and the saved
@@ -125,7 +125,7 @@ type recordings\live_check_full\ledger.jsonl
 - `DS.assert_successful` does not raise; `outcome.placement_error` ≤ 0.10 m;
 - `replay_check`: `reset fingerprint matched 1/1` and `MANIPULATION reproduced 1/1`. The
   whole task is NOT expected to reproduce open loop (the walk; NOTES 2026-09-16);
-- `spec_version` g1-spec-1.2.0, `lock_rule.version` v2, `grip_label` next_weld_v1,
+- `spec_version` g1-spec-1.2.0, `lock_rule.version` v3 (the default since 2026-10-24), `grip_label` next_weld_v1,
   `contact_contract` equal to the scripted episodes', `source` teleop_live, `operator` set.
 
 A failed attempt is in `failed/` with a `discard` ledger row; the reason is in

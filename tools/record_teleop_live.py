@@ -346,7 +346,7 @@ class EpisodeHooks(RIC.LoopHooks):
         RIC.text(img, "e stop+save   x discard   q quit (saves)", (10, RIC.PANEL_H - 148),
                  0.5, RIC.GREY)
         if not S.overlay_full:
-            # the lock indicator ("lock rule v2 needs: ..." / "LOCKED"); the FULL
+            # the lock indicator ("lock rule v3 needs: ..." / "LOCKED"); the FULL
             # view already draws it as its first two lines
             RIC.draw_lock_status(img, 10, RIC.PANEL_H - 120, st)
 

@@ -7294,3 +7294,30 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
 - **No release gate.** The policy's lower/release at the goal is not gated on the lock; the "released before the
   goal lock" failures stay in the results as measured (failure attribution, NOTES 2026-10-24/24b).
 - **beta = 10 kept** for ACT / ACT-LSTM (O32: the latent collapse on scripted data is expected, not tuned).
+
+## 2026-10-24d — PR #2 (live-recorder) tested without the camera, merged, teleop on lock rule v3
+
+- `git merge main` into live-recorder: conflicts only in CLAUDE.md §2 and NOTES.md (both kept). Semantic conflict:
+  the live recorder's `--lock-rule` defaults to `LockConfig().version`, now v3; two tests hardcoded v2 (fixed, 7d6e662).
+- Suites on this Windows laptop: all pass; tools/test_record_teleop_live.py 17/17 incl.
+  test_split_main_is_the_old_main_step_for_step (ran, not skipped); test_act 47/47 incl. the pinned-torch golden
+  (exit code 127 at interpreter exit, pre-existing).
+- Checklist step 0 (path fallback) PASSES: paths resolve inside this checkout, no env vars set.
+- Windowed `--source fake` dry run (`recordings/keypoints/fake_grasp_s0.npz` from `--make-fake-take`, seed 0,
+  `--start-standoff 0.32`): the window opens (7-8 s), REAL keystrokes sent to it work - ENTER starts, `b` is blocked
+  and logged (`d18.toggle_blocked_attempts_s` [4.278]), `e` stops and saves (133 ticks, operator_stop); the FAILED
+  verdict prints; both episodes load (spec 1.2.0, lock rule v3, next_weld_v1, source teleop_live_fake, operator,
+  contact contract == scripted_v3's); `assert_successful` refuses them; ledger rows correct; tick rate 24.98 / 24.84 Hz.
+  Caveats: `--script` keys are dispatched only on the headless sim clock (as its help says), and in a window the fake
+  take plays on WALL time from session open (idle screen included), so a windowed fake episode cannot complete the
+  task - the full fake task is covered headless by the suite. No real data recorded.
+- Merged into main (944bced). Teleop switched to the default rule: `run_integrated_combined.py` now uses
+  `LockConfig()` (v3); the live recorder already defaulted to it. Checklist text updated to v3.
+- The commit message of 0c5e5e2 ("WIP, untested") was NOT rewritten: it is on the pushed PR branch, and rewording
+  would need a history rewrite and a force push. The merge commit message records that it is now tested.
+- STILL NEEDS THE REAL ZED (docs/LIVE_RECORDING_CHECKLIST.md): step 2 (camera provenance, tick rate, overruns,
+  dropout with a person in frame, HUD/TRACKING LOST by eye), step 3 (invariance on a REAL take), step 4 (a full
+  successful teleop episode, loaded and replay-checked), step 5 (report). Step 1 passed here (this is the laptop).
+  **BLOCKED: Charles does not have the ZED 2i at present (2026-10-24)** - steps 2-5 wait until the camera is
+  available; nothing in them can be substituted by the fake source (camera provenance, real tick rate and dropout,
+  a real take, a real operator).

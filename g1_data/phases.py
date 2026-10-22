@@ -159,7 +159,8 @@ class LockConfig:
           still succeeds (placement 0.0418 vs 0.0412 m). Seeds 0-5, 7-9 are
           bit-identical (2026-10-24). THE DEFAULT since 2026-10-24
           (`LockConfig()` = v3): new scripted recordings and tools/deploy.py.
-          Teleop still passes LOCK_RULE_V2 explicitly until PR #2 is merged.
+          Teleop (run_integrated_combined.py, record_teleop_live.py) too, since
+          PR #2 was merged (2026-10-24).
 
     Each threshold has a measured margin at the transition it governs (module
     docstring). `lift_min` is the only one tied to another config value: it is

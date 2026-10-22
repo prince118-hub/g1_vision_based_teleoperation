@@ -80,7 +80,7 @@ from g1_teleop.grasp import GraspWeld
 from g1_teleop.base_lock import BaseLock
 from g1_teleop import contact_contract as CC
 from g1_data import spec
-from g1_data.phases import LOCK_RULE_V2, LockPredicate, PlatformGeometry
+from g1_data.phases import LockConfig, LockPredicate, PlatformGeometry
 from locomotion_input import (PelvisVelocity, LeanJoystick, KeyboardCommand,
                               KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT)
 
@@ -366,7 +366,7 @@ def draw_minimal_panel(img, st):
 
 def draw_lock_status(img, x, y, st, dy=24):
     """The lock indicator: LOCKED / BASE FREE, then what the rule in force needs
-    ("lock rule v2 needs: ...") or what releases it. Two lines; returns the y
+    ("lock rule v3 needs: ...") or what releases it. Two lines; returns the y
     below them. The first two lines of the FULL panel, and drawn on its own by
     tools/record_teleop_live.py so the operator sees it in the MINIMAL view too."""
     t, lc = st["terms"], st["lcfg"]
@@ -644,10 +644,11 @@ def open_session(args, source=None, sim_clock=None):
     # Base lock (D12), driven by the demonstrator's state predicate.
     base_lock = BaseLock(model)
     sp = spec.SpecLayout.resolve(model, ix)
-    # Lock rule v2 (stance band only, 2026-10-17) - the same rule the scripted
-    # demonstrator and deploy.py use. TeleopRecorder stores it per episode. The
-    # live recorder sets `S.lock_rule` from its --lock-rule before the loop.
-    S.lock_rule = LOCK_RULE_V2
+    # The DEFAULT lock rule, LockConfig() = v3 since 2026-10-24 (carry release at
+    # the pickup lock only) - the same rule the scripted demonstrator and
+    # deploy.py use. TeleopRecorder stores it per episode. The live recorder
+    # sets `S.lock_rule` from its --lock-rule before the loop.
+    S.lock_rule = LockConfig()
     S.plat_geo = PlatformGeometry.resolve(model)
     wrist_ids = [(int(model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n)]),
                   mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, n), n) for n in WRIST_JOINTS]
