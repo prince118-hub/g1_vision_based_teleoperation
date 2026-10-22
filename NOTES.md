@@ -7129,3 +7129,25 @@ late.
   folders, appending to the same `summary.txt`. It waits (every 5 min) until no `train_bc.py` process exists on two
   checks 60 s apart AND the main launcher has finished - read from `summary.txt`, because that launcher's window was
   started with `-NoExit` and outlives the script.
+
+## 2026-10-23 — scripted_v3 survey (selection seeds 679-701, lock rule v2, deploy commit fdabaab)
+
+Training: all five runs finished (ACT/ACT-LSTM hard_cap 200k, 267-283 min each; BC 300 epochs, 167 min).
+Offline: deployment recon / train ambiguity ratio - BC-160 0.0254 (1.99), ACT-160 0.0364 (1.52), ACT-LSTM-160
+0.0318 (1.33), ACT-n40 0.0284 (0.92), ACT-LSTM-n40 0.0259 (0.84); final val 0.0257 / 0.0384 / 0.0339 / 0.0405 /
+0.0373; KL 1.1-1.4e-5 (latent collapsed again, O32). Val still falling at 200k for every ACT run.
+Closed loop, 20 seeds per checkpoint (success counts): ACT-160 60k/120k/200k 1/1/2; ACT-LSTM-160 0/3/2;
+ACT-n40 0/0/2; ACT-LSTM-n40 0/2/1; BC-160 e120/e240/last 0/0/0. Total 14/300 (v2: 3/180, other seeds).
+- New diagnostic (fdabaab): `push_tick` / `push_vs_lock`. ACT pushes > 5 cm before the weld in 8-13/20 per
+  checkpoint; with base_locked most of these are "before" the lock or "no lock" (walk-in), few "after".
+- ACT still locks LATE: median first lock tick 107-135 (demonstrator 36-42); 70-85% of episodes lock at all.
+- ACT failures moved downstream: 99 TRANSPORT failures, 88 of them with a goal lock and a release after a
+  median 256 ticks welded; the box ends a median 0.47 m from the goal (successes 0.038-0.093 m) - released
+  off the goal platform and dropped. PLACE failures: released, upright, 0.10-0.30 m off.
+- BC now LOCKS like the demonstrator (median tick 36-37 at e240/last) and at `last` commands the gripper in
+  13/20 episodes (12-21 ticks after the lock; v2 BC never commanded it), but the weld gate refuses: palms
+  0.35-0.58 m from the box, separation 0.39-0.46 m. BC reaches nowhere near the box; 18/20 push it after the lock.
+- n40 vs 160: no clear difference at 20 seeds (successes 5 vs 9 over the 12 ACT checkpoints; SE ~ 2-3 each).
+- Videos (9, one success + one typical failure per model's best checkpoint) in D:/thesis_videos/deploy_survey_v3;
+  re-runs bit-identical to the survey (trajectory sha256 9/9). Text results backed up to
+  D:/thesis_backup/scripted_v3/runs (57 files). The survey ran through two laptop sleeps (wall time only).

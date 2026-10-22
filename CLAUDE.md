@@ -22,7 +22,7 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 **None. P1–P4 CLOSED** (PLAN.md; P4 qualified, §8 2026-09-29). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser).
 Closed loop: v1 2/180, v2 3/180; **g1-spec-1.2.0 (§8 2026-10-18) REFUSES every 1.1.0 file and run** (v1/v2 = evidence, `D:\thesis_backup\`).
-**scripted_v3 READY** (d2cc417; 200/208, 160/40 + nested 40, `D:\thesis_backup\scripted_v3`). **Training:** n40 runs via `train_scripted_v3.ps1`, then the 160 runs via `train_scripted_v3_rest.ps1` (waits); then `deploy.py --selection`. ONE heavy process at a time.
+**scripted_v3 TRAINED + SURVEYED** (`runs/scripted_v3/deploy_survey`, seeds 679–701): 14/300, best ACT-LSTM-160 120k 3/20; BC 0/60 (locks, gate refuses); ACT fails at TRANSPORT (dropped off the goal). `NOTES.md` 2026-10-23.
 
 ## 3. Full pipeline (end to end)
 
