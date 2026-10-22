@@ -7221,3 +7221,12 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
   together with scripted_v3 (v2). Policies trained on scripted_v3 are evaluated under v3 by default (deploy prints
   the rule-mismatch warning); pass `--lock-rule v2` to reproduce the 2026-10-23 survey.
 - The slow v2 adoption test now forces LOCK_RULE_V2 explicitly.
+
+## 2026-10-23 — FREEZE decisions (Charles), recorded 2026-10-24
+
+- **Teleop switches to lock rule v3 after PR #2** (live-recorder) is merged; until then it keeps LOCK_RULE_V2.
+- **No walk-in fix.** Noise injection (DART-style recoveries in the demonstrations) is DROPPED. The scripted
+  walk-in (`deploy --walkin scripted`) is a DIAGNOSTIC only - never an evaluation condition or a reported result.
+- **No release gate.** The policy's lower/release at the goal is not gated on the lock; the "released before the
+  goal lock" failures stay in the results as measured (failure attribution, NOTES 2026-10-24/24b).
+- **beta = 10 kept** for ACT / ACT-LSTM (O32: the latent collapse on scripted data is expected, not tuned).
