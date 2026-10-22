@@ -580,6 +580,15 @@ def test_checkpoint_round_trips_to_identical_predictions():
 #: `base_locked` (48-D), and the claim this guards - `use_lstm=False` is the old
 #: model to the bit - is about the architecture, not the input width.
 _GOLDEN_STATE_DIM = 47
+#: The torch builds the golden VALUES hold on. Seeded init draws through torch's
+#: own RNG and kernels, so another torch version (a fresh Linux CPU machine with
+#: PyPI's latest, 2026-10-22) initialises different weights from the same seed:
+#: the hash and the outputs are a property of the build, not of the code. There
+#: the test checks the architecture (tensor and parameter counts) and says so;
+#: on a pinned build - the NVIDIA laptop's 2.11.0+cu126 (requirements.txt,
+#: CLAUDE.md section 8 2026-09-28) - it checks every value exactly as before.
+#: "2.14.0" is the build the comment above records the values on.
+_GOLDEN_TORCH = ("2.11.0+cu126", "2.14.0")
 _GOLDEN_ACT = {
     1: dict(n_tensors=120, n_params=300758,
             state_sha256="edd0a9cd6b69b4e3b3179bdfb4b93c44cf11a824094bf30f8b71337b5cb74c06",
@@ -626,10 +635,17 @@ def test_use_lstm_false_is_act_exactly_as_it_was_before_the_flag():
     The parameters are compared EXACTLY. The output is compared to 1e-6: it is
     bit-identical on the machine that recorded it, but a different BLAS build
     may differ in the last bits of a matmul with the same weights."""
+    pinned = torch.__version__ in _GOLDEN_TORCH
+    if not pinned:
+        print("      (state_sha256 and output values NOT checked: torch %s is not a "
+              "pinned build %s; architecture checked)" % (torch.__version__, _GOLDEN_TORCH))
     for W, want in _GOLDEN_ACT.items():
         for got in (_fingerprint(W), _fingerprint(W, use_lstm=False)):
-            for k in ("n_tensors", "n_params", "state_sha256"):
+            for k in ("n_tensors", "n_params"):
                 assert got[k] == want[k], (W, k, got[k], want[k])
+            if not pinned:
+                continue
+            assert got["state_sha256"] == want["state_sha256"], (W, got["state_sha256"])
             for k in ("out_fsum", "out_abs_fsum"):
                 assert abs(got[k] - want[k]) < 1e-6 * max(1.0, abs(want[k])), \
                     (W, k, got[k], want[k])

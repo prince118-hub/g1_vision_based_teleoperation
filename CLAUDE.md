@@ -20,13 +20,13 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). g1-spec-1.2.0 refuses 1.1.0.
-scripted_v3 (lock rule v2) survey 14/300; **lock rule v3 is the default** (deploy, new scripted recordings; ACT 2→5, LSTM 3→5 /20); teleop stays v2 until PR #2. `--walkin scripted` diagnostic 8–10/20. Next: decide walk-in + release fixes. ONE heavy process at a time.
+**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, `tools/record_teleop_live.py`): next `docs/LIVE_RECORDING_CHECKLIST.md` with the ZED.
+scripted_v3 (rule v2) survey 14/300; **lock rule v3 is the default** (ACT 2→5, LSTM 3→5 /20). FREEZE 2026-10-23: no walk-in fix, no release gate, β 10 (`NOTES.md`). g1-spec-1.2.0 refuses 1.1.0. ONE heavy process at a time.
 
 ## 3. Full pipeline (end to end)
 
 ```
-[EXISTS] ZED (30 Hz, BODY_38) -> One-Euro -> scaling -> DLS IK -> arms; waist pinned | KeyboardCommand -> LSTM policy -> legs; 500 Hz physics
+[EXISTS] ZED (30 Hz, BODY_38) -> One-Euro -> scaling -> DLS IK -> arms; waist pinned | KeyboardCommand -> LSTM policy -> legs; 500 Hz physics -> tools/record_teleop_live.py (fake-tested only)
 [EXISTS] WELD grasp (D11) + base lock (D12) + B-prime exclusion (D18) + seeded spawn; teleop under stepped physics, full task by a live operator
 [EXISTS] scripted demonstrator (g1_data/scripted_demo.py) 12/12 and 40/40; g1_data/spec.py at g1-spec-1.2.0 (2026-10-18)
 [EXISTS] recorder @25 Hz -> success detection -> offline phase labels -> dataset -> loader -> shared train loop + masked-L1 loss -> neighbour-ambiguity gate -> BC and chunked BC (ONE class, K=1 vs K>1; overfit-10 PASS 0.632 / 0.718 at W_o = 12): g1_data/{recorder,success,phase_label,dataset}.py + g1_model/{loader,train,ambiguity,models}.py
