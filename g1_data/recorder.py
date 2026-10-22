@@ -82,10 +82,19 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # into training, which is the failure this registry exists to prevent.
 SOURCE_SCRIPTED = "scripted_demo.run_episode"
 SOURCE_TELEOP_FIXTURE = "run_integrated_combined --synthetic grasp"
+#: tools/record_teleop_live.py with the ZED 2i: a live operator, closed loop.
+#: The only source that produces REAL demonstrations.
+SOURCE_TELEOP_LIVE = "teleop_live"
+#: The same tool with `--source fake --replay <take.npz>`: a recorded or
+#: synthetic keypoint stream played open loop into the same pipeline. Even a
+#: replayed REAL take is not a demonstration - nobody was closing the loop.
+SOURCE_TELEOP_LIVE_FAKE = "teleop_live_fake"
 
 SOURCES = {
-    SOURCE_SCRIPTED:       dict(label="scripted", real=False),
-    SOURCE_TELEOP_FIXTURE: dict(label="teleop-fixture", real=False),
+    SOURCE_SCRIPTED:         dict(label="scripted", real=False),
+    SOURCE_TELEOP_FIXTURE:   dict(label="teleop-fixture", real=False),
+    SOURCE_TELEOP_LIVE:      dict(label="teleop-live", real=True),
+    SOURCE_TELEOP_LIVE_FAKE: dict(label="teleop-live-fake", real=False),
 }
 
 
@@ -100,10 +109,13 @@ SOURCES = {
 LEDGER_NAME = "ledger.jsonl"
 NS_SCRIPTED = os.path.join(ROOT, "recordings", "episodes")
 NS_COLLECTION = os.path.join(ROOT, "recordings", "demonstrations")
+#: `record_teleop_live.py --source fake`: dry runs of the live recorder.
+NS_TELEOP_FAKE = os.path.join(ROOT, "recordings", "teleop_fake")
 
 NAMESPACES = {
-    NS_SCRIPTED:   dict(real=False, what="scripted-demonstrator episodes"),
-    NS_COLLECTION: dict(real=True,  what="real teleoperated demonstrations"),
+    NS_SCRIPTED:    dict(real=False, what="scripted-demonstrator episodes"),
+    NS_COLLECTION:  dict(real=True,  what="real teleoperated demonstrations"),
+    NS_TELEOP_FAKE: dict(real=False, what="live-recorder dry runs on a fake camera"),
 }
 
 
@@ -246,14 +258,26 @@ class EpisodeBuffer:
     def __len__(self) -> int:
         return len(self.states)
 
-    def save(self, path: str, meta: dict) -> str:
+    def save(self, path: str, meta: dict, extra: Optional[dict] = None) -> str:
         """Write the episode. Float32 arrays, JSON metadata.
 
         The gripper action dims are relabelled here, once, for every entry
         point (`spec.grip_label_next_weld`); a caller cannot choose another
-        label."""
+        label.
+
+        `extra`: additional PER-TICK audit arrays. Only names declared in
+        `OPTIONAL_PER_TICK_ARRAYS` are accepted, so `assert_tick_lengths`
+        checks them on every load; each must have one row per tick."""
         if not self.states:
             raise ValueError("refusing to write an episode with no ticks")
+        extra = dict(extra or {})
+        for k, v in extra.items():
+            if k not in OPTIONAL_PER_TICK_ARRAYS or k in ("tracking_ok", "grip_cmd"):
+                raise ValueError("extra array %r is not a declared optional per-tick "
+                                 "array (%s)" % (k, ", ".join(OPTIONAL_PER_TICK_ARRAYS)))
+            if len(v) != len(self.states):
+                raise EpisodeLengthError("extra array %r has %d row(s), the episode "
+                                         "%d tick(s)" % (k, len(v), len(self.states)))
         if meta.get("grip_label", spec.GRIP_LABEL) != spec.GRIP_LABEL:
             raise ValueError("grip_label is set by the recorder (%r), not by the "
                              "caller (%r)" % (spec.GRIP_LABEL, meta["grip_label"]))
@@ -280,6 +304,7 @@ class EpisodeBuffer:
             meta=np.array(json.dumps(m)))
         if self.measures_tracking:
             arrays["tracking_ok"] = np.asarray(self.tracking, dtype=np.uint8)
+        arrays.update({k: np.asarray(v) for k, v in extra.items()})
         np.savez_compressed(path, **arrays)
         return path
 
@@ -356,7 +381,11 @@ PER_TICK_ARRAYS: Tuple[str, ...] = (
 )
 #: `grip_cmd` (spec 1.2.0) is present in every 1.2.0 file; optional here only so
 #: that `tools/convert_grip_label.py` can length-check a 1.1.0 source.
-OPTIONAL_PER_TICK_ARRAYS: Tuple[str, ...] = ("tracking_ok", "grip_cmd")
+#: `frame_seq` / `tick_wall_ns` (tools/record_teleop_live.py): per tick, the
+#: grabber sequence number of the camera frame the arm command came from (an
+#: index into the episode's raw keypoint file) and the host monotonic clock.
+OPTIONAL_PER_TICK_ARRAYS: Tuple[str, ...] = ("tracking_ok", "grip_cmd",
+                                             "frame_seq", "tick_wall_ns")
 
 
 def assert_tick_lengths(arrays: dict, meta: Optional[dict] = None,
@@ -609,7 +638,10 @@ class ScriptedRecorder:
 
 
 class TeleopRecorder(ScriptedRecorder):
-    """The same recorder, attached to `run_integrated_combined.main` instead.
+    """The same recorder, attached to `run_integrated_combined.run_loop` instead
+    (the loop `main()` runs; split out of `main` on 2026-10-22 so the live
+    recorder can run it once per episode - the local names it reads are
+    unchanged).
 
     Teleop episodes have NO ground-truth phase column - the operator does not run
     a phase machine - so `phase_labels` is written as `Phase.UNKNOWN` and the
@@ -623,7 +655,7 @@ class TeleopRecorder(ScriptedRecorder):
     no reset fingerprint to capture and the field is left empty rather than faked.
     """
 
-    FRAME = "main"
+    FRAME = "run_loop"
     #: The teleop loop's `arm_stale` is a real measurement (O28).
     MEASURES_TRACKING = True
 
