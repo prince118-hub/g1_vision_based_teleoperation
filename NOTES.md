@@ -7151,3 +7151,30 @@ ACT-n40 0/0/2; ACT-LSTM-n40 0/2/1; BC-160 e120/e240/last 0/0/0. Total 14/300 (v2
 - Videos (9, one success + one typical failure per model's best checkpoint) in D:/thesis_videos/deploy_survey_v3;
   re-runs bit-identical to the survey (trajectory sha256 9/9). Text results backed up to
   D:/thesis_backup/scripted_v3/runs (57 files). The survey ran through two laptop sleeps (wall time only).
+
+## 2026-10-24 — scripted_v3 analysis: stage-wise rates, walk-in timing, goal phase, ensemble horizon, training seeds
+
+All deploy-only; files in `runs/scripted_v3/analysis/` (backed up to D:/thesis_backup/scripted_v3/runs/analysis).
+Per-tick re-runs of ACT-160 200k and ACT-LSTM-160 120k on the 20 selection seeds reproduce the survey exactly
+(trajectory sha256 40/40); the demonstrator was run on the same seeds.
+- **Stage-wise** (`stagewise_survey.txt`): ACT models grasp 55-70% and lift the same, transport 5-40%, place
+  0-15%; mean placement error 0.59-0.85 m (successes 0.04-0.09 m). BC 0% beyond one grasp.
+- **Walk-in**: the reach starts at a fixed DISTANCE, not a fixed time - fwd to the box 0.33 m (SD 4-9 mm),
+  onset tick 33-38 and corr(initial distance, onset) +0.98/+0.99; the demonstrator starts at lock + 2 (tick
+  34-50, fwd 0.31). But at onset the policy is |lat| 0.125 m and |head| 21 deg off the box (16-17/20 outside the
+  band), the demonstrator 5 mm and 0.9 deg. The lock cannot fire, the arms are already out, the base keeps
+  correcting: median pre-weld push 44-48 mm (>50 mm in 8-9/20; demonstrator 0 mm). First lock median 112/122.
+- **Goal phase** (`goal_lock_mechanism.txt`): (a) 9-10/20 release DURING the carry, before any goal lock - box
+  lowered to platform height (0.003-0.007 m above rest) but 0.27-0.38 m from the goal, base 0.31-0.55 m from it;
+  the weld is held 250-258 ticks, like the demonstrator's 261, so the lower/release runs on its own schedule,
+  not on the lock. (b) 4/20 each: the goal lock fires with the box still 0.07-0.10 m above rest, and the lock
+  rule's carry-release (welded and box_lift >= lift_min 0.055 m) drops it after 5 ticks; the base walks off and
+  the box is released 0.14-0.82 m away. The demonstrator always arrives lowered (0.011-0.039 m) and its goal lock
+  holds 94-97 ticks. Stance at a held goal lock is fine.
+- **`--ensemble-horizon N`** (commit 8c3b3ee; header `ensemble_horizon`): N = 100/50/25/10 gives ACT-160
+  2/2/3/2 and ACT-LSTM-160 3/5/2/3 of 20; lock tick and pushes unchanged. No effect beyond noise; keep the default.
+- **Training seeds** (20 of the 160, `--allow-train-seeds`): ACT-160 2/20, ACT-LSTM-160 0/20 - no better than the
+  selection seeds. Not a generalization gap: the closed loop fails on states the demonstrator never visits
+  (covariate shift; the scripted demonstrator never shows a recovery from a lateral/heading error).
+- Open item 40: traces `analysis/traces/` - ACT-LSTM-160 120k seed 679 (success) and 680 (failure: walks the
+  welded box away from the goal and drops it), each with the demonstrator on the same seed, npz + figures.
