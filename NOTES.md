@@ -7178,3 +7178,67 @@ Per-tick re-runs of ACT-160 200k and ACT-LSTM-160 120k on the 20 selection seeds
   (covariate shift; the scripted demonstrator never shows a recovery from a lateral/heading error).
 - Open item 40: traces `analysis/traces/` - ACT-LSTM-160 120k seed 679 (success) and 680 (failure: walks the
   welded box away from the goal and drops it), each with the demonstrator on the same seed, npz + figures.
+
+## 2026-10-22 — Live demonstration recorder (`tools/record_teleop_live.py`), built and tested on a FAKE camera only
+
+Linux CPU machine, no GPU, no ZED: mujoco 3.6.0, numpy 2.5.3, torch 2.14.1+cu130 (PyPI), Python 3.13.
+**Nothing here is a result** (O34 Option B); the camera-side checks are `docs/LIVE_RECORDING_CHECKLIST.md`.
+
+**Task 0 - the suite on a fresh Linux machine: 19 failed / 271 passed -> 290 passed.** Measured on 473a7d7 first.
+- 17: `G1_POLICY_PATH` / `G1_SCENE_PATH` fell back to `D:\Charles_Aninon\Thesis Project\...`
+  (`walk_test.py`, `run_integrated_combined.py`; test_dropout, test_lock_rule, test_deploy). The fallback is now
+  repo-relative (from `__file__`); the env overrides are unchanged. For a checkout AT that D: path it is the same
+  file; anywhere else the old fallback did not exist. Checklist step 0 confirms it on the laptop.
+- 1: `test_repo_relpath_survives_a_cross_drive_path` asserted a Windows property on POSIX; now platform-aware, the
+  Windows branch unchanged.
+- 1: `test_use_lstm_false_is_act_exactly_as_it_was_before_the_flag` - seeded init differs across torch builds. The
+  sha and output values are checked only on `_GOLDEN_TORCH` = ("2.11.0+cu126", "2.14.0"); everywhere the
+  tensor/parameter counts are. NOTE: the golden's own comment says it was recorded on "CPU, torch 2.14.0", the
+  brief says 2.11.0+cu126 - both are listed; checklist step 1 requires it to RUN (not skip) on the laptop.
+
+**The refactor.** `run_integrated_combined.main()` became `open_session` / `run_loop` / `close_session` with the same
+statements in the same order, plus `LoopHooks` (`keys_due`, `should_end`, `on_key`, `draw`; never called with
+`hooks=None`). Single-shot keys moved into `handle_key`; the first two lines of the FULL panel into
+`draw_lock_status`. `TeleopRecorder.FRAME` is now `run_loop` (local names unchanged). **Proof, against the OLD code
+(TR32):** `test_split_main_is_the_old_main_step_for_step` runs `main()` from `git show 473a7d7` and the new one on
+the `--synthetic grasp` fixture for 11 s through the weld: 5500 steps, qpos+qvel identical after every step.
+
+**The recorder.** One session = one camera, model, policy (`open_session`); per seed: twin arm pose restored, the
+shared `reset_episode` (fingerprint stored), base at deploy's (0.60, 0.00) (or `--start-standoff`, fixture), then
+`run_loop` under `LiveRecorder` (= `TeleopRecorder` + per-tick `frame_seq`, `tick_wall_ns`). Termination =
+deploy.py's constants (fall < 0.35 m at once; success after release held 63 ticks; 900-tick cap) plus operator keys
+(ENTER start / n skip at the paused idle screen; e stop+save, x discard, q quit-and-save; Ctrl+C also saves).
+`b` is consumed and logged while recording (`d18.toggle_blocked_attempts_s`); the idle screen refuses it too (every
+reset asserts the D18 contract). Lock rule from `--lock-rule` (default `LockConfig().version`; any rule added to
+`LOCK_RULES` - item 43 - is selectable). Decisions taken here, for Charles to confirm:
+- **Two sources**: `teleop_live` (real=True, the ONLY real source; namespace `recordings/demonstrations`) and
+  `teleop_live_fake` (real=False, `recordings/teleop_fake`) - a replayed real take is not a demonstration (nobody
+  closed the loop), so a dry run can never reach training.
+- **Failed episodes are saved to `<out-dir>/failed/`** with `failed: true`, a `discard` ledger row (re-issuable) and
+  the success verdict in `outcome`; top-level holds only successes, so `build_dataset` / the loader never meet one.
+  Interactive: a failed/discarded seed is offered again (3.3.8); headless moves on.
+- **An out-dir holds one spec version, contact contract and lock rule (top level AND failed/)**: a session that
+  would mix refuses to start. Zed sessions refuse exp1/exp2/select seeds; held-out spawns are skipped (ledger error).
+- **Raw keypoints** per episode in `<out-dir>/keypoints/<stem>_kp.npz`, `g1-kp-rec-2` format (replayable with
+  `--source fake`). ZEDSource.grab collapses not_new / no_body / rejected body into one EMPTY frame, so a tap row is
+  only ok / no_body / grab_failed and `n_bodies` = -1. `frame_seq` s = the (s - seq_at_arm)-th delivered row.
+- **Timing**: `tick_rate_hz` and `overrun_ticks` (host-clock tick interval > 60 ms = 1.5 ticks); meaningless
+  headless (`paced: false`), measured only on the camera.
+
+**Tests (`tools/test_record_teleop_live.py`, 17, ~50 s CPU).** Fixture: `--make-fake-take` for seed 0, head-on 0.32 m,
+the synthetic grasp-and-lift on the sim frame clock, `g` at the take's `grasp_on_s`, stop at 14 s. Measured: lock
+tick 4, weld 239, lock release (carry) 318, 350 ticks; grasp/lift/transport pass, place fails (no carry to the goal
+in the fixture) -> saved FAILED, refused by `assert_successful` and by the loader for that reason only; with that one
+refusal stubbed `ChunkDataset` builds (48-D windows, 22-D chunks). `replay_check.replay` unchanged: fingerprint
+match, dWeld 0, dLock 0, box 10.5 mm while locked -> manipulation reproduced. Invariance (record vs not, every step)
+holds, and a recorder nudging qvel by 1e-9 once makes it FAIL (negative control). Also: discard writes no file;
+ledger rows; accept path (verdict forced); metadata keys; 50-frame no-body gap -> ticks marked, arms frozen, 50
+no_body rows in the kp file; `b` blocked; v1-then-v2 into one dir refused and `assert_uniform_lock_rule` refuses the
+pair; fake mode with `sys.modules["pyzed"] = None`. Full suite: **307 passed** (290 + 17).
+
+**Not verified (needs the camera or a display):** the ZED path end to end (`open_camera` zed branch, metadata read
+back through `record_keypoints.session_meta`), the threaded grabber's real rate, tick rate / overruns under a live
+operator, dropout rate, the interactive window (idle screen, HUD placement, keys via OpenCV) - the headless tests go
+through the same `handle_key` but not through `cv2.waitKeyEx`. No successful teleop episode exists: the accept path
+is tested with a forced verdict. CLAUDE.md is at its 400-line cap, so this got no §8 entry (the decisions above
+need one once Charles retires something per §14).

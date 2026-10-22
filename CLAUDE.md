@@ -20,14 +20,14 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. P1–P4 CLOSED** (PLAN.md; P4 qualified, §8 2026-09-29). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser).
+**None. P1–P4 CLOSED** (PLAN.md; P4 qualified, §8 2026-09-29). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder built, fake-camera tested (`NOTES.md` 2026-10-22); next: `docs/LIVE_RECORDING_CHECKLIST.md` on the laptop.**
 Closed loop: v1 2/180, v2 3/180; **g1-spec-1.2.0 (§8 2026-10-18) REFUSES every 1.1.0 file and run** (v1/v2 = evidence, `D:\thesis_backup\`).
 **scripted_v3 TRAINED + SURVEYED**: 14/300; TRAINING seeds no better (2/20, 0/20) and `--ensemble-horizon` changes nothing - walk-in steering (|lat| 0.125 m, 21 deg vs 5 mm, 0.9 deg) and arm motions not gated by the lock. `NOTES.md` 2026-10-24.
 
 ## 3. Full pipeline (end to end)
 
 ```
-[EXISTS] ZED (30 Hz, BODY_38) -> One-Euro -> scaling -> DLS IK -> arms; waist pinned | KeyboardCommand -> LSTM policy -> legs; 500 Hz physics
+[EXISTS] ZED (30 Hz, BODY_38) -> One-Euro -> scaling -> DLS IK -> arms; waist pinned | KeyboardCommand -> LSTM policy -> legs; 500 Hz physics -> tools/record_teleop_live.py (fake-tested only)
 [EXISTS] WELD grasp (D11) + base lock (D12) + B-prime exclusion (D18) + seeded spawn; teleop under stepped physics, full task by a live operator
 [EXISTS] scripted demonstrator (g1_data/scripted_demo.py) 12/12 and 40/40; g1_data/spec.py at g1-spec-1.2.0 (2026-10-18)
 [EXISTS] recorder @25 Hz -> success detection -> offline phase labels -> dataset -> loader -> shared train loop + masked-L1 loss -> neighbour-ambiguity gate -> BC and chunked BC (ONE class, K=1 vs K>1; overfit-10 PASS 0.632 / 0.718 at W_o = 12): g1_data/{recorder,success,phase_label,dataset}.py + g1_model/{loader,train,ambiguity,models}.py
