@@ -338,6 +338,59 @@ def test_no_ensemble_applies_the_newest_chunks_first_action():
     assert differs, "ensembling on and off gave identical actions for 6 ticks"
 
 
+def _actions(pol, states, n=10):
+    pol.reset()
+    return [pol.act(states[t], t) for t in range(n)]
+
+
+def test_ensemble_horizon_default_is_the_reference_ensemble():
+    """No horizon and horizon = K give the same actions (the default is unchanged)."""
+    from g1_data.recorder import load_episode
+    rec, _ = load_episode(_recorded()[0])
+    a = _actions(_policy("act_lstm"), rec["states"])
+    pol = _policy("act_lstm", ensemble_horizon=8)
+    assert pol.H == pol.K == 8
+    assert all(np.array_equal(x, y) for x, y in zip(a, _actions(pol, rec["states"])))
+
+
+def test_ensemble_horizon_one_is_no_ensemble():
+    from g1_data.recorder import load_episode
+    rec, _ = load_episode(_recorded()[0])
+    a = _actions(_policy("act_lstm", ensemble=False), rec["states"])
+    b = _actions(_policy("act_lstm", ensemble_horizon=1), rec["states"])
+    assert all(np.allclose(x, y, atol=1e-6) for x, y in zip(a, b))
+
+
+def test_ensemble_horizon_averages_only_the_last_n_chunks():
+    """Horizon 3 at tick t: the weighted mean (oldest first, exp(-m i)) of the
+    entries for t in the chunks predicted at t-2, t-1 and t - recomputed here
+    from the raw model outputs - and it differs from the full ensemble."""
+    import torch
+    from g1_data.recorder import load_episode
+    from g1_model.act import TEMPORAL_ENSEMBLE_M
+    rec, _ = load_episode(_recorded()[0])
+    pol = _policy("act_lstm", ensemble_horizon=3)
+    pol.reset()
+    window = np.zeros((pol.W, spec.STATE_DIM), dtype=np.float32)
+    chunks = []
+    for t in range(7):
+        s = rec["states"][t]
+        got = pol.act(s, t)
+        z = pol.st.normalize(np.asarray(s, np.float32).astype(np.float64)).astype(np.float32)
+        window = np.concatenate([window[1:], z[None]], axis=0)
+        with torch.no_grad():
+            chunks.append(pol.model(torch.from_numpy(window).unsqueeze(0).to(pol.device))[0].cpu().numpy())
+        made = list(range(max(0, t - 2), t + 1))                     # oldest first
+        rows = np.stack([chunks[k][t - k] for k in made]).astype(np.float64)
+        w = np.exp(-TEMPORAL_ENSEMBLE_M * np.arange(len(made)))
+        want = pol.ac.denormalize((rows * (w / w.sum())[:, None]).sum(axis=0))
+        assert np.allclose(got, want, atol=1e-5), t
+    full = _actions(_policy("act_lstm"), rec["states"], 7)
+    assert not np.allclose(full[-1], got, atol=1e-6), "horizon 3 must differ from horizon 8 by tick 6"
+    _raises(SystemExit, _policy, "act_lstm", ensemble_horizon=0)
+    _raises(SystemExit, _policy, "act_lstm", ensemble_horizon=9)
+
+
 # ─── seeds (open item 38) ────────────────────────────────────────────────────
 def test_selection_uses_its_own_seed_file():
     a = argparse.Namespace(seed_list=None, seeds=DS.SELECT_SEEDS)

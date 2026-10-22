@@ -121,7 +121,7 @@ class CheckpointPolicy:
     """A trained checkpoint, with the run's own normalization and window."""
 
     def __init__(self, run_dir: str, ckpt: str = "best.pt", device=None,
-                 ensemble: bool = True):
+                 ensemble: bool = True, ensemble_horizon: Optional[int] = None):
         import torch
         import train_bc as TB
         from g1_model import train as T
@@ -152,7 +152,16 @@ class CheckpointPolicy:
         # tick, but applies the NEWEST chunk's first action instead of the
         # temporal ensemble - the Stage-3 convention (models.first_action).
         self.ensemble = bool(ensemble) and self.K > 1
-        self.ens = (TemporalEnsembler(self.K, m=TEMPORAL_ENSEMBLE_M)
+        # ensemble_horizon H (2026-10-23): only the FIRST H steps of each chunk
+        # enter the ensemble, so the action at t averages the predictions made
+        # in the last H ticks, not the last K (= 4 s at K = 100, oldest weighted
+        # most at m = 0.01). An ensembler of size H fed chunk[:H] is exactly
+        # that. H = K (the default) is the reference behaviour unchanged; H = 1
+        # is the newest chunk's first action, i.e. --no-ensemble.
+        self.H = self.K if ensemble_horizon is None else int(ensemble_horizon)
+        if not 1 <= self.H <= self.K:
+            raise SystemExit("--ensemble-horizon must be in 1..K=%d, got %r" % (self.K, ensemble_horizon))
+        self.ens = (TemporalEnsembler(self.H, m=TEMPORAL_ENSEMBLE_M)
                     if self.ensemble else None)
         self.name = "%s/%s" % (os.path.basename(os.path.normpath(run_dir)), ckpt)
 
@@ -173,7 +182,7 @@ class CheckpointPolicy:
             if self.ens is None:
                 a = pred[0, 0]
             else:
-                a = self.ens.step(pred[0])
+                a = self.ens.step(pred[0][:self.H])
         return self.ac.denormalize(a.detach().cpu().numpy().astype(np.float64))
 
 
@@ -511,6 +520,9 @@ def main(argv=None):
                         "(disjoint from train, exp1 and exp2; open item 38)")
     ap.add_argument("--out", required=True, help="JSONL, one line per episode (refused if it exists)")
     ap.add_argument("--max-ticks", type=int, default=MAX_TICKS)
+    ap.add_argument("--ensemble-horizon", type=int, default=None, metavar="N",
+                    help="chunked policies: ensemble only the first N steps of each "
+                         "chunk (1..K; default K = the reference behaviour)")
     ap.add_argument("--no-ensemble", action="store_true",
                     help="chunked policies: query every tick and apply the newest "
                          "chunk's first action (no temporal ensembling)")
@@ -542,7 +554,8 @@ def main(argv=None):
     import torch
     from g1_model import train as T
     det = T.set_determinism(0, strict=True)
-    policy = CheckpointPolicy(a.run, a.ckpt, ensemble=not a.no_ensemble)
+    policy = CheckpointPolicy(a.run, a.ckpt, ensemble=not a.no_ensemble,
+                              ensemble_horizon=a.ensemble_horizon)
     loco = torch.jit.load(W.POLICY_PATH)
     # The rule the run's TRAINING episodes were collected under. Evaluating a
     # policy under another rule tests it in conditions it never saw (the D18
@@ -561,6 +574,7 @@ def main(argv=None):
                             repo_relpath(a.seeds) if a.seeds else "list"),
                   train_seeds_evaluated=seen,
                   lock_rule=lock_rule_meta(rule), temporal_ensemble=policy.ensemble,
+                  ensemble_horizon=policy.H if policy.ensemble else None,
                   training_data_lock_rule=train_rule.version if train_rule else None,
                   obs_window=policy.W, norm=repo_relpath(policy.norm_path),
                   device=str(policy.device), max_ticks=a.max_ticks,
