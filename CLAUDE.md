@@ -22,6 +22,7 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 **None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, merged, fake-tested): `docs/LIVE_RECORDING_CHECKLIST.md` steps 2–5 BLOCKED - no ZED available (2026-10-24).
 scripted_v3 (rule v2) survey 14/300; **lock rule v3 is the default** (ACT 2→5, LSTM 3→5 /20). FREEZE 2026-10-23: no walk-in fix, no release gate, β 10 (`NOTES.md`). g1-spec-1.2.0 refuses 1.1.0. ONE heavy process at a time.
+**Scripted Exp 1/2 (2026-10-23):** Run B (160, seed 0) DONE — `runs/scripted_v3/eval/summary.txt`. Run A (n40, 9 runs) launchers ready, NOT yet run: `tools/train_scripted_v3_n40.ps1` then `tools/eval_scripted_v3_n40.ps1` (§8 2026-10-23).
 
 ## 3. Full pipeline (end to end)
 
@@ -96,6 +97,7 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
+- 2026-10-23 — **SCRIPTED EXP 1/2 PROCEDURE** (Charles): lock rule v3; checkpoint selection over EVERY saved checkpoint (weight-identical aliases dropped) on the 20 selection seeds, lexicographic (success, place, transport, lift, grasp, −mean placement error), tie → fewest steps; Exp 1/2 on the chosen one (`tools/eval_scripted.py`). `train_bc.py --seed` added (default 0 = all earlier runs, tested). **Run B (160, seed 0)**, successes /100 Exp 1 | Exp 2: BC 0 | 0 (all checkpoints 0/20 at selection, picked by stage tie-break), ACT 14 | 1, ACT-LSTM 17 | 11. Run A = n40: BC seeds 0–2, ACT/ACT-LSTM seeds 0–2. **Disclose:** BC is epoch-budgeted, so BC-n40 takes ~4× fewer steps than BC-160. Not yet analysed.
 - 2026-10-24 — **LOCK RULE v3 = DEFAULT** (`LockConfig()`; deploy `--lock-rule` default v3; new scripted recordings): the carry release (welded box > 0.055 m up) applies at the PICKUP lock only — at the goal it dropped the lock and the base walked off (ACT-160 2→5/20, ACT-LSTM-160 3→5/20, none lost). 4/200 scripted_v3 demos differ under v3 (seeds 6, 14, 146, 206). v1/v2 selectable; stored rules without the field read as v1/v2. Teleop on v3 too since PR #2 merged (2026-10-24). `NOTES.md` 2026-10-24b.
 - 2026-10-18 — **g1-spec-1.2.0: `base_locked` state dim 47, REVERSING 2026-09-11 (c)** (Charles): demonstrator and operator condition on the
   lock ("do not reach until LOCKED"), so the learner must see it (Swamy et al. 2022, NeurIPS: share the state the expert acts on). Symptom: ACT
