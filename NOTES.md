@@ -7321,3 +7321,51 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
   **BLOCKED: Charles does not have the ZED 2i at present (2026-10-24)** - steps 2-5 wait until the camera is
   available; nothing in them can be substituted by the fake source (camera provenance, real tick rate and dropout,
   a real take, a real operator).
+
+## 2026-10-23 (container clock; follows 2026-10-24d) — operator tools: a/d verdict, floor guide, walk_test practice
+
+Branch `operator-tools` from main 07df751. Linux CPU container, no ZED, no display, no OpenGL: mujoco 3.6.0,
+numpy 2.5.3, torch (PyPI), opencv-python-headless 5.0.0, Python 3.13. **Nothing here is a result** (O34
+Option B). `tools/deploy.py`, `tools/eval_scripted.py`, `tools/train_bc.py` and `g1_model/` untouched
+(experiments run on them). Operator-facing text: `docs/OPERATOR_GUIDE.md`.
+
+- **One source** `g1_teleop/operator_config.py`: scene/policy paths (moved from the identical copies in
+  walk_test.py and run_integrated_combined.py; `W.POLICY_PATH` etc. still resolve), START_XY (0.60, 0.00),
+  `keyboard_command()`, `default_lock_rule()` = `LockConfig()` (v3), guide default "on", seed checks.
+  deploy.py keeps its own START_XY literal; a test asserts they agree. `reset_for_episode` moved from the live
+  recorder into `run_integrated_combined` (same statements; `S.sim_clock` replaces the SimClockGrabber
+  isinstance) so practice and recording share it; `open_session` now sets `S.twin_qpos0`.
+- **TASK A, accept/reject** (`record_teleop_live.finish_episode`): verdict (success.evaluate per criterion,
+  failing phase, placement, dropout %, overruns) + RECOMMENDATION with reasons, then a/d on the window (key
+  queue drained, 0.5 s key delay) or the terminal prompt headless (`--auto off`). **A rule-failed episode can
+  never be accepted** (`a` refused; `decide` asserts). Soft discard reasons: dropout > 5 % of ticks, overruns
+  > 2 % (paced only) - PROVISIONAL, no real take exists; set from checklist step 2. Decisions taken here, for
+  Charles to confirm: a success the operator discards is KEPT in `discarded/` (re-issuable DISCARD row; scanned
+  by the out-dir compatibility check, never by the loaders); `--auto pass` (take the recommendation) is the
+  headless default and REFUSED with `--source zed`; Ctrl+C never accepts. Ledger rows + metadata carry
+  `operator_choice`, `decided_by`, `recommendation`; metadata also `accepted`, `operator_ui.guide`.
+- **TASK B, floor guide** (`g1_teleop/floor_guide.py`): band / edges / heading wedge / arrow / LOCKED as
+  mjCAT_DECOR geoms appended to the RENDER scene after update_scene (teleop loop, recorder idle screen,
+  walk_test). Thresholds from the active LockConfig. The band is in the robot's CURRENT heading frame (that is
+  how `LockPredicate.terms` measures fwd/lat); a property test over 400 random poses shows base-in-band == fwd
+  & lat ok and base-in-wedge == head ok (the wedge angle IS |head|; head = atan(lat/fwd), so at fwd 0.26 the 5
+  deg limit is lat 0.023 m - tighter than 0.05). **Invariance:** --synthetic grasp fixture, --profile (renders
+  every 25 Hz frame; a CPU MjvScene stand-in for mujoco.Renderer, no GL here) through lock, weld, lift and the
+  carry release: 7000 steps, qpos+qvel hash after every step and the recorded 48-D states identical guide on
+  vs off; a guide nudging qvel by 1e-9 once changes the hash (negative control).
+- **TASK C, practice** (`walk_test.py`, default; the old passive-viewer test is `--legacy`, constants and
+  helpers unchanged for deploy/scripted_demo/tools that import them): opens the teleop session itself
+  (`open_session` with "keyboard <seed>", exactly as the recorder) with a no-camera source, `S.practice`.
+  Training seeds only; exp1/exp2/select and off-stream seeds refused. Per try: time to lock, lat/head at the
+  lock, overshoot (closest fwd past fwd_lo before the lock), band entries; t next seed, y same seed, b
+  blocked; a fall restarts the seed. Test: practice and recorder sessions for one training seed give
+  identical args, lock rule, keyboard, TeleopConfig, contract, guide, model, start pose, box and reset
+  fingerprint + qpos.
+- Tests: `tools/test_operator_tools.py` 18/18; `tools/test_record_teleop_live.py` 17/17 unchanged (incl. the
+  pre-split main() step-for-step check); full suite (pytest g1_data g1_teleop g1_model tools):
+  **330 passed, 1 failed** - `test_every_relpath_call_site_goes_through_the_helper` flags raw relpath at
+  `tools/eval_scripted.py:256,260`; it fails identically on main 07df751 and that file is off-limits while the
+  experiments run, so it is left for Charles (fix: route both through `g1_data.paths.repo_relpath`).
+- **Needs the Windows laptop with a display:** guide pixels and the LOCKED label/banner (no GL here), the
+  verdict screen keys through cv2.waitKeyEx, the walk_test practice window and its keys, then with the ZED the
+  verdict after a real episode (overruns filled in). Listed in docs/OPERATOR_GUIDE.md section 5.
