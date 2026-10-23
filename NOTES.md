@@ -7321,3 +7321,24 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
   **BLOCKED: Charles does not have the ZED 2i at present (2026-10-24)** - steps 2-5 wait until the camera is
   available; nothing in them can be substituted by the fake source (camera provenance, real tick rate and dropout,
   a real take, a real operator).
+
+## 2026-10-23 (container clock) — Exp 1/2 analysis tool (`tools/analyze_experiments.py`), branch `analysis`
+
+Read-only on eval_scripted.py output (`<eval>/<model>_<size>_seed<k>/exp{1,2}.jsonl` + selection.json);
+numpy/scipy/pandas/matplotlib only (BoxConfig loaded by file, spawn sampler mirrored and tested equal to
+box_reset). eval_scripted.py, deploy.py, train_bc.py, g1_model/ untouched. How to run: `docs/ANALYSIS.md`.
+- Tables: per run Wilson 95% CI; mean +- SD over seeds and pooled Wilson; gap Exp1-Exp2 with SE_binomial
+  (disjoint seed sets) and SE over seeds (k >= 2); stage rates; failure phase (deploy fail_reason); pairwise
+  Fisher (pooled over seeds, per experiment and size, Holm over the 3 pairs); Kruskal-Wallis + pairwise
+  Mann-Whitney U (Holm) on palm_box_min_m and final_box_goal_m; within 5/10 cm (final, closest) and palms
+  within the 0.16 m gate; n40 vs 160 with Fisher when both exist. Figures: success bars + per-seed dots,
+  stages, failure stack, proximity boxplots, success-by-position (sizes x models, patch outlined),
+  training coverage from the split files' train seeds, n40 vs 160.
+- Choices for Charles to confirm: pooling ignores between-seed variance (SD shown beside it); the Holm
+  family is the model pairs within one (size, experiment, metric); grasp proximity = the FARTHER palm
+  (the gate's `near`); records without the item-46 fields are dropped from the distance tests and counted.
+- Tests: `tools/test_analyze_experiments.py` 15/15 on synthetic folders (Run B's measured counts + a 3-seed
+  n40): Wilson vs Newcombe 1998 (81/263 -> 0.2553-0.3662), Fisher vs the hypergeometric by math.comb, KW vs the
+  rank formula, MWU on complete separation, Holm by hand, a partial folder (missing Exp 2, missing model, old
+  records). NOT run on real eval output here: runs/scripted_v3/ is on the NVIDIA laptop only.
+- Not in requirements.txt (pinned training build); docs/ANALYSIS.md gives NumPy-1.x-compatible pins.
