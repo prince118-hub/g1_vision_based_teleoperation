@@ -1485,6 +1485,58 @@ def test_checkpoint_every_keeps_every_periodic_checkpoint():
         shutil.rmtree(out, ignore_errors=True)
 
 
+def test_runner_seed_flag_reaches_the_run_and_defaults_to_zero():
+    """`train_bc.py train --seed k` (2026-10-23, the multi-seed n40 runs): the
+    seed is a RUN field (TRAIN_CONFIG_FIELDS) and must land in the run's own
+    config; omitting it must give 0, the seed of every earlier run, bit for bit;
+    a different seed must give different weights. The gate keeps its fixed 0."""
+    import subprocess
+    got = _tiny(n_eps=4, n_ticks=40)
+    if got is None:
+        print("      (skipped: nothing staged in data/synthetic)")
+        return
+    tmp, _ = got
+    out = tempfile.mkdtemp()
+    tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "tools", "train_bc.py")
+    try:
+        eps = [DS.Episode(p, DS.read_meta(p)) for p in sorted(DS._npz(tmp))]
+        st, ac, rep = DS.fit_norm_stats(eps[:2], "train", allow_synthetic=True)
+        norm = os.path.join(out, "norm.npz")          # not beside the episodes: scanned
+        DS.save_norm_stats(st, ac, path=norm, source=rep["source"], n_episodes=2,
+                           seeds=rep["seeds"], split="train")
+        splits = os.path.join(out, "splits.json")
+        DS.save_splits(dict(train=[0, 1], val=[2, 3], spec_version=spec.SPEC_VERSION), splits)
+
+        def run(name, *extra):
+            d = os.path.join(out, name)
+            r = subprocess.run(
+                [sys.executable, tool, "train", "--episodes", tmp, "--splits", splits,
+                 "--norm", norm, "--model", "bc", "--chunk", "1", "--obs-window", "2",
+                 "--batch", "8", "--max-steps", "3", "--window-steps", "1",
+                 "--budget-reason", "test", "--out-dir", d] + list(extra),
+                capture_output=True, text=True, timeout=300)
+            assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+            meta = json.load(open(os.path.join(d, "metadata.json"), encoding="utf-8"))
+            sd = torch.load(os.path.join(d, "last.pt"), map_location="cpu",
+                            weights_only=False)["state_dict"]
+            return meta["config"]["seed"], sd
+
+        s_def, w_def = run("default")
+        s0, w0 = run("seed0", "--seed", "0")
+        s1, w1 = run("seed1", "--seed", "1")
+        assert (s_def, s0, s1) == (0, 0, 1), (s_def, s0, s1)
+        assert all(torch.equal(w_def[k], w0[k]) for k in w0), "default must BE seed 0"
+        assert any(not torch.equal(w0[k], w1[k]) for k in w0), "seed 1 must differ"
+        r = subprocess.run([sys.executable, tool, "overfit10", "--epochs", "1",
+                            "--budget-reason", "x", "--seed", "1"],
+                           capture_output=True, text=True, timeout=120)
+        assert r.returncode != 0 and "--seed" in r.stderr, "the gate keeps seed 0"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(out, ignore_errors=True)
+
+
 def _tests():
     return [(n, f) for n, f in sorted(globals().items())
             if n.startswith("test_") and callable(f)]

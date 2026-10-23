@@ -494,7 +494,7 @@ def cmd_full(a, purpose="plumbing"):
                                  "NOT evidence about BC and no conclusion may be "
                                  "drawn from the validation number.")
     cfg = _train_config(
-        mcfg, a.epochs, a.batch, seed=0,
+        mcfg, a.epochs, a.batch, seed=int(a.seed),
         run_name="%s_%s_K%d_W%d" % (a.model, "train" if purpose == "train" else "full",
                                     K, mcfg.obs_window),
         log_every=max(1, int(a.epochs) // 20) if a.epochs else 1,
@@ -744,6 +744,11 @@ def main():
             p.add_argument("--out-dir", default=None,
                            help="run directory (default runs/<timestamp>_<name>). "
                                 "Refused if it holds anything but train.log")
+            p.add_argument("--seed", type=int, default=0,
+                           help="training seed: initial weights, data order, dropout "
+                                "(train.TRAIN_CONFIG_FIELDS['seed']). Default 0, the "
+                                "seed of every run before 2026-10-23. The overfit-10 "
+                                "gate keeps its fixed 0")
         if name in ("overfit10", "full", "train"):
             p.add_argument("--chunk", type=int, default=1,
                            help="K. 1 = BC, >1 = chunked BC (same class)")
