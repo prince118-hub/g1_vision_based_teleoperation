@@ -7321,3 +7321,53 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
   **BLOCKED: Charles does not have the ZED 2i at present (2026-10-24)** - steps 2-5 wait until the camera is
   available; nothing in them can be substituted by the fake source (camera provenance, real tick rate and dropout,
   a real take, a real operator).
+
+## 2026-10-24e — Collection helpers: backup, pilot check, recording protocol (branch `collection-helpers`)
+
+Linux CPU machine, no GPU, no ZED (mujoco 3.6.0, numpy 2.5.3, torch 2.14.1). **Nothing here is a result** (O34). NEW
+FILES ONLY - no existing code changed (another session edits deploy/eval): `tools/backup_recordings.py`,
+`tools/pilot_check.py`, their tests, `docs/RECORDING_PROTOCOL.md`.
+
+- **`tools/backup_recordings.py SRC --dest A --dest B`**: mirrors every file of a recordings folder (episodes, failed/,
+  discarded/, keypoints/, ledger, notes) to each destination. Every file is verified by sha256 every run (already-present
+  copies are re-hashed, not trusted by name); a copy goes to `.bkpart`, is fsynced, re-hashed from disk, the source
+  re-hashed (unchanged), then renamed. A DIFFERENT file at the destination is never overwritten (CONFLICT, left as is),
+  with ONE exception: a destination file that is an exact byte PREFIX of the source (the append-only ledger after another
+  session) is replaced - the new file contains every old byte; the manifest says `grown`. Destination-only files are
+  listed, never deleted. A missing destination is `unavailable` and is created only with `--create` (a missing mount
+  point would otherwise be created on the laptop's own disk). Writes `_backup_manifests/backup_<stamp>.json` (local +
+  UTC date, host, counts by kind and status, per-file sha256) per destination; ends with "NOT YET BACKED UP" per file
+  and destination; exit 1 unless every file is verified everywhere. `--status` copies nothing.
+- **`tools/pilot_check.py`** (default `recordings/demonstrations`, `--expect 25`): inventory (count, one episode per
+  seed, ledger = disk, failed/discarded, attempt -> accept rate); every dataset guard run separately so all failures are
+  listed (load/spec + tick lengths, uniform spec + contract, contract == this code's D18 contract, one lock rule, WARN if
+  not `LockConfig()`'s, grip label, demonstrator, success, held-out, real source unless `--allow-fake`, training seeds
+  only); `replay_check.replay` on every accepted episode (fingerprint + manipulation, whole task reported only);
+  build_dataset split + norm into the SCRATCH folder (`runs/pilot_check/<stamp>/`, never data/processed; val must be
+  non-empty); `train_bc.py train` BC K=1 W_o=12, 300 steps - PASS if completed (`hard_cap`/`stop_rule`/`finished`),
+  losses finite, train loss falling, deployed recon below the ZERO baseline (COPY not required); timing/dropout from
+  metadata - FAIL on the MEDIAN (tick rate < 24 Hz, checklist step 2; dropout > 0.05 and overruns > 0.02, the operator
+  guide's PROVISIONAL limits), WARN per episode. Split/norm/train run only if the guards pass. Verdict PASS / FAIL /
+  INCOMPLETE (a check skipped), exit 0/1/2; `pilot_report.txt/.json`. The repo's tools run IN-PROCESS (`run_tool`,
+  output to per-step logs), so a test's monkeypatch reaches them.
+- **Tests.** `tools/test_backup_recordings.py` 9 (temp fake folders, random bytes: first backup to two destinations,
+  second session = new episode copied + ledger `grown`, conflict never overwritten, same-size bit flip caught, missing
+  destination not created, `--status` writes nothing, destination-only kept, source changing mid-copy installs nothing,
+  path refusals). `tools/test_pilot_check.py` 9 (~25 s): 3 fake-source grasp episodes (seeds 0-2, one take each,
+  record_teleop_live headless) with success FORCED as in test_record_teleop_live's accept test (the fixture never
+  places) + 1 failed: end to end PASS (fingerprint 3/3, manipulation 3/3, split 2/1 at `--val-frac 0.34`, 40-step BC
+  0.240 -> 0.111 train, deployed recon 0.091 vs zero 0.537, data/processed untouched); the same folder unforced FAILs on
+  "every episode succeeded" with split/train SKIPPED and the other guards PASS; no `--allow-fake` / `--expect 25` FAIL;
+  duplicate seed + ledger accept with no file FAIL; skips -> INCOMPLETE; unit tests of the smoke and timing rules.
+- **Observed, not fixed (existing code, out of scope):** (1) `build_dataset norm` on `teleop_live_fake` episodes writes
+  `source real` into the norm stats - `fit_norm_stats` flags only `scripted*` sources, so a dry-run normalizer is
+  labelled real (the stats file is the only place that label lives). (2) On main every SUCCESSFUL teleop episode is
+  accepted automatically; without PR #3's verdict screen a bad success can be rejected only by hand (protocol §7: move
+  to discarded/ + a ledger `discard` row). (3) PLAN.md Phase 5's pilot is 10 episodes (overfit, deploy, D12); the
+  25-episode pilot is Phase 6 task 1. pilot_check covers neither the overfit-10 gate on piloted data nor deployment,
+  and its smoke run is NOT the "BC at 25 saturates?" experiment - that run's budget/evaluation is TO DECIDE (protocol §11).
+- **TO DECIDE (Charles):** operator roles - one person or body operator + keyboard driver (protocol §3; affects the
+  `--operator` string and is a disclosure if two); the BC-at-25 run. Protocol numbers marked "(starting value)" (session
+  length, breaks, attempts per seed, stand-still) are unmeasured.
+- **Not verified:** Windows drive paths, a USB / cloud-synced destination, any real ZED episode (checklist steps 2-5
+  still BLOCKED, no camera).
