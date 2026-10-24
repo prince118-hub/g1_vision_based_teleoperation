@@ -68,6 +68,19 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_paths():
+    """g1_data/paths.py by file: importing the g1_data package loads MuJoCo,
+    and this tool needs none (same reason BoxConfig is loaded by file)."""
+    spec_ = importlib.util.spec_from_file_location(
+        "_g1_paths", os.path.join(ROOT, "g1_data", "paths.py"))
+    mod = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(mod)
+    return mod
+
+
+repo_relpath = _load_paths().repo_relpath
 DEFAULT_EVAL = os.path.join(ROOT, "runs", "scripted_v3", "eval")
 DEFAULT_SPLITS = (("160", os.path.join(ROOT, "data", "processed", "splits_scripted_v3.json")),
                   ("n40", os.path.join(ROOT, "data", "processed", "splits_scripted_v3_n40.json")))
@@ -201,6 +214,80 @@ def find_runs(roots: Sequence[str]) -> List[str]:
     return out
 
 
+def _grasp_cols(gd, source="eval") -> dict:
+    """success.py's grasp_detail (deploy.py writes it since 2026-10-24), flattened.
+    None where the record predates it - see attach_grasp_detail."""
+    if not gd or "box_near_spawn" not in gd:
+        return dict(grasp_near_spawn=None, grasp_box_above_platform=None,
+                    box_moved_from_spawn_m=float("nan"), grasp_detail_source=None)
+    return dict(grasp_near_spawn=bool(gd["box_near_spawn"]),
+                grasp_box_above_platform=bool(gd["box_above_platform"]),
+                box_moved_from_spawn_m=_num(gd.get("box_moved_from_spawn_m")),
+                grasp_detail_source=source)
+
+
+def attach_grasp_detail(E, d19_roots: Sequence[str]):
+    """Fill grasp_detail for older records from tools/rescore_d19.py re-runs
+    (<d19 root>/<run>/<exp>.jsonl). A re-run is used ONLY if it reproduced the
+    stored episode bit-for-bit (same trajectory_sha256); otherwise it is counted
+    and ignored. Returns (re-runs used, re-runs rejected)."""
+    used = rejected = 0
+    idx = {(r.run, r.exp, int(r.seed)): i for i, r in E[["run", "exp", "seed"]].iterrows()}
+    for root in d19_roots:
+        for d in sorted(glob.glob(os.path.join(root, "*"))):
+            for exp in EXPS:
+                p = os.path.join(d, "%s.jsonl" % exp)
+                if not os.path.exists(p):
+                    continue
+                for r in _read_jsonl(p):
+                    i = idx.get((os.path.basename(d), exp, int(r["seed"])))
+                    if i is None:
+                        continue
+                    if r.get("trajectory_sha256") != E.at[i, "trajectory_sha256"]:
+                        rejected += 1
+                        continue
+                    if E.at[i, "grasp_detail_source"] is None:
+                        for k, v in _grasp_cols(r.get("grasp_detail"), "rerun").items():
+                            E.at[i, k] = v
+                        used += 1
+    return used, rejected
+
+
+def d19_sensitivity(E):
+    """D19 (grasp = box still within 50 mm of its spawn at the engage tick):
+    how many episodes WELDED but scored no grasp, how many of those the push
+    rule failed, and how many of the D19-failed episodes still ended with the
+    box placed (final box-goal <= 0.10 m), resting, released (the weld let go),
+    upright (tilt <= 15 deg) - and all four, i.e. every final-tick place
+    condition. Lift/transport are not reconstructable from the record, so
+    "all four" is an UPPER BOUND on the successes D19 removed."""
+    import pandas as pd
+    rows = []
+    for (model, size, exp), g in E.groupby(["model", "size", "exp"], dropna=False):
+        w = g[(g.weld_engage_tick >= 0) & ~g.grasp]
+        known = w[w.grasp_detail_source.notna()]
+        d19 = known[known.grasp_near_spawn.astype(object) == False]          # noqa: E712
+        placed = d19.placement_error_m <= 0.10
+        resting = d19.resting.astype(bool)
+        released = d19.weld_release_tick >= 0
+        upright = d19.tilt_deg <= 15.0
+        on_platform = d19.grasp_box_above_platform.astype(object) == True      # noqa: E712
+        not_on_platform_only = ((known.grasp_near_spawn.astype(object) == True)          # noqa: E712
+                                & (known.grasp_box_above_platform.astype(object) == False))  # noqa: E712
+        rows.append(dict(
+            model=model, size=size, size_n=size_n(size), exp=exp, n=len(g),
+            welded=int((g.weld_engage_tick >= 0).sum()), grasp=int(g.grasp.sum()),
+            welded_no_grasp=len(w), detail_unknown=len(w) - len(known),
+            d19=len(d19), d19_only=int(on_platform.sum()),
+            not_on_platform_only=int(not_on_platform_only.sum()),
+            d19_placed=int(placed.sum()), d19_resting=int(resting.sum()),
+            d19_released=int(released.sum()), d19_upright=int(upright.sum()),
+            d19_all_place_conditions=int((placed & resting & released & upright).sum()),
+            success=int(g.success.sum()),
+            median_push_m=float(d19.box_moved_from_spawn_m.median()) if len(d19) else float("nan")))
+    return _order(pd.DataFrame(rows))
+
+
 def load(roots: Sequence[str]):
     """(episodes DataFrame, runs DataFrame). One episode row per JSONL line."""
     import pandas as pd
@@ -210,7 +297,7 @@ def load(roots: Sequence[str]):
         info = parse_run(name)
         sel_path = os.path.join(d, "selection.json")
         sel = json.load(open(sel_path, encoding="utf-8")) if os.path.exists(sel_path) else {}
-        run_row = dict(run=name, path=os.path.relpath(d, ROOT) if d.startswith(ROOT) else d,
+        run_row = dict(run=name, path=repo_relpath(d),
                        **info, size_n=size_n(info["size"]), chosen_ckpt=sel.get("chosen"),
                        selection_success=(sel.get("chosen_tally") or {}).get("success"),
                        selection_n=(sel.get("chosen_tally") or {}).get("n"))
@@ -240,7 +327,12 @@ def load(roots: Sequence[str]):
                     lock_rule=_rule(r.get("lock_rule")) or _rule(h.get("lock_rule")),
                     train_lock_rule=h.get("training_data_lock_rule"),
                     ckpt=ck.get("file"), ckpt_step=ck.get("step"), ckpt_epoch=ck.get("epoch"),
-                    walkin=r.get("walkin", h.get("walkin"))))
+                    walkin=r.get("walkin", h.get("walkin")),
+                    weld_engage_tick=int(r.get("weld_engage_tick", -1)),
+                    weld_release_tick=int(r.get("weld_release_tick", -1)),
+                    resting=bool(r.get("resting", False)), tilt_deg=_num(r.get("tilt_deg")),
+                    trajectory_sha256=r.get("trajectory_sha256"),
+                    **_grasp_cols(r.get("grasp_detail"))))
             hdr = (rows[0].get("header") or {}) if rows else {}
             run_row.setdefault("lock_rule", _rule(hdr.get("lock_rule")))
             run_row.setdefault("train_lock_rule", hdr.get("training_data_lock_rule"))
@@ -252,7 +344,9 @@ def load(roots: Sequence[str]):
             "fail_reason", "phase_reached", "box_x", "box_y", "heldout", "palm_box_min_m",
             "palm_box_nearest_min_m", "final_box_goal_m", "closest_box_goal_m",
             "placement_error_m", "lock_rule", "train_lock_rule", "ckpt", "ckpt_step",
-            "ckpt_epoch", "walkin"]
+            "ckpt_epoch", "walkin", "weld_engage_tick", "weld_release_tick", "resting",
+            "tilt_deg", "trajectory_sha256", "grasp_near_spawn", "grasp_box_above_platform",
+            "box_moved_from_spawn_m", "grasp_detail_source"]
     E = pd.DataFrame(eps, columns=cols)
     R = pd.DataFrame(runs)
     return E, R
@@ -793,8 +887,7 @@ def _md(df, cols, fmt=None) -> str:
 def write_report(out, roots, E, R, T, figs, notes) -> str:
     L = ["# Experiment 1 / 2 analysis", ""]
     L.append("Input: %s. Generated by `tools/analyze_experiments.py` (read-only on the eval output)."
-             % ", ".join("`%s`" % (os.path.relpath(r, ROOT) if os.path.abspath(r).startswith(ROOT) else r)
-                         for r in roots))
+             % ", ".join("`%s`" % repo_relpath(r) for r in roots))
     L.append("")
     rules = sorted({str(x) for x in E.lock_rule.dropna().unique()})
     trules = sorted({str(x) for x in E.train_lock_rule.dropna().unique()})
@@ -868,6 +961,19 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
         L.append(_md(T["sizes"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("exp", "exp")] +
                      [(c, (lambda c_: lambda r: _pct(r[c_]) if c_.startswith(("rate", "diff"))
                            else (_p(r[c_]) if c_ == "fisher_p" else r[c_]))(c)) for c in cols]))
+    L += ["### D19 sensitivity (grasp needs the box within 50 mm of its spawn at the weld)", "",
+          "welded = the weld engaged; welded, no grasp = it engaged but `grasp` is False; D19 = the "
+          "push rule failed (`box_near_spawn` False; D19 only = the box was still on the platform); "
+          "of the D19 episodes, how many ended placed (final box-goal <= 0.10 m), resting, released, "
+          "upright, and all four (every final-tick place condition: an UPPER BOUND on the successes "
+          "D19 removed - lift/transport are not in the record). unknown = no grasp_detail for it.", ""]
+    L.append(_md(T["d19"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+                            ("exp", "exp"), ("n", "n"), ("welded", "welded"), ("grasp", "grasp"),
+                            ("welded, no grasp", "welded_no_grasp"), ("D19", "d19"),
+                            ("D19 only", "d19_only"), ("unknown", "detail_unknown"),
+                            ("placed", "d19_placed"), ("resting", "d19_resting"),
+                            ("released", "d19_released"), ("upright", "d19_upright"),
+                            ("all four", "d19_all_place_conditions"), ("success", "success")]))
     L += ["## 4. Figures", ""]
     for name, path in figs:
         if path:
@@ -895,13 +1001,30 @@ def _isnan(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
 
 
-def analyze(roots: Sequence[str], out: str, splits=DEFAULT_SPLITS, figures: bool = True) -> dict:
+def default_d19_roots(roots: Sequence[str]) -> List[str]:
+    """<eval root>_d19 siblings (tools/rescore_d19.py writes <run-root>/eval_d19)."""
+    out = []
+    for r in roots:
+        d = os.path.join(os.path.dirname(os.path.abspath(r)),
+                         os.path.basename(os.path.normpath(r)) + "_d19")
+        if os.path.isdir(d):
+            out.append(d)
+    return out
+
+
+def analyze(roots: Sequence[str], out: str, splits=DEFAULT_SPLITS, figures: bool = True,
+            d19_roots: Optional[Sequence[str]] = None) -> dict:
     """Run everything; returns the tables (DataFrames) and the figure paths."""
     os.makedirs(out, exist_ok=True)
     E, R = load(roots)
     if not len(E):
         raise SystemExit("no exp1.jsonl / exp2.jsonl found under %s" % ", ".join(roots))
     notes = []
+    d19_roots = default_d19_roots(roots) if d19_roots is None else list(d19_roots)
+    used, rejected = attach_grasp_detail(E, d19_roots)
+    if d19_roots:
+        notes.append("grasp_detail from re-runs (%s): %d used, %d rejected (trajectory differs)"
+                     % (", ".join(repo_relpath(d) for d in d19_roots), used, rejected))
     for _, r in R.iterrows():
         miss = [e for e in EXPS if not r.get("%s_n" % e)]
         if miss:
@@ -914,14 +1037,15 @@ def analyze(roots: Sequence[str], out: str, splits=DEFAULT_SPLITS, figures: bool
     by_run = success_by_run(E)
     T = dict(by_run=by_run, summary=success_summary(by_run), gap=generalization_gap(by_run),
              stages=stage_rates(E), fail=failure_phase(E), fisher=fisher_table(E),
-             dist=distance_tests(E), thr=thresholds(E))
+             dist=distance_tests(E), thr=thresholds(E), d19=d19_sensitivity(E))
     T["sizes"] = size_comparison(T["summary"])
     E.to_csv(os.path.join(out, "episodes.csv"), index=False)
     R.to_csv(os.path.join(out, "runs.csv"), index=False)
     for key, name in (("by_run", "success_by_run"), ("summary", "success_summary"),
                       ("gap", "generalization_gap"), ("stages", "stage_rates"),
                       ("fail", "failure_phase"), ("fisher", "fisher"), ("dist", "distance_tests"),
-                      ("thr", "thresholds"), ("sizes", "size_comparison")):
+                      ("thr", "thresholds"), ("sizes", "size_comparison"),
+                      ("d19", "d19_sensitivity")):
         T[key].to_csv(os.path.join(out, name + ".csv"), index=False)
     figs = []
     if figures:
@@ -950,10 +1074,13 @@ def main(argv=None) -> int:
                     help="training split files for the coverage map (default the scripted_v3 "
                          "160 and n40 splits)")
     ap.add_argument("--no-figures", action="store_true")
+    ap.add_argument("--d19-root", nargs="*", default=None,
+                    help="tools/rescore_d19.py output with grasp_detail for older records "
+                         "(default: <eval root>_d19 when it exists)")
     a = ap.parse_args(argv)
     out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.eval_root[0])), "analysis")
     splits = DEFAULT_SPLITS if a.splits is None else tuple(tuple(s.split("=", 1)) for s in a.splits)
-    res = analyze(a.eval_root, out, splits=splits, figures=not a.no_figures)
+    res = analyze(a.eval_root, out, splits=splits, figures=not a.no_figures, d19_roots=a.d19_root)
     print("analysed %d episodes from %d runs -> %s" % (len(res["episodes"]), len(res["runs"]), out))
     for n in res["notes"]:
         print("  note: " + n)

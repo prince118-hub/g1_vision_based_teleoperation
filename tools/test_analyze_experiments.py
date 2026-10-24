@@ -327,6 +327,56 @@ def test_spawn_sampler_mirrors_box_reset():
         assert not any(in_heldout((x, y), cfg) for x, y in zip(xs, ys)), size
 
 
+def test_d19_sensitivity_counts_and_the_bit_identity_filter():
+    """Review 2026-10-24. 10 Exp 1 episodes of one run: 0-1 succeed; 2-7 weld
+    but score no grasp; 8-9 never weld. Re-runs supply grasp_detail for 2-6:
+    2-4 failed D19 with the box on the platform, 5 failed only the platform
+    test, 6 failed both; 7 has a re-run whose trajectory differs (rejected ->
+    unknown). Of the D19 episodes, 2 and 3 end placed/resting/released/upright,
+    4 ends resting but 0.5 m off and still held."""
+    root = os.path.join(_tmp(), "d19", "eval")
+    d19 = os.path.join(_tmp(), "d19", "eval_d19")
+    run = "act_n40_seed0"
+    os.makedirs(os.path.join(root, run))
+    os.makedirs(os.path.join(d19, run))
+    ev, rr = [], []
+    for i in range(10):
+        r = _row("act", "n40", 0, "exp1", i, 2)
+        welded = i < 8
+        r.update(weld_engage_tick=100 if welded else -1, grasp=i < 2, lift=i < 2,
+                 transport=i < 2, place=i < 2, trajectory_sha256="sha%d" % i,
+                 weld_release_tick=300 if i in (0, 1, 2, 3, 6) else -1,
+                 resting=i in (0, 1, 2, 3, 4), tilt_deg=3.0,
+                 placement_error_m=0.04 if i in (0, 1, 2, 3) else 0.5)
+        ev.append(r)
+        if 2 <= i <= 7:
+            near = i == 5
+            above = i != 5 and i != 6
+            rr.append(dict(r, trajectory_sha256="sha%d" % i if i != 7 else "different",
+                           grasp_detail=dict(box_near_spawn=near, box_above_platform=above,
+                                             box_moved_from_spawn_m=0.1 * i)))
+    for path, rows in ((os.path.join(root, run, "exp1.jsonl"), ev),
+                       (os.path.join(d19, run, "exp1.jsonl"), rr)):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.writelines(json.dumps(x) + "\n" for x in rows)
+    res = AE.analyze([root], os.path.join(_tmp(), "d19", "report"), figures=False)
+    assert any("5 used, 1 rejected" in n for n in res["notes"]), res["notes"]
+    t = _get(res["tables"]["d19"], model="act", size="n40", exp="exp1")
+    assert (t.n, t.welded, t.grasp, t.welded_no_grasp, t.detail_unknown) == (10, 8, 2, 6, 1), t
+    assert (t.d19, t.d19_only, t.not_on_platform_only) == (4, 3, 1), t
+    assert (t.d19_placed, t.d19_resting, t.d19_released, t.d19_upright) == (2, 3, 3, 4), t
+    assert t.d19_all_place_conditions == 2 and t.success == 2, t
+    assert os.path.exists(os.path.join(_tmp(), "d19", "report", "d19_sensitivity.csv"))
+    # a record that already carries grasp_detail needs no re-run
+    ev[7]["grasp_detail"] = dict(box_near_spawn=False, box_above_platform=True,
+                                 box_moved_from_spawn_m=0.2)
+    with open(os.path.join(root, run, "exp1.jsonl"), "w", encoding="utf-8") as fh:
+        fh.writelines(json.dumps(x) + "\n" for x in ev)
+    t = _get(AE.analyze([root], os.path.join(_tmp(), "d19", "report2"), figures=False,
+                        d19_roots=[d19])["tables"]["d19"], model="act", size="n40", exp="exp1")
+    assert t.detail_unknown == 0 and t.d19 == 5, t
+
+
 def test_zzz_cleanup():
     if "tmp" in _CACHE:
         shutil.rmtree(_CACHE.pop("tmp"), ignore_errors=True)
