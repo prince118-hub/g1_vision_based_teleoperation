@@ -523,6 +523,34 @@ def load_splits(path: str = SPLITS) -> dict:
 
 
 # ─── normalization ───────────────────────────────────────────────────────────
+def assert_masked_actions_constant(A, where: str = "") -> None:
+    """The masked action dims hold what the mask ASSUMES they hold, or raise.
+
+    They are excluded from the loss and normalization (spec.CONSTANT_ACTION_DIMS)
+    and tools/deploy.py overwrites the model's output there: wrist yaw and waist
+    (6, 13, 14, 15, 16) with 0.0, a_gR (18) with a_gL (17). That is only right
+    while the data agrees - exactly 0.0 on those five, and 18 bit-identical to
+    17. A dataset where one varied would train a policy that cannot produce a
+    motion the demonstrator made, and deploy would silently zero it (review,
+    2026-10-24). Checked where the normalizer is fitted, so no stats file is
+    ever written for such a dataset."""
+    A = np.asarray(A)
+    tag = (" (" + where + ")") if where else ""
+    for d in spec.CONSTANT_ACTION_DIMS:
+        if d == spec.GRIP_R_A:
+            bad = int(np.count_nonzero(A[:, d] != A[:, spec.GRIP_L_A]))
+            what = "!= dim %d (a_gL)" % spec.GRIP_L_A
+        else:
+            bad = int(np.count_nonzero(A[:, d] != 0.0))
+            what = "!= 0.0"
+        if bad:
+            raise DatasetError(
+                "masked action dim %d (%s) is %s on %d of %d ticks%s. The mask and "
+                "deploy's post-processing assume it is not; re-audit the constant-"
+                "dim mask before fitting." % (d, spec.ACTION_NAMES[d], what, bad,
+                                              len(A), tag))
+
+
 def fit_norm_stats(eps: Sequence[Episode], split: str,
                    allow_synthetic: bool = False):
     """(state NormStats, action NormStats, report) from ONE named split.
@@ -562,6 +590,7 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
         S.append(np.asarray(arrays["states"], dtype=np.float64))
         A.append(np.asarray(arrays["actions"], dtype=np.float64))
     S, A = np.concatenate(S), np.concatenate(A)
+    assert_masked_actions_constant(A, where="%d %s episodes" % (len(eps), split))
     report = dict(n_episodes=len(eps), n_ticks=int(len(S)),
                   source="synthetic" if synth else "real",
                   split=split, seeds=sorted(e.seed for e in eps))

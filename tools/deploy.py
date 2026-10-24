@@ -135,6 +135,12 @@ class CheckpointPolicy:
         paths = notes["data_paths"]
         self.norm_path = os.path.join(ROOT, paths["norm"])
         self.st, self.ac, self.norm_meta = DS.load_norm_stats(self.norm_path)
+        # The normalizer must be the one fitted on THIS run's training split
+        # (review, 2026-10-24): a stats file regenerated or swapped since
+        # training loads without complaint and shifts every input.
+        DS.assert_norm_stats_match(self.norm_meta, run_train_seeds(meta),
+                                   where="%s vs %s" % (repo_relpath(self.norm_path),
+                                                       repo_relpath(run_dir)))
         self.ckpt_path = os.path.join(run_dir, ckpt)
         ck = torch.load(self.ckpt_path, map_location="cpu", weights_only=False)
         factory, _ = TB._factory_for(ck)
@@ -348,6 +354,11 @@ def _diagnostics(dg, states, lock_ticks, weld_tick, c=LOCK_RULE_V3) -> dict:
         first_refusal=gated.get(first_gate), refusal_condition_counts=fails)
 
 
+def _jsonable(d: dict) -> dict:
+    return {k: (bool(v) if isinstance(v, (bool, np.bool_)) else
+                float(v) if isinstance(v, (float, np.floating)) else v) for k, v in d.items()}
+
+
 # ─── one episode ─────────────────────────────────────────────────────────────
 def _stage(locked, welded, n_locks, released) -> str:
     """A LIVE stage for the overlay. The phase labels proper are derived offline
@@ -538,7 +549,6 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
 
     arrays = dict(states=np.asarray(states), actions=np.asarray(actions),
                   qvel=np.asarray(qvels))
-    r = SU.evaluate(arrays, meta)
     # label_episode falls back to meta["lock_engage_tick"] when the trajectory
     # shows no lock, and defaults that to 0 - which labels a walk-in that never
     # locked as REACH from tick 0. A demonstration always locks; a policy may
@@ -547,6 +557,12 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
     lock_fallback = (lock_ticks[0] if lock_ticks
                      else weld_tick if weld_tick >= 0 else len(states))
     labels, diag = PL.label_episode(arrays, dict(meta, lock_engage_tick=lock_fallback))
+    # The labels go INTO the scoring (review M1, 2026-10-24): success.attribute
+    # charges a never-grasped episode whose last label is SETTLE to WALK_IN, and
+    # reads the labels from `phase_labels`. Scored before labelling - as this
+    # was until 2026-10-24 - it saw none, and every walk-in failure was
+    # charged to GRASP. The four criteria never read the labels.
+    r = SU.evaluate(dict(arrays, phase_labels=np.asarray(labels)), meta)
     success = bool(r["episode_success"]) and not fell
     pd_ = r["place_detail"]
     result = dict(
@@ -556,6 +572,7 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
         fail_reason="" if success else ("fell" if fell else r["attributed_to"]),
         phase_reached=spec.Phase(int(labels[-1])).name if len(labels) else "",
         grasp=bool(r["grasp"]), lift=bool(r["lift"]),
+        grasp_detail=_jsonable(r["grasp_detail"]),
         transport=bool(r["transport"]), place=bool(r["place"]),
         placement_error_m=float(pd_["placement_error_m"]), tilt_deg=float(pd_["tilt_deg"]),
         resting=bool(pd_["resting"]),
@@ -581,13 +598,70 @@ def _seeds(a) -> List[int]:
     return DS.load_seed_file(a.seeds)
 
 
-def _run_data_seeds(meta_json: dict) -> List[int]:
-    """Every seed the run TRAINED or VALIDATED on, from its own splits file."""
+def _splits_file(meta_json: dict) -> Optional[dict]:
     p = meta_json["config"]["notes"]["data_paths"].get("splits")
     if not p or not os.path.exists(os.path.join(ROOT, p)):
-        return []
-    sp = json.load(open(os.path.join(ROOT, p), encoding="utf-8"))
-    return sorted(int(x) for x in sp.get("train", []) + sp.get("val", []))
+        return None
+    return json.load(open(os.path.join(ROOT, p), encoding="utf-8"))
+
+
+def run_train_seeds(meta_json: dict) -> List[int]:
+    """The seeds the run TRAINED on: its own metadata (`data.seeds`, what the
+    loader actually held), else its splits file. Neither -> SystemExit: "cannot
+    tell" must never pass as "matches"."""
+    seeds = (meta_json.get("data") or {}).get("seeds")
+    if seeds is None:
+        sp = _splits_file(meta_json)
+        seeds = sp.get("train") if sp else None
+    if not seeds:
+        raise SystemExit("cannot determine the seeds this run trained on (no data.seeds "
+                         "in metadata.json and no readable splits file)")
+    return sorted(int(x) for x in seeds)
+
+
+def _run_data_seeds(meta_json: dict) -> List[int]:
+    """Every seed the run TRAINED or VALIDATED on: metadata (data/val seeds)
+    and its splits file, unioned. FAIL-CLOSED (review, 2026-10-24): it used to
+    return [] when the splits file was missing, which waved every seed through."""
+    seen = set()
+    for k in ("data", "val"):
+        seen |= set(int(x) for x in ((meta_json.get(k) or {}).get("seeds") or []))
+    sp = _splits_file(meta_json)
+    if sp:
+        seen |= set(int(x) for x in sp.get("train", []) + sp.get("val", []))
+    if not seen:
+        raise SystemExit("cannot determine the seeds this run trained or validated on "
+                         "(no data/val seeds in metadata.json and no readable splits "
+                         "file) - refusing rather than evaluating blind")
+    return sorted(seen)
+
+
+def training_lock_rule(meta_json: dict):
+    """The lock rule of the run's TRAINING episodes - every one of them, not the
+    first file in the folder. Missing or mixed -> SystemExit (fail-closed,
+    review 2026-10-24)."""
+    from g1_data.phases import lock_config_from_meta
+    ep_dir = os.path.join(ROOT, meta_json["config"]["notes"]["data_paths"]["episodes"])
+    if not os.path.isdir(ep_dir):
+        raise SystemExit("training episodes folder %s not found - cannot check the lock "
+                         "rule this run was trained under" % repo_relpath(ep_dir))
+    want = set(run_train_seeds(meta_json))
+    rules = {}
+    for f in sorted(os.listdir(ep_dir)):
+        if not f.endswith(".npz"):
+            continue
+        m = DS.read_meta(os.path.join(ep_dir, f))
+        if int(m.get("seed", -1)) in want:
+            rules.setdefault(lock_config_from_meta(m).version, []).append(int(m["seed"]))
+    found = set(s for v in rules.values() for s in v)
+    if found != want:
+        raise SystemExit("%d of the run's %d training episodes are missing from %s - cannot "
+                         "check their lock rule" % (len(want - found), len(want),
+                                                    repo_relpath(ep_dir)))
+    if len(rules) != 1:
+        raise SystemExit("the run's training episodes mix lock rules: %s"
+                         % {k: len(v) for k, v in rules.items()})
+    return LOCK_RULES[next(iter(rules))]
 
 
 def main(argv=None):
@@ -617,6 +691,10 @@ def main(argv=None):
                          "controller drives until the first lock, then the policy")
     ap.add_argument("--allow-train-seeds", action="store_true",
                     help="diagnostics only: allow seeds the run trained or validated on")
+    ap.add_argument("--allow-lock-rule-mismatch", action="store_true",
+                    help="evaluate under a lock rule OTHER than the training data's "
+                         "(a stated decision: scripted_v3 data is v2, the experiments "
+                         "run v3, CLAUDE.md section 8 2026-10-24); recorded in the header")
     ap.add_argument("--viewer", action="store_true")
     ap.add_argument("--realtime", action="store_true")
     ap.add_argument("--video-dir", default=None)
@@ -630,31 +708,33 @@ def main(argv=None):
     rule = LOCK_RULES[a.lock_rule]
     # A seed the run trained or validated on scores memorisation, not the task;
     # for checkpoint selection that would pick the checkpoint that memorised best.
-    # Checked before anything is loaded.
-    seen = sorted(set(seeds) & set(_run_data_seeds(
-        json.load(open(os.path.join(a.run, "metadata.json"), encoding="utf-8")))))
+    # Checked before anything is loaded, as is the lock rule below.
+    meta_json = json.load(open(os.path.join(a.run, "metadata.json"), encoding="utf-8"))
+    seen = sorted(set(seeds) & set(_run_data_seeds(meta_json)))
     if seen and not a.allow_train_seeds:
         raise SystemExit("refusing: %d seed(s) are in this run's own train/val split: %s "
                          "(--allow-train-seeds for diagnostics)" % (len(seen), seen[:10]))
 
+    # The rule the run's TRAINING episodes were collected under. Evaluating a
+    # policy under another rule tests it in conditions it never saw (the D18
+    # principle). FAIL-CLOSED (review, 2026-10-24): a rule that cannot be read
+    # from every training episode refuses, and a mismatch refuses unless it is
+    # stated with --allow-lock-rule-mismatch; either way it is recorded.
+    train_rule = training_lock_rule(meta_json)
+    if train_rule.version != rule.version:
+        if not a.allow_lock_rule_mismatch:
+            raise SystemExit("refusing: evaluating under lock rule %s, but this run's training "
+                             "data was collected under %s. Pass --lock-rule %s to match, or "
+                             "--allow-lock-rule-mismatch to state the choice."
+                             % (rule.version, train_rule.version, train_rule.version))
+        print("NOTE: evaluating under lock rule %s; training data is %s "
+              "(--allow-lock-rule-mismatch)" % (rule.version, train_rule.version))
     import torch
     from g1_model import train as T
     det = T.set_determinism(0, strict=True)
     policy = CheckpointPolicy(a.run, a.ckpt, ensemble=not a.no_ensemble,
                               ensemble_horizon=a.ensemble_horizon)
     loco = torch.jit.load(W.POLICY_PATH)
-    # The rule the run's TRAINING episodes were collected under. Evaluating a
-    # policy under another rule tests it in conditions it never saw (the D18
-    # principle), so a mismatch is announced and recorded, not hidden.
-    from g1_data.phases import lock_config_from_meta
-    meta_json = json.load(open(os.path.join(a.run, "metadata.json"), encoding="utf-8"))
-    ep_dir = os.path.join(ROOT, meta_json["config"]["notes"]["data_paths"]["episodes"])
-    first = sorted(f for f in os.listdir(ep_dir) if f.endswith(".npz")) if os.path.isdir(ep_dir) else []
-    train_rule = lock_config_from_meta(DS.read_meta(os.path.join(ep_dir, first[0]))) if first else None
-    if train_rule is not None and train_rule.version != rule.version:
-        print("WARNING: evaluating under lock rule %s, but this run's training data (%s) "
-              "was collected under %s. Pass --lock-rule %s to match."
-              % (rule.version, repo_relpath(ep_dir), train_rule.version, train_rule.version))
     header = dict(run=a.run, ckpt=policy.ckpt_info, kind=policy.kind, K=policy.K,
                   seed_set=("select" if a.selection else
                             repo_relpath(a.seeds) if a.seeds else "list"),
@@ -662,7 +742,8 @@ def main(argv=None):
                   lock_rule=lock_rule_meta(rule), temporal_ensemble=policy.ensemble,
                   ensemble_horizon=policy.H if policy.ensemble else None,
                   walkin=a.walkin,
-                  training_data_lock_rule=train_rule.version if train_rule else None,
+                  training_data_lock_rule=train_rule.version,
+                  lock_rule_mismatch_allowed=bool(a.allow_lock_rule_mismatch),
                   obs_window=policy.W, norm=repo_relpath(policy.norm_path),
                   device=str(policy.device), max_ticks=a.max_ticks,
                   success_hold_ticks=SUCCESS_HOLD_TICKS, fall_z=FALL_Z,

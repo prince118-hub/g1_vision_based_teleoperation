@@ -21,5 +21,5 @@ $Runs = "bc_n40_seed0 bc_n40_seed1 bc_n40_seed2 act_n40_seed0 act_n40_seed1 act_
 $Log = Join-Path $Root "runs\scripted_v3\eval\run_a_n40_$(Get-Date -Format yyyyMMdd-HHmmss).log"
 New-Item -ItemType Directory -Force (Split-Path $Log) | Out-Null
 Write-Host "log: $Log"
-& python -u tools\eval_scripted.py --wait-for-training --poll $PollSeconds --lock-rule v3 --runs $Runs.Split(" ") 2>&1 |
+& python -u tools\eval_scripted.py --wait-for-training --poll $PollSeconds --lock-rule v3 --allow-lock-rule-mismatch --runs $Runs.Split(" ") 2>&1 |
     Tee-Object -FilePath $Log

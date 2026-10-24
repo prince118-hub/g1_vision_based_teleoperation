@@ -471,6 +471,95 @@ def test_out_file_is_never_appended_to():
     _raises(SystemExit, D.main, ["--run", "unused", "--seed-list", "679", "--out", p])
 
 
+# ─── review 2026-10-24 ───────────────────────────────────────────────────────
+class _StandStill:
+    """Zero action: the arms at zero, no walking - the robot never leaves the
+    start, so it never locks and never welds: a walk-in failure by construction."""
+    name, kind = "stand_still", "test"
+
+    def reset(self):
+        pass
+
+    def act(self, state, t):
+        return np.zeros(spec.ACTION_DIM)
+
+
+def test_walk_in_failure_is_charged_to_walk_in_not_grasp():
+    """M1. A never-grasped episode that ends in SETTLE is a WALK_IN failure
+    (success.attribute). deploy scored the episode BEFORE labelling it, so the
+    labels never reached attribute() and every such episode read GRASP."""
+    from g1_data import success as SU
+    _, _, loco = _recorded()
+    res, arrays = D.deploy_episode(SEED, _StandStill(), loco=loco, max_ticks=60)
+    assert res["weld_engage_tick"] < 0 and not res["lock_ticks"], res["lock_ticks"]
+    assert res["phase_reached"] == "SETTLE", res["phase_reached"]
+    assert res["fail_reason"] == "WALK_IN", res["fail_reason"]
+    assert res["grasp_detail"]["reason"] == "the weld never engaged"
+    # and the test discriminates: scored WITHOUT the labels, as before the fix
+    old = SU.evaluate(arrays, dict(box_spawn_xy=res["box_xy"]))
+    assert old["attributed_to"] == "GRASP"
+
+
+def _run_variant(kind, **meta_edit):
+    """A copy of _run(kind) whose metadata.json is edited."""
+    import shutil
+    src = _run(kind)
+    dst = os.path.join(tempfile.mkdtemp(), os.path.basename(src))
+    shutil.copytree(src, dst)
+    p = os.path.join(dst, "metadata.json")
+    m = json.load(open(p, encoding="utf-8"))
+    for k, v in meta_edit.items():
+        if k in ("splits", "episodes", "norm"):
+            m["config"]["notes"]["data_paths"][k] = v
+        else:
+            m[k] = v
+    json.dump(m, open(p, "w", encoding="utf-8"))
+    return dst
+
+
+def test_norm_stats_from_another_split_are_refused():
+    """The normalizer must be the one fitted on the run's training seeds."""
+    import torch
+    run = _run_variant("bc", data=dict(seeds=[SEED + 1]))
+    e = _raises(DS.DatasetError, D.CheckpointPolicy, run, "ckpt.pt",
+                device=torch.device("cpu"))
+    assert "seed" in str(e).lower(), e
+    D.CheckpointPolicy(_run("bc"), "ckpt.pt", device=torch.device("cpu"))   # matching: loads
+
+
+def test_seed_guard_fails_closed_when_the_split_is_unknown():
+    """It used to return no seeds - and so wave every seed through - when the
+    splits file was missing."""
+    run = _run_variant("bc", splits="no/such/splits.json")
+    p = os.path.join(tempfile.mkdtemp(), "x.jsonl")
+    e = _raises(SystemExit, D.main, ["--run", run, "--seed-list", "700", "--out", p])
+    assert "cannot determine" in str(e) and not os.path.exists(p), e
+
+
+def test_lock_rule_guard_fails_closed():
+    """A rule that cannot be read refuses; a mismatch refuses unless stated -
+    both before anything is loaded."""
+    from g1_data.phases import LOCK_RULES, lock_config_from_meta
+    path, _, _ = _recorded()
+    have = lock_config_from_meta(DS.read_meta(path)).version
+    other = next(v for v in sorted(LOCK_RULES) if v != have)
+    p = os.path.join(tempfile.mkdtemp(), "x.jsonl")
+    e = _raises(SystemExit, D.main, ["--run", _run("bc"), "--seed-list", "700",
+                                     "--lock-rule", other, "--out", p])
+    assert "refusing: evaluating under lock rule" in str(e), e
+    gone = _run_variant("bc", episodes=os.path.join(tempfile.mkdtemp(), "nothing_here"))
+    e = _raises(SystemExit, D.main, ["--run", gone, "--seed-list", "700",
+                                     "--lock-rule", have, "--out", p])
+    assert "not found" in str(e), e
+    empty = tempfile.mkdtemp()
+    e = _raises(SystemExit, D.main, ["--run", _run_variant("bc", episodes=empty),
+                                     "--seed-list", "700", "--lock-rule", have, "--out", p])
+    assert "missing" in str(e), e
+    assert not os.path.exists(p)
+    m = json.load(open(os.path.join(_run("bc"), "metadata.json"), encoding="utf-8"))
+    assert D.training_lock_rule(m).version == have
+
+
 def _tests():
     return [(n, f) for n, f in sorted(globals().items())
             if n.startswith("test_") and callable(f)]

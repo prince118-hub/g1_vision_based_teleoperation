@@ -382,6 +382,33 @@ def test_norm_stats_split_must_be_stated():
         assert "split" in str(err).lower()
 
 
+def test_norm_stats_refuse_a_masked_action_dim_that_is_not_constant():
+    """Review 2026-10-24: the masked dims are excluded from the loss and
+    overwritten at deployment (0.0; dim 18 := dim 17), which is only right while
+    the data agrees. A violating dataset is refused where stats are fitted."""
+    got = _fake_episode_files(2)
+    if got is None:
+        print("      (skipped: nothing staged in data/synthetic)")
+        return
+    tmp, eps = got
+    try:
+        DS.fit_norm_stats(eps, "train", allow_synthetic=True)          # staged data: fine
+        for dim, val in ((13, 0.25), (spec.GRIP_R_A, None)):
+            with np.load(eps[1].path, allow_pickle=False) as z:
+                arrays = {k: z[k] for k in z.files}
+            good = arrays["actions"].copy()
+            a = good.copy()
+            a[3, dim] = val if val is not None else 1.0 - a[3, spec.GRIP_L_A]
+            np.savez_compressed(eps[1].path, **dict(arrays, actions=a))
+            e = _raises(DS.DatasetError, DS.fit_norm_stats, eps, "train",
+                        allow_synthetic=True)
+            assert ("masked action dim %d" % dim) in str(e) and "1 of" in str(e), e
+            np.savez_compressed(eps[1].path, **dict(arrays, actions=good))
+        DS.assert_masked_actions_constant(np.zeros((5, spec.ACTION_DIM)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_norm_stats_carry_seed_provenance_and_it_is_checked():
     """A3: seeds, date and commit are written, and a normalizer fitted on a
     DIFFERENT episode set is refused rather than loaded silently."""

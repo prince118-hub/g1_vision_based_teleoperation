@@ -65,13 +65,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from g1_data import dataset as DS                                   # noqa: E402
+from g1_data.paths import repo_relpath                              # noqa: E402
 
 EXP = (("exp1", os.path.join(ROOT, "data", "eval", "exp1_seeds.json")),
        ("exp2", os.path.join(ROOT, "data", "eval", "exp2_seeds.json")))
 DONE_STATUS = ("finished", "hard_cap")
 STAGES = ("place", "transport", "lift", "grasp")        # last stage first
 SELECTION_RULE = ("max (successes, place, transport, lift, grasp, -mean placement_error_m) "
-                  "over the 20 selection seeds; tie -> fewest training steps (epochs for BC)")
+                  "over the 20 selection seeds; tie -> least training: optimizer steps for a "
+                  "step-budgeted run, epochs for an epoch-budgeted one (BC)")
 HEAVY = re.compile(r"train_bc\.py|deploy\.py|train_scripted_v3_n40\.ps1|eval_scripted\.py")
 
 
@@ -183,7 +185,7 @@ def _lines(path: str):
 
 
 def deploy(run_dir: str, ckpt: str, seed_args, n_seeds: int, out: str, lock_rule: str,
-           logdir: str):
+           logdir: str, allow_mismatch: bool = False):
     """Run tools/deploy.py into `out` (via .part); return its rows."""
     if os.path.exists(out):
         rows = _lines(out)
@@ -198,7 +200,8 @@ def deploy(run_dir: str, ckpt: str, seed_args, n_seeds: int, out: str, lock_rule
     os.makedirs(logdir, exist_ok=True)
     lg = os.path.join(logdir, os.path.basename(out).replace(".jsonl", ".log"))
     cmd = [sys.executable, "-u", os.path.join(ROOT, "tools", "deploy.py"), "--run", run_dir,
-           "--ckpt", ckpt, "--lock-rule", lock_rule, "--out", part] + list(seed_args)
+           "--ckpt", ckpt, "--lock-rule", lock_rule, "--out", part] + list(seed_args) + (
+               ["--allow-lock-rule-mismatch"] if allow_mismatch else [])
     t0 = time.time()
     with open(lg, "w", encoding="utf-8") as fh:
         code = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=ROOT)
@@ -223,18 +226,32 @@ def tally(rows) -> dict:
     return t
 
 
-def _progress(rows) -> float:
+def epoch_budgeted(run_dir: str) -> bool:
+    meta = json.load(open(os.path.join(run_dir, "metadata.json"), encoding="utf-8"))
+    return meta["config"].get("epochs") is not None
+
+
+def _progress(rows, by_epoch: bool) -> float:
+    """Training done at this checkpoint, in ONE unit per run (review,
+    2026-10-24): BC's periodic checkpoints carry a step count and its best.pt
+    does not, so "step, else epoch" compared 3.3M steps with 294 epochs.
+    Epoch-budgeted runs (BC) use epochs throughout; step-budgeted ones steps."""
     ck = rows[0]["header"]["ckpt"]
-    return float(ck["step"] if ck.get("step") is not None else ck["epoch"])
+    v = ck.get("epoch") if by_epoch else ck.get("step")
+    if v is None:
+        raise SystemExit("checkpoint %s records no %s" % (ck.get("file"),
+                                                           "epoch" if by_epoch else "step"))
+    return float(v)
 
 
-def select(run_dir: str, ev: str, lock_rule: str) -> dict:
+def select(run_dir: str, ev: str, lock_rule: str, allow_mismatch: bool = False) -> dict:
     path = os.path.join(ev, "selection.json")
     if os.path.exists(path):
         sel = json.load(open(path, encoding="utf-8"))
         log("  selection.json exists: %s" % sel["chosen"])
         return sel
     n_sel = len(DS.load_seed_file(DS.SELECT_SEEDS))
+    by_epoch = epoch_budgeted(run_dir)
     cands = []
     for f, alias in candidates(run_dir):
         if alias:
@@ -243,8 +260,9 @@ def select(run_dir: str, ev: str, lock_rule: str) -> dict:
             continue
         rows = deploy(run_dir, f, ["--selection"], n_sel,
                       os.path.join(ev, "select", f.replace(".pt", ".jsonl")),
-                      lock_rule, os.path.join(ev, "logs"))
-        cands.append(dict(ckpt=f, alias_of=None, progress=_progress(rows),
+                      lock_rule, os.path.join(ev, "logs"), allow_mismatch)
+        cands.append(dict(ckpt=f, alias_of=None, progress=_progress(rows, by_epoch),
+                          progress_unit="epoch" if by_epoch else "step",
                           ckpt_info=rows[0]["header"]["ckpt"], **tally(rows)))
     real = [c for c in cands if not c["alias_of"]]
 
@@ -253,11 +271,11 @@ def select(run_dir: str, ev: str, lock_rule: str) -> dict:
         return (c["success"],) + tuple(c[s] for s in STAGES) + (
             -(pe if pe is not None else float("inf")), -c["progress"])
     best = max(real, key=key)
-    sel = dict(run=os.path.relpath(run_dir, ROOT), chosen=best["ckpt"],
+    sel = dict(run=repo_relpath(run_dir), chosen=best["ckpt"],
                chosen_tally={k: best[k] for k in ("n", "success", "grasp", "lift", "transport",
                                                    "place", "mean_placement_error_m")},
                rule=SELECTION_RULE, lock_rule=lock_rule,
-               seed_set=os.path.relpath(DS.SELECT_SEEDS, ROOT), candidates=cands,
+               seed_set=repo_relpath(DS.SELECT_SEEDS), candidates=cands,
                written=now())
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(sel, fh, indent=1)
@@ -265,14 +283,15 @@ def select(run_dir: str, ev: str, lock_rule: str) -> dict:
     return sel
 
 
-def evaluate(run_dir: str, eval_root: str, lock_rule: str) -> dict:
+def evaluate(run_dir: str, eval_root: str, lock_rule: str, allow_mismatch: bool = False) -> dict:
     name = os.path.basename(os.path.normpath(run_dir))
     ev = os.path.join(eval_root, name)
-    sel = select(run_dir, ev, lock_rule)
+    sel = select(run_dir, ev, lock_rule, allow_mismatch)
     res = dict(run=name, chosen=sel["chosen"], select=sel["chosen_tally"])
     for tag, seeds in EXP:
         rows = deploy(run_dir, sel["chosen"], ["--seeds", seeds], len(DS.load_seed_file(seeds)),
-                      os.path.join(ev, "%s.jsonl" % tag), lock_rule, os.path.join(ev, "logs"))
+                      os.path.join(ev, "%s.jsonl" % tag), lock_rule, os.path.join(ev, "logs"),
+                      allow_mismatch)
         res[tag] = tally(rows)
     return res
 
@@ -293,6 +312,10 @@ def main(argv=None):
     ap.add_argument("--run-root", default=os.path.join(ROOT, "runs", "scripted_v3"))
     ap.add_argument("--eval-root", default=None, help="default <run-root>/eval")
     ap.add_argument("--lock-rule", default="v3")
+    ap.add_argument("--allow-lock-rule-mismatch", action="store_true",
+                    help="passed to deploy.py: evaluate under --lock-rule although the "
+                         "training data used another (scripted_v3 data is v2; the "
+                         "experiments run v3 by decision, CLAUDE.md section 8 2026-10-24)")
     ap.add_argument("--wait-for-training", action="store_true")
     ap.add_argument("--training-summary", default=None,
                     help="default <run-root>/summary_n40.txt")
@@ -322,7 +345,7 @@ def main(argv=None):
                 fh.write("%-22s SKIPPED: training status %s\n" % (os.path.basename(d), st))
             continue
         log("=== %s" % os.path.basename(d))
-        r = evaluate(d, eval_root, a.lock_rule)
+        r = evaluate(d, eval_root, a.lock_rule, a.allow_lock_rule_mismatch)
         results.append(r)
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(line(r) + "\n")

@@ -71,7 +71,13 @@ def geometry(model=None) -> dict:
         bgid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "box1_geom")
         ggid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "platform_goal_geom")
         bid = int(m.geom_bodyid[gid])
+        # The box's linear velocity in qvel, from the model (CLAUDE.md section
+        # 12: never hardcode an offset). Review 2026-10-24: this read
+        # qvel[-6:-3], right only while the box joint is the LAST free joint.
+        from g1_teleop.indices import ModelIndex
+        bv = ModelIndex.resolve(m).box_qvel
         _GEO.update(
+            box_lin_qvel=(int(bv.start), int(bv.start) + 3), nv=int(m.nv),
             top_z=float(m.body_pos[bid][2] + m.geom_size[gid][2]),
             box_half=float(m.geom_size[bgid][2]),
             goal_xy=np.array(m.body_pos[int(m.geom_bodyid[ggid])][:2], dtype=float))
@@ -163,10 +169,15 @@ def evaluate(arrays: dict, meta: dict, cfg: Optional[SuccessConfig] = None,
     resting = abs(float(final[2]) - g["rest_z"]) <= c.resting_tol
     speed = float("nan")
     if "qvel" in arrays:
-        # The box free joint leads qvel; 3 linear dims. "Resting" means it has
-        # stopped, not that it happens to pass through the right height.
+        # The box free joint's 3 linear dims, located by ModelIndex. "Resting"
+        # means it has stopped, not that it happens to pass through the right
+        # height.
         qv = np.asarray(arrays["qvel"], dtype=np.float64)
-        speed = float(np.linalg.norm(qv[-1, -6:-3]))
+        if qv.shape[1] != g["nv"]:
+            raise ValueError("qvel has %d columns, the model nv is %d - recorded with "
+                             "another model?" % (qv.shape[1], g["nv"]))
+        lo, hi = g["box_lin_qvel"]
+        speed = float(np.linalg.norm(qv[-1, lo:hi]))
         resting = resting and speed <= c.settled_speed
     # Open item 35 (2026-10-18): the box is not placed while the hand still
     # holds it. Every condition above can hold with the weld engaged - a box

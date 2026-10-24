@@ -43,6 +43,34 @@ def test_a_released_placement_succeeds():
     assert r["episode_success"] and r["place_detail"]["released"] is True
 
 
+def test_resting_reads_the_box_velocity_where_the_model_puts_it():
+    """Review 2026-10-24: the box's linear velocity is located by ModelIndex,
+    not as qvel[-6:-3]. A fast box fails `resting`; the same speed on the
+    box's ANGULAR dims or on a robot joint does not; a qvel of the wrong width
+    (another model) is refused."""
+    from g1_teleop.config import TeleopConfig
+    from g1_teleop.contact_contract import load_model
+    from g1_teleop.indices import ModelIndex
+    g = SU.geometry()
+    bv = ModelIndex.resolve(load_model(TeleopConfig())).box_qvel
+    assert g["box_lin_qvel"] == (bv.start, bv.start + 3)
+    arrays, meta = _episode()
+    T = len(arrays["states"])
+    qv = np.zeros((T, g["nv"]))
+    assert SU.evaluate(dict(arrays, qvel=qv), meta)["place"]
+    for cols, placed in ((slice(bv.start, bv.start + 3), False),
+                         (slice(bv.start + 3, bv.start + 6), True), (slice(0, 3), True)):
+        q = qv.copy()
+        q[-1, cols] = 1.0
+        assert SU.evaluate(dict(arrays, qvel=q), meta)["place"] is placed, cols
+    try:
+        SU.evaluate(dict(arrays, qvel=np.zeros((T, g["nv"] + 1))), meta)
+    except ValueError as e:
+        assert "nv" in str(e)
+    else:
+        raise AssertionError("a qvel of the wrong width must be refused")
+
+
 def test_a_box_still_held_at_the_end_is_not_placed():
     """Every other place condition holds - at the goal, resting, upright - but
     the weld never released: not a placement, charged to PLACE."""

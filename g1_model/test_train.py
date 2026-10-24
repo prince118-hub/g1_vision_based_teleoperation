@@ -39,8 +39,12 @@ def _raises(exc, fn, *a, **k):
                                                   exc.__name__))
 
 
-def _tiny(n_eps=2, n_ticks=40, tmp=None):
-    """A small real-format dataset, for tests that must actually train."""
+def _tiny(n_eps=2, n_ticks=40, tmp=None, masked_consistent=False):
+    """A small real-format dataset, for tests that must actually train.
+
+    `masked_consistent`: the masked action dims hold what the data must hold
+    (0.0; dim 18 = dim 17), as `fit_norm_stats` requires since 2026-10-24.
+    Off by default so the tests that never fit stats keep their data."""
     src = sorted(p for p in DS._npz(DS.SYNTHETIC))
     if not src:
         return None
@@ -51,10 +55,14 @@ def _tiny(n_eps=2, n_ticks=40, tmp=None):
         rng = np.random.default_rng(s)
         m = dict(meta, seed=s, n_ticks=n_ticks,
                  box_spawn_xy=[1.50, -0.10 + 0.02 * s])
+        states = rng.normal(size=(n_ticks, spec.STATE_DIM)).astype(np.float32)
+        actions = rng.normal(size=(n_ticks, spec.ACTION_DIM)).astype(np.float32)
+        if masked_consistent:
+            for d in spec.CONSTANT_ACTION_DIMS:
+                actions[:, d] = actions[:, spec.GRIP_L_A] if d == spec.GRIP_R_A else 0.0
         np.savez_compressed(
             os.path.join(tmp, "ep_seed%04d.npz" % s),
-            states=rng.normal(size=(n_ticks, spec.STATE_DIM)).astype(np.float32),
-            actions=rng.normal(size=(n_ticks, spec.ACTION_DIM)).astype(np.float32),
+            states=states, actions=actions,
             phase_labels=np.zeros(n_ticks, dtype=np.int8),
             gait_phase=np.zeros((n_ticks, 2), dtype=np.float32),
             qpos=np.zeros((n_ticks, 45), dtype=np.float32),
@@ -1491,7 +1499,7 @@ def test_runner_seed_flag_reaches_the_run_and_defaults_to_zero():
     config; omitting it must give 0, the seed of every earlier run, bit for bit;
     a different seed must give different weights. The gate keeps its fixed 0."""
     import subprocess
-    got = _tiny(n_eps=4, n_ticks=40)
+    got = _tiny(n_eps=4, n_ticks=40, masked_consistent=True)
     if got is None:
         print("      (skipped: nothing staged in data/synthetic)")
         return

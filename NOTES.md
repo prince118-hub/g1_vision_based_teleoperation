@@ -7321,3 +7321,58 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
   **BLOCKED: Charles does not have the ZED 2i at present (2026-10-24)** - steps 2-5 wait until the camera is
   available; nothing in them can be substituted by the fake source (camera provenance, real tick rate and dropout,
   a real take, a real operator).
+
+## 2026-10-24e — Independent review: M1 fix, minor fixes, D19/D20 deviation rows, transport window
+
+**M1 — walk-in failures were charged to GRASP in every deployed episode.** `tools/deploy.py`
+called `success.evaluate` BEFORE `phase_label.label_episode`, so `success.attribute` received no
+`phase_labels` and could never apply its WALK_IN rule (never welded AND last label SETTLE). Fixed:
+the labels are derived first and passed into the scoring. The four criteria never read the labels,
+so only `fail_reason` changes — re-running act_160_seed0 Exp 1 seeds 240-242 with the fix
+reproduced the stored trajectories bit-for-bit (`trajectory_sha256`) and changed nothing else
+(242: GRASP -> WALK_IN). Test: `test_walk_in_failure_is_charged_to_walk_in_not_grasp`.
+**Stored results corrected offline** (`tools/fix_walkin_attribution.py`): 1157 of 5020 selection +
+Exp rows (fail GRASP, `weld_engage_tick` < 0, `phase_reached` SETTLE) -> WALK_IN, each with
+`fail_reason_original` and `corrections: ["M1"]`. **Originals kept** in
+`runs/scripted_v3/eval_pre_m1/` (same paths); the tool always reads from there, so it is
+idempotent. Success counts, stage counts and selections are unchanged.
+
+**Minor fixes (same review).**
+- `eval_scripted.py`: `repo_relpath` (the raw call failed `test_every_relpath_call_site_goes_through_the_helper`).
+- Selection tie-break in ONE unit per run: epochs for an epoch-budgeted run (BC), steps otherwise.
+  BC's periodic checkpoints carry a step count and its `best.pt` does not, so the old "step, else
+  epoch" compared 3.3M steps with 294 epochs. **It never decided a selection** (every chosen
+  checkpoint was the unique best on the earlier keys, checked on all 12 runs); the four BC
+  `selection.json` files were rewritten in epochs and re-derived, choices unchanged.
+- `success.py`: box linear velocity located by `ModelIndex` (`qvel[37:40]`), not `qvel[-6:-3]` —
+  numerically identical in this model (the box is the last free joint), wrong the day it is not;
+  a qvel of another width is refused. The old comment ("leads qvel") was wrong.
+- `deploy.py` refuses norm stats not fitted on the run's own training seeds
+  (`assert_norm_stats_match` against `metadata.data.seeds`).
+- Fail-closed guards in `deploy.py`: the train/val seed guard used to return no seeds - and so
+  pass every seed - when the splits file was missing; it now unions metadata and splits and
+  refuses when neither exists. The lock rule is read from EVERY training episode (it read the first
+  file in the folder) and refuses when missing or mixed; a mismatch with `--lock-rule` now refuses
+  unless `--allow-lock-rule-mismatch` states it (recorded in the header). scripted_v3 data is v2
+  and the experiments run v3 by decision, so `eval_scripted.py` / `eval_scripted_v3_n40.ps1` pass it.
+  Both checks now run before anything is loaded.
+- `dataset.fit_norm_stats` refuses a dataset whose masked action dims are not what deploy assumes
+  (6, 13, 14, 15, 16 exactly 0.0; 18 == 17). Holds on scripted_v3.
+
+**D19 / D20 — deviation rows for CLAUDE.md §7** (the table is at the 400-line cap; first recorded
+2026-09-16 above, never given a row):
+
+| # | Proposal says | Code does | Why | Chapter |
+|---|---|---|---|---|
+| D19 | §3.8.2 grasp = grippers closed AND box above the platform | **+ box within 50 mm of its spawn at the engage tick** (`grasp_spawn_max`) | both proposal conditions hold for a box bulldozed 185 mm into the palms (replay negative control); healthy pre-grasp disturbance 0.0-1.9 mm, so 50 mm is 26x the healthy max and 3.7x below the shove | 3.8.2 + results |
+| D20 | §3.8.2 lift = box height > platform + 0.05 m | scored on the box **BOTTOM** | read as the centre it cannot fail: a 0.18 m box at rest is already 0.09 m above the platform (`never_lifted` fault missed) | 3.8.2 + results |
+
+Both are criteria that **could not fail as written** and belong in the results as such. D19's
+effect on the scripted experiments is measured in the analysis (D19 sensitivity table).
+
+**Transport window.** `transport` = `lift` AND the box centre stays >= 0.30 m (`floor_clear_z`)
+over **[engage tick, episode END]** — not [lift, release]. Two consequences for the write-up:
+(1) a box placed and released, then knocked or dropped to the floor before the episode ends, fails
+TRANSPORT (and is charged there), not PLACE; (2) the pre-lift ticks are inside the window but cannot
+fail it (the box rests on the 0.75 m platform). Proposal §3.8.2 says "throughout" without naming
+the interval; this is the interval the code scores.
