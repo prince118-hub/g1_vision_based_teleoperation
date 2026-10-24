@@ -198,10 +198,15 @@ def test_the_lstm_reads_every_step_in_order_and_never_the_padding():
         # the padding never does: rows past each length changed -> output identical
         pad = x.clone(); pad[0, 12:] = 99.0; pad[2, 1:] = -7.0
         assert torch.equal(m(history_of(pad, L)), y)
-        # and a sample does not depend on its batch-mates
+        # and a sample does not depend on its batch-mates. Tolerance 1e-5, not
+        # 1e-6: on the NVIDIA laptop's Intel CPU the alone-vs-batched difference
+        # is 6.6e-7..1.0e-6 on outputs of order 1 (float32 GEMM rounding varies
+        # with the batch size; measured 2026-10-25) - a leak from a batch-mate or
+        # the padding would be O(0.1), and the padding check above is exact.
         for b, n in enumerate(L):
             alone = m(history_of(x[b:b + 1, :n], [n]))
-            assert torch.allclose(alone, y[b:b + 1], atol=1e-6, rtol=0), b
+            assert torch.allclose(alone, y[b:b + 1], atol=1e-5, rtol=0), \
+                (b, float((alone - y[b:b + 1]).abs().max()))
     # the gradient reaches the OLDEST real step of every sample, and no padded one
     xg = x.clone().requires_grad_(True)
     m(history_of(xg, L)).sum().backward()
@@ -388,6 +393,50 @@ def test_two_identical_act_lstm_full_runs_are_bit_identical():
         shutil.rmtree(out, ignore_errors=True)
 
 
+def test_cuda_resume_of_an_lstm_with_dropout_is_not_bit_exact():
+    """A KNOWN LIMITATION, pinned (2026-10-25, NVIDIA laptop): cuDNN's LSTM keeps
+    its own dropout RNG state, seeded once per module and advanced inside cuDNN,
+    which a full-state resume (torch/CUDA generator states) cannot restore. So on
+    CUDA a resumed act_lstm_full - and any LSTM with between-layer dropout, i.e.
+    act_lstm too - does NOT reproduce the uninterrupted curve; with LSTM dropout
+    0 it does, which isolates the cause. Uninterrupted runs ARE deterministic
+    (test_two_identical_act_lstm_full_runs_are_bit_identical). No result depends
+    on a resume: the launchers restart an interrupted run from scratch."""
+    import dataclasses
+    from g1_model.test_train import _losses
+    if not torch.cuda.is_available():
+        print("      (skipped: no CUDA)")
+        return
+    got = _datasets(K=5)
+    if got is None:
+        print("      (skipped: nothing staged in data/synthetic)")
+        return
+    tmp, _, hist = got
+    outcome = {}
+    try:
+        for drop in (0.3, 0.0):
+            mcfg = dataclasses.replace(_small(AM.ACTFullHistoryConfig, K=5), lstm_dropout=drop)
+            dirs = [tempfile.mkdtemp() for _ in range(3)]
+
+            def run(out, max_steps, resume=None):
+                cfg = T.TrainConfig(epochs=None, batch_size=8, seed=3, max_steps=max_steps,
+                                    window_steps=7, stop_rule=None, log_every=0,
+                                    **mcfg.optimizer_config())
+                m = T.seeded_build(cfg, AM.build_act_lstm_full, cfg=mcfg)
+                return T.train(m, hist, cfg, run_dir=out, resume=resume)
+            try:
+                whole = run(dirs[0], 28)
+                run(dirs[1], 14)
+                resumed = run(dirs[2], 28, resume=T.Resume(os.path.join(dirs[1], "state.pt")))
+                outcome[drop] = _losses(resumed["history"]) == _losses(whole["history"])
+            finally:
+                for d in dirs:
+                    shutil.rmtree(d, ignore_errors=True)
+        assert outcome == {0.3: False, 0.0: True}, outcome
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_full_state_resume_is_bit_exact_for_act_lstm_full():
     """As test_train's ACT resume test: killed mid-pass, the resumed curve is the
     uninterrupted one to the bit - LSTM dropout RNG and the shuffled history
@@ -401,9 +450,11 @@ def test_full_state_resume_is_bit_exact_for_act_lstm_full():
     a, b, c = tempfile.mkdtemp(), tempfile.mkdtemp(), tempfile.mkdtemp()
     mcfg = _small(AM.ACTFullHistoryConfig, K=5)
 
+    # ON THE CPU: bit-exact there. On CUDA it is NOT, with LSTM dropout > 0 -
+    # see test_cuda_resume_of_an_lstm_with_dropout_is_not_bit_exact.
     def run(out, max_steps, resume=None):
         cfg = T.TrainConfig(epochs=None, batch_size=8, seed=3, max_steps=max_steps,
-                            window_steps=7, stop_rule=None, log_every=0,
+                            window_steps=7, stop_rule=None, log_every=0, prefer_cuda=False,
                             **mcfg.optimizer_config())
         m = T.seeded_build(cfg, AM.build_act_lstm_full, cfg=mcfg)
         return T.train(m, hist, cfg, run_dir=out, resume=resume)

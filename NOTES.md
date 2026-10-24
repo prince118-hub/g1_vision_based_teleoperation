@@ -7658,3 +7658,20 @@ the evaluation rules are untouched.
   6. D8 is still PENDING adviser approval.
 - report_extras inference timing: act_lstm_full is timed through `step()` with carried (h, c), the deployed call;
   `model(obs)` on a plain tensor is refused by the model.
+- **Laptop checks after the merge (2026-10-25):**
+  - **pytest** `g1_data g1_teleop g1_model tools`: 446 passed, 1 skipped (the torch-less report_extras path), 0 failed.
+    Two PR #7 tests first FAILED on the laptop; both were fixed to state what is true (fixtures only):
+    1. batch independence of act_lstm_full: alone-vs-batched max |diff| 6.6e-7 to 1.0e-6 on this Intel CPU (float32
+       GEMM rounding varies with batch size) against a 1e-6 tolerance. Now 1e-5; the padding check stays exact.
+    2. **full-state resume is NOT bit-exact on CUDA for an LSTM with between-layer dropout.** cuDNN keeps its own
+       dropout RNG state (seeded once per module, advanced inside cuDNN), which restoring the torch/CUDA generators
+       cannot reproduce. Measured with act_lstm_full: dropout 0.3 differs from the whole run at the window after the
+       resume (54.90 vs 54.38 loss), dropout 0 is bit-exact, and on the CPU it is bit-exact. This applies to act_lstm
+       too (never tested before). Uninterrupted runs ARE deterministic on CUDA. **No result depends on a resume:**
+       every launcher restarts an interrupted run from scratch. The resume test now runs on the CPU, and
+       `test_cuda_resume_of_an_lstm_with_dropout_is_not_bit_exact` pins the limitation (0.3 -> differs, 0 -> equal).
+  - **`check_memory_design_regression.py`**, real act_lstm_n40_seed0 and act_n40_seed0 best.pt: ALL IDENTICAL with
+    `--base add437b` (main just before the merge, the meaningful base) and with `--base main` (trivial: it is the merge).
+  - **`bench_memory_design.py --device cuda`** (RTX 3050, K 100, batch 8; estimate per 200k-step run): act_lstm 5.2 h
+    (measured on real runs: 4.7 h, so the bench reads ~10% high), act_orig 4.7 h (0.91x), act_lstm_full 8.7 h
+    (1.66x; step 0.131 s vs 0.071 s). Expect about 4.3 h and 7.9 h.
