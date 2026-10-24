@@ -7321,3 +7321,31 @@ and g1_data/recorder.py untouched - PR #2). Results in `runs/scripted_v3/lockv3/
   **BLOCKED: Charles does not have the ZED 2i at present (2026-10-24)** - steps 2-5 wait until the camera is
   available; nothing in them can be substituted by the fake source (camera provenance, real tick rate and dropout,
   a real take, a real operator).
+
+## 2026-10-24e — report extras: data quality, compute, offline vs real, teleop metrics, SUS (branch report-extras)
+
+New files only (another session is editing deploy.py / eval_scripted.py / analyze_experiments.py); no existing
+file changed except this one. All read-only, no mujoco import (the ledger is loaded from `g1_data/ledger.py`'s
+file, since `import g1_data` pulls in mujoco), CPU-testable. How to run: `docs/REPORT_EXTRAS.md`.
+
+- `tools/report_extras.py`: (a) data quality per recording folder - ledger attempts / accepted / rejected / errors
+  (`EpisodeLedger.summary`, last decision per seed), accepted-episode length min/median/max, spec version, lock
+  rule, grip label, source, demonstrator settings / operators, tracking dropout (measured episodes only), replay
+  check (only if its stdout was saved as `replay_check*.txt` in the folder - `replay_check.py` writes nothing);
+  (b) compute per run - wall time, optimizer steps, steps/s, params, device from result/metadata.json (killed
+  run: last metrics.jsonl row); inference = model forward only on a zero (1, W_o, 48) window, default CPU;
+  (c) offline vs real - per deployed selection checkpoint, validation loss vs successes /20, Spearman per run and
+  pooled per model (agreement = NEGATIVE rho; constant success = UNDEFINED, e.g. BC-160).
+- **Gap, not fixed here (would need a train.py change): peak RAM / GPU memory are not logged by train_bc.py.**
+  The report reads them only from a `resources.json` sidecar (`peak_ram_gb`, `peak_gpu_gb`), else "n/a".
+- `tools/teleop_metrics.py`: attempts reconstructed from the ledger (issue -> next decision for that seed;
+  operator from the latest session row), success = accepted / attempted, wall time per attempt (1 s ledger
+  resolution, issue -> decision, excludes the idle screen) and per accepted demo (all attempt time / accepted),
+  learning curve per operator, dropout %, tick rate and overruns from each episode's `timing`.
+- `docs/SUS_FORM.md` (standard Brooke 1996 wording, printable) + `tools/sus_score.py` (odd: a-1, even: 5-a,
+  x2.5; per operator mean, overall mean over operators; blank / out-of-range answers refuse the file).
+- Tests: tools/test_report_extras.py, test_teleop_metrics.py, test_sus_score.py - 28 pass on CPU (no mujoco,
+  no torch). Synthetic fixtures in the producers' formats with hand-computed answers (SUS 80.0, Spearman 0.8 and
+  -1.0, dropout 40/1150). NOT run on real teleop data (none exists) nor on runs/scripted_v3 (not in this checkout);
+  on the four overfit-10 runs in runs/ the compute table reads correctly (no checkpoints there, so inference n/a).
+- CLAUDE.md not updated (this task was restricted to new files + NOTES.md).
