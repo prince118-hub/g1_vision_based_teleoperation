@@ -38,14 +38,20 @@ crashes Python AT EXIT (0xC0000409) after a clean finish (section 8,
 is skipped and reported.
 
 ONE HEAVY PROCESS AT A TIME. --wait-for-training first waits, every --poll s,
-until (a) no train_bc.py, deploy.py, train_scripted_v3_n40.ps1 or other
-eval_scripted.py process is running, seen idle on two checks 60 s apart, and
+until (a) no train_bc.py, deploy.py, train_scripted_v3_n40.ps1,
+train_memory_design_n40.ps1 or other eval_scripted.py process is running, seen
+idle on two checks 60 s apart, and
 (b) every requested run has a finished result.json OR the training launcher's
 summary (runs/scripted_v3/summary_n40.txt) has an "ended" line after its last
 "started" line - so starting this before the training launcher never races it.
 Without the flag it refuses to start while a train_bc.py or deploy.py runs.
 
 Per-run summary lines are appended to <eval>/summary.txt.
+
+Any trained run is accepted, whatever its model: deploy.py reads the model from
+the run's own metadata (`config.notes.model`) - bc, act, act_lstm, and the
+memory-design pair act_orig / act_lstm_full (g1_model/act_memory.py), which
+tools/train_memory_design_n40.ps1 evaluates through this script.
 """
 from __future__ import annotations
 
@@ -74,7 +80,8 @@ STAGES = ("place", "transport", "lift", "grasp")        # last stage first
 SELECTION_RULE = ("max (successes, place, transport, lift, grasp, -mean placement_error_m) "
                   "over the 20 selection seeds; tie -> least training: optimizer steps for a "
                   "step-budgeted run, epochs for an epoch-budgeted one (BC)")
-HEAVY = re.compile(r"train_bc\.py|deploy\.py|train_scripted_v3_n40\.ps1|eval_scripted\.py")
+HEAVY = re.compile(r"train_bc\.py|deploy\.py|train_scripted_v3_n40\.ps1|eval_scripted\.py"
+                   r"|train_memory_design_n40\.ps1")
 
 
 def now() -> str:

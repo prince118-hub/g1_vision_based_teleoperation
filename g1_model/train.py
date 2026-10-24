@@ -170,6 +170,15 @@ def seed_worker(worker_id: int) -> None:
     random.seed(s)
 
 
+def _collate_for(ds) -> Callable:
+    """The batcher for `ds`: its own `collate_fn` if it declares one, else
+    `collate_chunks`. A `ChunkDataset` declares none, so every existing model's
+    batches are built exactly as before. The episode-history loader of
+    act_lstm_full (`g1_model/history.py`) declares `collate_history`: its
+    samples' histories differ in length, so they are padded per batch."""
+    return getattr(ds, "collate_fn", None) or collate_chunks
+
+
 # ─── B4: the loss ─────────────────────────────────────────────────────────────
 def masked_l1(pred: torch.Tensor, target: torch.Tensor,
               pad_mask: torch.Tensor,
@@ -258,7 +267,7 @@ def baselines(ds: ChunkDataset, device: Optional[torch.device] = None,
     sums = dict(zero=0.0, copy=0.0)
     n_total = 0
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False,
-                        collate_fn=collate_chunks, num_workers=0)
+                        collate_fn=_collate_for(ds), num_workers=0)
     offset = 0
     for batch in loader:
         target = batch["action"].to(device)
@@ -948,7 +957,7 @@ def score_deployment(model: nn.Module, ds: ChunkDataset,
     probe_obs = probe_out = None
     with _DeploymentGuard(model) as guard, torch.no_grad():
         for i in range(0, len(ds), int(batch_size)):
-            batch = collate_chunks([ds[j] for j in range(i, min(i + int(batch_size), len(ds)))])
+            batch = _collate_for(ds)([ds[j] for j in range(i, min(i + int(batch_size), len(ds)))])
             obs = batch["obs"].to(device, non_blocking=True)
             pred = model(obs)                        # the observation, and nothing else
             if probe_obs is None:
@@ -1181,7 +1190,7 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
     g = torch.Generator()
     g.manual_seed(cfg.seed)
     tl = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
-                    collate_fn=collate_chunks, num_workers=cfg.num_workers,
+                    collate_fn=_collate_for(train_ds), num_workers=cfg.num_workers,
                     generator=g, worker_init_fn=seed_worker, drop_last=False)
     # Validation and selection are scored by `score_deployment` directly on the
     # dataset (no DataLoader: see its docstring on the global generator).
