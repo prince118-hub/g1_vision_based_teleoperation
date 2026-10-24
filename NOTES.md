@@ -7523,3 +7523,27 @@ FILES ONLY - no existing code changed (another session edits deploy/eval): `tool
   length, breaks, attempts per seed, stand-still) are unmeasured.
 - **Not verified:** Windows drive paths, a USB / cloud-synced destination, any real ZED episode (checklist steps 2-5
   still BLOCKED, no camera).
+
+## 2026-10-25 — PRs #5/#6 merged, norm source label, resources.json, BC control (review M3), report extras
+
+- Merged report-extras (#5) and collection-helpers (#6); NOTES conflicts were end-of-file appends, both kept.
+- `fit_norm_stats` labelled any source not starting with "scripted" as REAL: `teleop_live_fake` and the teleop
+  fixture were "real" and needed no `allow_synthetic`. Now `recorder.SOURCES[..]["real"]` decides; unregistered
+  sources raise; a real+fake mix is "mixed". `pilot_check` passes `--allow-synthetic` to the norm step only under
+  its own `--allow-fake`. `report_extras` used the raw relpath (failed the repo-wide test) -> `IO.repo_relpath`.
+  pytest 8.3.3 installed (test-only; the report-extras suites need it). All 26 suites pass.
+- `tools/write_resources.py`: `resources.json` per run from the launchers' summary lines (peak RAM = process
+  working set; peak GPU = nvidia-smi DEVICE-WIDE, an upper bound). 16 runs written.
+- **BC control (M3): BC at its own default batch 256** (lr 1e-3, 300 epochs, W_o 12, same data; only the batch
+  differs), `bc_b256_n40_seed{0,1,2}` + `bc_b256_160_seed0`, lock rule v3, same selection + Exp 1/2.
+  **0/100 in every run and experiment, and 0 grasps** (batch 8 BC: 0 successes, 4-31 grasps per 100-300).
+  Failure mode: locks on every episode (b8 n40: 71/100), farther palm reaches 0.11-0.12 m median (inside the
+  0.16 m gate), but never welds - the grip is commanded in 0/200 (160) to 152/200 episodes and the gate refuses
+  on `opposite`/`near`. Lower val loss (0.013-0.014 vs 0.024-0.029) and no better in closed loop.
+  `analyze_experiments` reports it as a control against BC (`bc_control.csv`), outside the 3-model tests.
+- `tools/report_extras.py --bench-device cuda` -> `runs/scripted_v3/report_extras/`. Offline vs real: pooled
+  Spearman rho(val loss, selection successes) = -0.51 for ACT (n 44, p 4e-4) and -0.52 for ACT-LSTM (n 43, p 4e-4);
+  undefined for BC (0/20 at every checkpoint). Inference (model forward, CUDA): BC 0.25-0.30 ms, ACT 4.7-5.4 ms,
+  ACT-LSTM 6.0-7.8 ms; all well inside the 40 ms tick. Replay check of scripted_v3 not run (column "not run").
+- Documentation videos: `tools/record_exp_videos.py` ready (208 videos = 160 successes + 48 typical failures,
+  ~1.5 GB, hash-checked); NOT run yet (Charles, 2026-10-25: later).
