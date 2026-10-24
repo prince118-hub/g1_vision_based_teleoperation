@@ -85,17 +85,13 @@ from locomotion_input import (PelvisVelocity, LeanJoystick, KeyboardCommand,
                               KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-# G1_POLICY_PATH / G1_SCENE_PATH override the paths per machine. Unset, both
-# resolve against THIS file's directory (the repo root), so a checkout anywhere
-# finds its own tracked `motion.pt` and `scene.xml`. The old fallback was the
-# absolute "D:\Charles_Aninon\Thesis Project\..." path: for a checkout AT that
-# path this resolves to the same files; anywhere else the old one did not exist.
-_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
-POLICY_PATH = os.environ.get(
-    "G1_POLICY_PATH",
-    os.path.join(_REPO_DIR, "unitree_rl_gym", "deploy", "pre_train", "g1", "motion.pt"))
-SCENE_PATH = os.environ.get(
-    "G1_SCENE_PATH", os.path.join(_REPO_DIR, "scene.xml"))
+# G1_POLICY_PATH / G1_SCENE_PATH override the paths per machine; unset, both
+# resolve inside this checkout. ONE source for teleop and walk_test's practice
+# mode: g1_teleop/operator_config.py (it also holds the start pose, the keyboard,
+# the default lock rule and the floor-guide default).
+from g1_teleop import operator_config as OC
+from g1_teleop.floor_guide import FloorGuide
+POLICY_PATH, SCENE_PATH = OC.POLICY_PATH, OC.SCENE_PATH
 
 # ── Display ───────────────────────────────────────────────────────────────────
 PANEL_H = 620
@@ -337,7 +333,10 @@ def draw_minimal_panel(img, st):
     numbers behind them live in the FULL view (key o).
     """
     x, y, dy, sc = 16, 46, 46, 1.0
-    if not st["tracking"]:
+    if st.get("practice"):
+        # walk_test.py: no camera, the arms are deliberately not driven.
+        text(img, "PRACTICE - walk in, lock", (x, y), sc, CYAN)
+    elif not st["tracking"]:
         # Grasp advice is meaningless when the arms are not following the
         # operator, so the fault replaces the grasp line rather than adding one.
         text(img, "TRACKING LOST", (x, y), sc, RED)
@@ -531,6 +530,9 @@ def build_parser():
                          "no pacing; prints the sim-to-wall ratio and where the time went")
     ap.add_argument("--abort-at", type=float, default=None,
                     help="headless test fixture: press 'u' (abort the base lock) at this sim time")
+    ap.add_argument("--guide", choices=OC.GUIDE_CHOICES, default=OC.GUIDE_DEFAULT,
+                    help="base-lock floor guide in the MuJoCo view (purely visual; "
+                         "g1_teleop/floor_guide.py). Default %(default)s")
     return ap
 
 
@@ -612,7 +614,7 @@ def open_session(args, source=None, sim_clock=None):
     elif which.startswith("l"):
         loco, loco_name = LeanJoystick(), "LEAN JOYSTICK (mode-switched)"
     else:
-        loco, loco_name = KeyboardCommand(), "KEYBOARD (decoupled)"
+        loco, loco_name = OC.keyboard_command(), "KEYBOARD (decoupled)"
     S.loco, S.loco_name = loco, loco_name
 
     cfg_box_for_reset = TeleopConfig().box
@@ -648,7 +650,10 @@ def open_session(args, source=None, sim_clock=None):
     # the pickup lock only) - the same rule the scripted demonstrator and
     # deploy.py use. TeleopRecorder stores it per episode. The live recorder
     # sets `S.lock_rule` from its --lock-rule before the loop.
-    S.lock_rule = LockConfig()
+    S.lock_rule = OC.default_lock_rule()
+    # The floor guide draws into the RENDER scene only (never the model).
+    S.guide = FloorGuide() if getattr(args, "guide", OC.GUIDE_DEFAULT) == "on" else None
+    S.practice = False             # walk_test.py's practice mode sets it
     S.plat_geo = PlatformGeometry.resolve(model)
     wrist_ids = [(int(model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n)]),
                   mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, n), n) for n in WRIST_JOINTS]
@@ -753,7 +758,47 @@ def open_session(args, source=None, sim_clock=None):
     S.wall_start = time.time()
     S.counter = 0
     S.events, S.pred, S.n_abort = [], None, 0
+    # The twin's ARM pose at open: warm-start state for the IK, restored by
+    # reset_for_episode so episode N does not start from episode N-1's pose.
+    S.twin_qpos0 = twin.data.qpos.copy()
     return S
+
+
+def reset_for_episode(S, seed, start_xy=OC.START_XY, start_standoff=None):
+    """Start an episode on an open session: the twin's arm pose restored, the
+    shared `reset_episode` (seeded box, LSTM / filters / keyboard reset, D18
+    contract checked), its fingerprint, then the base placed at `start_xy`
+    (default the operator start, OC.START_XY) - or head-on `start_standoff`
+    behind the box (a fixture). The camera side starts fresh too. ONE function
+    for tools/record_teleop_live.py and walk_test.py's practice mode.
+    Returns dict(start=EpisodeStart, fingerprint, start_xy)."""
+    from contextlib import nullcontext
+    from g1_data.reset import reset_episode, state_fingerprint
+    S.twin.data.qpos[:] = S.twin_qpos0
+    S.twin.data.qvel[:] = 0.0
+    mujoco.mj_forward(S.twin.model, S.twin.data)
+    start = reset_episode(S.model, S.data, S.ix, S.cfg, seed, controller=S.controller,
+                          loco_input=S.loco, twin=S.twin, policy=S.policy)
+    fp = state_fingerprint(S.data, S.ix)
+    if start_standoff is not None:
+        xy = (float(start.box_pos[0]) - start_standoff, float(start.box_pos[1]))
+    else:
+        xy = (float(start_xy[0]), float(start_xy[1]))
+    S.data.qpos[S.ix.base_qpos][0] = xy[0]
+    S.data.qpos[S.ix.base_qpos][1] = xy[1]
+    mujoco.mj_forward(S.model, S.data)
+    # A replayed take starts from frame 0, and no frame from before the start
+    # is applied.
+    src = getattr(S, "source_obj", None)
+    if hasattr(src, "rewind"):
+        src.rewind()
+    g = S.grabber
+    lock = getattr(g, "_lock", None)
+    with (lock if lock is not None else nullcontext()):
+        g._frame = None
+        if S.sim_clock:
+            g._seq = 0
+    return dict(start=start, fingerprint=fp, start_xy=xy)
 
 
 def run_loop(S, hooks=None):
@@ -1123,6 +1168,10 @@ def run_loop(S, hooks=None):
         # ── Right panel: simulation ─────────────────────────────────────
         _t = time.perf_counter() if profile else 0.0
         renderer.update_scene(data, camera=cam, scene_option=scene_option)
+        if S.guide is not None:
+            # Decor geoms appended to the render scene after update_scene: not in
+            # the model, so no mass, no contact, nothing recorded.
+            S.guide.draw(renderer.scene, lock_terms, pred.cfg, data, ix, base_lock.locked(data))
         right = fit_to_box(cv2.cvtColor(renderer.render(), cv2.COLOR_RGB2BGR),
                            MJ_PANEL_W, PANEL_H)
         if profile:
@@ -1138,7 +1187,8 @@ def run_loop(S, hooks=None):
             gcfg=cfg.grasp, weld=weld.cfg, diag=weld_diag, weld_on=weld_on, grasp_cmd=grasp_cmd,
             wrist=wd, wrist_joint=wj, pitch=wrist_deviation(data, wrist_ids, pitch_only=True)[0],
             bprime=CC.hand_pickup_exclusion_active(model), tracking=tracking_ok,
-            precision=bool(isinstance(loco, KeyboardCommand) and loco.precision))
+            precision=bool(isinstance(loco, KeyboardCommand) and loco.precision),
+            practice=S.practice)
 
         # Flag motion that the demonstrator did not ask for.
         moving = last_disp is not None and abs(travelled - last_disp) > 0.004
@@ -1174,6 +1224,8 @@ def run_loop(S, hooks=None):
                 hints.insert(0, "arrows walk/turn   n/m strafe (hold)   p precision")
             for k_, h_ in enumerate(hints):
                 text(right, h_, (10, PANEL_H - 30 + 16 * k_), 0.45, (200, 200, 200))
+        if S.guide is not None:
+            S.guide.banner(right, MJ_PANEL_W - 190, 46)
         if hooks is not None:
             hooks.draw(right, st, S)
 

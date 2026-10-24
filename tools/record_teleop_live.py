@@ -43,11 +43,26 @@ the deploy/scripted start (0.60, 0.00) - or `--start-standoff` head-on, a fixtur
 TERMINATION = deploy.py's: a fall (pelvis z < 0.35 m, checked every physics
 step) ends at once; success ends it early only once the weld has engaged AND
 released and `success.evaluate` keeps passing for 2.5 s; 900 ticks is the cap.
-`e` (or q) ends it where it is. Then `success.evaluate` scores it:
-  succeeded -> <out-dir>/ep_seedNNNN_<stamp>.npz, ledger ACCEPT
-  failed    -> <out-dir>/failed/..., ledger DISCARD (re-issuable); the loaders
-               refuse it anyway (dataset.assert_successful)
-  discarded -> nothing written, ledger DISCARD
+`e` (or q) ends it where it is.
+
+ACCEPT / DISCARD - THE OPERATOR DECIDES, THE SUCCESS RULE BOUNDS IT
+-------------------------------------------------------------------
+Then the VERDICT is shown (window and terminal): `success.evaluate` per
+criterion, the failing phase, placement error, tracking dropout % and tick
+overruns, and a RECOMMENDATION (accept / discard, with every reason). The
+operator answers a = accept, d = discard - tools/record_episodes.py's flow, on
+the window (the key queue is drained first, so an `a`/`d` camera key still
+queued from the episode cannot answer it). An episode that FAILS the success
+rule can never be accepted: `a` is refused. The ledger row stores the
+operator's choice, who decided and the recommendation. Where it goes:
+  accepted             -> <out-dir>/ep_seedNNNN_<stamp>.npz, ledger ACCEPT
+  failed (rule)        -> <out-dir>/failed/..., ledger DISCARD (re-issuable); the
+                          loaders refuse it anyway (dataset.assert_successful)
+  succeeded, discarded -> <out-dir>/discarded/..., ledger DISCARD (re-issuable)
+  x during the episode -> nothing written, ledger DISCARD
+`--auto pass` (fake source only; the default with --headless) takes the
+recommendation instead of asking; a real demonstration is always the
+operator's call. Ctrl+C never accepts.
 Raw keypoints go to <out-dir>/keypoints/<episode>_kp.npz in the
 tools/record_keypoints.py format (replayable with --source fake); per tick
 `frame_seq` indexes them. Out-dirs are under recordings/ (gitignored).
@@ -80,27 +95,37 @@ from g1_data import spec                                            # noqa: E402
 from g1_data import success as SU                                   # noqa: E402
 from g1_data.ledger import EpisodeLedger, seed_stream               # noqa: E402
 from g1_data.paths import repo_relpath                              # noqa: E402
-from g1_data.phases import LOCK_RULES, LockConfig, lock_config_from_meta  # noqa: E402
+from g1_data.phases import (LOCK_RULES, LockConfig, LockPredicate,  # noqa: E402
+                            lock_config_from_meta)
 from g1_data.recorder import (NS_COLLECTION, NS_TELEOP_FAKE,       # noqa: E402
                               SOURCE_TELEOP_LIVE, SOURCE_TELEOP_LIVE_FAKE,
                               TeleopRecorder, assert_namespace, label_of,
                               ledger_for)
-from g1_data.reset import reset_episode, state_fingerprint          # noqa: E402
 from g1_teleop import contact_contract as CC                        # noqa: E402
+from g1_teleop import operator_config as OC                         # noqa: E402
 from g1_teleop import synthetic_source as SS                        # noqa: E402
 
 #: Termination, shared with deploy.py so the two can never disagree.
 MAX_TICKS = D.MAX_TICKS                    # 900
 FALL_Z = D.FALL_Z                          # 0.35 m
 SUCCESS_HOLD_TICKS = D.SUCCESS_HOLD_TICKS  # 63 ticks = 2.5 s
-START_XY = D.START_XY                      # (0.60, 0.00)
+START_XY = OC.START_XY                     # (0.60, 0.00) = deploy's (tested)
 TICK = spec.PHYSICS_STEPS_PER_TICK
 TICK_S = TICK * RIC.SIM_DT                 # 0.04 s
 #: A tick interval longer than this (wall clock) counts as an overrun: the loop
 #: fell more than half a tick behind the 25 Hz schedule.
 OVERRUN_S = 1.5 * TICK_S
 KEY_ENTER = (10, 13)
-KP_DIR, FAILED_DIR = "keypoints", "failed"
+KP_DIR, FAILED_DIR, DISCARDED_DIR = "keypoints", "failed", "discarded"
+#: RECOMMENDATION thresholds (soft: the operator may still accept). PROVISIONAL -
+#: no real take exists yet (docs/LIVE_RECORDING_CHECKLIST.md step 2 measures
+#: dropout and overruns on the camera); set them from that population.
+DROPOUT_RECOMMEND_MAX = 0.05     # fraction of ticks not backed by a tracked frame (O28)
+OVERRUN_RECOMMEND_MAX = 0.02     # fraction of ticks that ran > 1.5 ticks late (paced only)
+#: The verdict screen ignores keys for this long after it opens.
+VERDICT_KEY_DELAY_S = 0.5
+#: Terminal prompt (headless --auto off); a module attribute so tests can script it.
+INPUT = input
 
 
 # ─── the camera side ─────────────────────────────────────────────────────────
@@ -368,6 +393,7 @@ def ric_args(a, first_seed: int):
     ns = RIC.build_parser().parse_args(["keyboard", str(first_seed)])
     ns.headless = bool(a.headless)
     ns.seconds = float("inf")
+    ns.guide = a.guide
     return ns
 
 
@@ -379,39 +405,14 @@ def open_live_session(a, seeds):
         raise SystemExit("renderer could not be created")
     S.lock_rule = LOCK_RULES[a.lock_rule]
     S.tap, S.camera_meta, S.source_obj = tap, cam_meta, src
-    S.twin_qpos0 = S.twin.data.qpos.copy()
     S.geo = SU.geometry(S.model)
     return S
 
 
 def reset_for_episode(S, a, seed: int) -> dict:
-    """The shared reset, then the start placement. Returns what the metadata needs."""
-    # The twin's ARM pose is warm-start state for the IK; restore it so episode N
-    # does not start its first solve from episode N-1's last pose.
-    S.twin.data.qpos[:] = S.twin_qpos0
-    S.twin.data.qvel[:] = 0.0
-    mujoco.mj_forward(S.twin.model, S.twin.data)
-    start = reset_episode(S.model, S.data, S.ix, S.cfg, seed, controller=S.controller,
-                          loco_input=S.loco, twin=S.twin, policy=S.policy)
-    fp = state_fingerprint(S.data, S.ix)
-    if a.start_standoff is not None:
-        xy = (float(start.box_pos[0]) - a.start_standoff, float(start.box_pos[1]))
-    else:
-        xy = (float(a.start_xy[0]), float(a.start_xy[1]))
-    S.data.qpos[S.ix.base_qpos][0] = xy[0]
-    S.data.qpos[S.ix.base_qpos][1] = xy[1]
-    mujoco.mj_forward(S.model, S.data)
-    # The camera side starts the episode fresh too: a fake take from frame 0,
-    # and no frame from before the start is applied.
-    if isinstance(getattr(S, "source_obj", None), ReplaySource):
-        S.source_obj.rewind()
-    g = S.grabber
-    lock = getattr(g, "_lock", None)
-    with (lock if lock is not None else nullcontext()):
-        g._frame = None
-        if isinstance(g, RIC.SimClockGrabber):
-            g._seq = 0
-    return dict(start=start, fingerprint=fp, start_xy=xy)
+    """The shared reset (`run_integrated_combined.reset_for_episode`, also
+    walk_test.py's), at --start-xy or the --start-standoff fixture."""
+    return RIC.reset_for_episode(S, seed, start_xy=a.start_xy, start_standoff=a.start_standoff)
 
 
 def _timing(tick_ns, paced: bool) -> dict:
@@ -504,17 +505,23 @@ def episode_meta(S, a, seed, hooks, rec, info, verdict, kp_path) -> dict:
         keypoints_file=repo_relpath(kp_path) if kp_path else None,
         keypoints_seq_at_arm=int(S.tap.seq_at_arm),
         ik_max_iter=int(S.cfg.ik.max_iter),
+        operator_ui=dict(guide=a.guide),
         note_phase_labels="teleop: phase_labels are UNKNOWN by construction - derive offline")
 
 
-def save_episode(S, a, out_dir, seed, hooks, rec, info, verdict):
-    """Write the episode (and its raw keypoints). Failed -> the failed/ folder."""
+def save_episode(S, a, out_dir, seed, hooks, rec, info, verdict, folder=None, decision=None):
+    """Write the episode (and its raw keypoints) into `folder` (default: the
+    out-dir for a success, failed/ otherwise); `decision` (the operator's
+    choice, who made it and the recommendation) goes into the metadata."""
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     stem = "ep_seed%04d_%s" % (seed, stamp)
-    base = out_dir if verdict["episode_success"] else os.path.join(out_dir, FAILED_DIR)
-    path = os.path.join(base, stem + ".npz")
+    if folder is None:
+        folder = out_dir if verdict["episode_success"] else os.path.join(out_dir, FAILED_DIR)
+    path = os.path.join(folder, stem + ".npz")
     kp_path = os.path.join(out_dir, KP_DIR, stem + "_kp.npz")
     meta = episode_meta(S, a, seed, hooks, rec, info, verdict, kp_path)
+    if decision is not None:
+        meta.update(decision)
     os.makedirs(os.path.dirname(kp_path), exist_ok=True)
     SS.save_recording(kp_path, AuditTap.to_recording(info["kp_rows"], dict(
         label="teleop_live episode %s" % stem, episode=repo_relpath(path),
@@ -535,14 +542,179 @@ def checks_of(verdict, meta) -> dict:
             "tracking never lost": meta["degraded_ticks"] == 0}
 
 
+# ─── the verdict, the recommendation, the operator's choice ─────────────────
+def episode_report(verdict, meta) -> dict:
+    """Everything the operator decides on, as data (printed by print_report,
+    drawn by verdict_image). `can_accept` is the success rule and nothing else;
+    `recommend` is "accept" only when no reason against it exists."""
+    gd, ld, td, pd_ = (verdict["grasp_detail"], verdict["lift_detail"],
+                       verdict["transport_detail"], verdict["place_detail"])
+    o, t = meta["outcome"], meta["timing"]
+    n = int(meta.get("n_ticks") or verdict["n_ticks"])
+    if verdict["engage_tick"] >= 0:
+        g_txt = "engage tick %d, box moved %.3f m from spawn (<= 0.05)" % (
+            verdict["engage_tick"], gd["box_moved_from_spawn_m"])
+        if gd.get("reason"):
+            g_txt += " - " + gd["reason"]
+    else:
+        g_txt = gd.get("reason", "the weld never engaged")
+    rows = [("grasp", bool(verdict["grasp"]), g_txt),
+            ("lift", bool(verdict["lift"]), "peak %.3f m above the platform (>= %.2f)"
+             % (ld["peak_above_platform_m"], ld["required_m"])),
+            ("transport", bool(verdict["transport"]), "min box z %.3f m (>= %.2f)"
+             % (td["min_box_z_m"], td["floor_clear_z"])),
+            ("place", bool(verdict["place"]),
+             "placement %.3f m (<= %.2f), tilt %.1f deg, resting %s, released %s"
+             % (pd_["placement_error_m"], pd_["limit_m"], pd_["tilt_deg"],
+                "yes" if pd_["resting"] else "no", "yes" if pd_["released"] else "no")),
+            ("no fall", not o["fell"], "fell at tick %d" % o["fall_tick"] if o["fell"] else "")]
+    dropout = float(meta["dropout_rate"])
+    drop_ok = dropout <= DROPOUT_RECOMMEND_MAX
+    rows.append(("tracking dropout", drop_ok, "%.1f%% of ticks degraded, %d ticks (<= %.0f%%)"
+                 % (100 * dropout, meta["degraded_ticks"], 100 * DROPOUT_RECOMMEND_MAX)))
+    overruns = int(t.get("overrun_ticks") or 0)
+    if t.get("paced") and t.get("tick_rate_hz"):
+        over_frac = overruns / max(n, 1)
+        over_ok = over_frac <= OVERRUN_RECOMMEND_MAX
+        rows.append(("tick overruns", over_ok, "%d of %d ticks late (<= %.0f%%), %.1f Hz"
+                     % (overruns, n, 100 * OVERRUN_RECOMMEND_MAX, t["tick_rate_hz"])))
+    else:
+        over_ok = True
+        rows.append(("tick overruns", None, "n/a: not paced to wall clock (headless)"))
+    success = bool(verdict["episode_success"])
+    phase = verdict["attributed_to"] or ""
+    reasons = []
+    if not success:
+        failed = [r for r in rows[:5] if r[1] is False]
+        reasons.append("success rule FAILED at %s: %s" % (
+            phase or "?", "; ".join("%s (%s)" % (r[0], r[2]) for r in failed[:1]) or "-"))
+    if not drop_ok:
+        reasons.append("tracking dropout %.1f%% > %.0f%%: ticks where the arms were not "
+                       "following the operator" % (100 * dropout, 100 * DROPOUT_RECOMMEND_MAX))
+    if not over_ok:
+        reasons.append("%d tick overruns (> %.0f%%): the loop fell behind real time"
+                       % (overruns, 100 * OVERRUN_RECOMMEND_MAX))
+    return dict(rows=rows, success=success, can_accept=success, failing_phase=phase,
+                placement_error=float(pd_["placement_error_m"]), dropout=dropout,
+                overrun_ticks=overruns, n_ticks=n, end_reason=meta["end_reason"],
+                seed=int(meta["seed"]), recommend="discard" if reasons else "accept",
+                reasons=reasons)
+
+
+def report_lines(rep) -> list:
+    """[(text, ok)] - the verdict as lines; ok None = neutral."""
+    out = [("VERDICT  seed %d   %d ticks (%.1f s)   end: %s"
+            % (rep["seed"], rep["n_ticks"], rep["n_ticks"] * TICK_S, rep["end_reason"]), None)]
+    for name, ok, txt in rep["rows"]:
+        out.append(("%-17s %-4s %s" % (name, "--" if ok is None else ("PASS" if ok else "FAIL"),
+                                         txt), ok))
+    out.append(("failing phase: %s" % (rep["failing_phase"] or "none (success)"),
+                None if rep["success"] else False))
+    out.append(("RECOMMEND: %s" % rep["recommend"].upper(), rep["recommend"] == "accept"))
+    for r in rep["reasons"]:
+        out.append(("  - " + r, False))
+    out.append((("a = accept   d = discard" if rep["can_accept"] else
+                 "d = discard   (accept NOT possible: the success rule failed)"), None))
+    return out
+
+
+def print_report(rep) -> None:
+    for line, _ in report_lines(rep):
+        print("  " + line)
+
+
+def choice_from_key(key: int, can_accept: bool) -> Optional[str]:
+    """One verdict-screen / prompt key -> "accept", "discard", "refused" (a
+    pressed on a failed episode) or None (anything else)."""
+    low = key & 0xFF if key >= 0 else -1
+    if low in (OC.KEY_ACCEPT, ord("A")):
+        return "accept" if can_accept else "refused"
+    if low in (OC.KEY_DISCARD, ord("D")):
+        return "discard"
+    return None
+
+
+def verdict_image(rep, w: int = None, h: int = None):
+    """The verdict drawn on a black panel (the window's left half)."""
+    w, h = w or RIC.ZED_PANEL_W, h or RIC.PANEL_H
+    img = np.zeros((h, w, 3), np.uint8)
+    y = 34
+    for line, ok in report_lines(rep):
+        col = RIC.GREY if ok is None else (RIC.GREEN if ok else RIC.RED)
+        RIC.text(img, line[:96], (12, y), 0.5, col)
+        y += 26
+    return img
+
+
+def verdict_screen(S, rep) -> str:
+    """Interactive: show the verdict beside the final scene, wait for a / d."""
+    import cv2
+    while cv2.waitKeyEx(1) != -1:                   # drain keys queued in the episode
+        pass
+    t0, note = time.monotonic(), ""
+    while True:
+        left = verdict_image(rep)
+        if note:
+            RIC.text(left, note, (12, RIC.PANEL_H - 20), 0.55, RIC.RED)
+        if S.renderer is not None:
+            S.renderer.update_scene(S.data, camera=S.cam, scene_option=S.scene_option)
+            right = RIC.fit_to_box(cv2.cvtColor(S.renderer.render(), cv2.COLOR_RGB2BGR),
+                                   RIC.MJ_PANEL_W, RIC.PANEL_H)
+        else:
+            right = np.zeros((RIC.PANEL_H, RIC.MJ_PANEL_W, 3), np.uint8)
+        cv2.imshow(RIC.WINDOW, np.hstack([left, right]))
+        key = cv2.waitKeyEx(30)
+        if key == -1 or time.monotonic() - t0 < VERDICT_KEY_DELAY_S:
+            continue
+        c = choice_from_key(key, rep["can_accept"])
+        if c == "refused":
+            note = "accept refused: this episode FAILED the success rule - press d"
+            print("  a refused: the episode failed the success rule (%s)" % rep["failing_phase"])
+        elif c is not None:
+            return c
+
+
+def terminal_choice(rep) -> str:
+    """Headless --auto off: tools/record_episodes.py's prompt."""
+    prompt = ("  [a]ccept / [d]iscard ? " if rep["can_accept"] else
+              "  [d]iscard (accept not possible: the success rule failed) ? ")
+    while True:
+        r = INPUT(prompt).strip().lower()
+        c = choice_from_key(ord(r[0]), rep["can_accept"]) if r else None
+        if c == "refused":
+            print("  refused: an episode that fails the success rule can never be accepted")
+        elif c is not None:
+            return c
+
+
+def decide(S, a, rep, end_reason: str) -> tuple:
+    """(choice, decided_by). Never "accept" for a failed episode, whoever decides."""
+    if end_reason == "interrupted":
+        choice, by = "discard", "interrupted (Ctrl+C never accepts)"
+    elif a.auto == "pass":
+        choice, by = rep["recommend"], "auto:pass"
+    elif a.headless:
+        choice, by = terminal_choice(rep), "operator"
+    else:
+        choice, by = verdict_screen(S, rep), "operator"
+    if choice == "accept" and not rep["can_accept"]:          # belt and braces
+        raise AssertionError("a failed episode cannot be accepted")
+    return choice, by
+
+
 def finish_episode(S, a, ledger, out_dir, seed, label, hooks, rec, info) -> str:
-    """Evaluate, then save / discard and write the ledger row. Returns the
-    decision: "accept", "failed" or "discard"."""
+    """Evaluate, show the verdict and recommendation, take the operator's
+    choice, then save and write the ledger row. Returns "accept", "failed"
+    (rule failed, kept in failed/) or "discard" (nothing written, or a success
+    the operator discarded, kept in discarded/)."""
     n = len(rec.buf) if rec.buf is not None else 0
     if hooks.end_reason == "operator_discard" or n == 0:
         why = "operator discard" if n else "no ticks recorded"
         ledger.append("discard", seed=seed, reason=why, label=label, saved=None,
-                      end_reason=hooks.end_reason, ticks=n)
+                      end_reason=hooks.end_reason, ticks=n,
+                      operator_choice="discard" if n else None,
+                      decided_by="operator (x during the episode)" if n else None,
+                      recommendation=None)
         print("  DISCARDED (%s) - nothing written" % why)
         return "discard"
     verdict = SU.evaluate(episode_arrays(rec),
@@ -550,34 +722,53 @@ def finish_episode(S, a, ledger, out_dir, seed, label, hooks, rec, info) -> str:
     if hooks.fell:
         verdict["episode_success"] = False
         verdict["attributed_to"] = verdict["attributed_to"] or "FELL"
-    path, kp_path, meta = save_episode(S, a, out_dir, seed, hooks, rec, info, verdict)
+    meta0 = episode_meta(S, a, seed, hooks, rec, info, verdict, None)
+    meta0["n_ticks"] = n
+    rep = episode_report(verdict, meta0)
+    print_report(rep)
+    choice, by = decide(S, a, rep, hooks.end_reason)
+    recommendation = dict(recommend=rep["recommend"], reasons=rep["reasons"])
+    decision = dict(accepted=(choice == "accept"), operator_choice=choice, decided_by=by,
+                    recommendation=recommendation)
+    if choice == "accept":
+        folder = out_dir
+    elif verdict["episode_success"]:
+        folder = os.path.join(out_dir, DISCARDED_DIR)
+    else:
+        folder = os.path.join(out_dir, FAILED_DIR)
+    path, kp_path, meta = save_episode(S, a, out_dir, seed, hooks, rec, info, verdict,
+                                       folder=folder, decision=decision)
     checks = checks_of(verdict, meta)
-    if verdict["episode_success"]:
+    common = dict(label=label, keypoints=repo_relpath(kp_path), checks=checks,
+                  end_reason=hooks.end_reason, ticks=n,
+                  placement_error=meta["outcome"]["placement_error"],
+                  operator_choice=choice, decided_by=by, recommendation=recommendation)
+    if choice == "accept":
         ledger.append("accept", seed=seed, path=repo_relpath(path), heldout=meta["heldout"],
-                      label=label, checks=checks, keypoints=repo_relpath(kp_path),
-                      placement_error=meta["outcome"]["placement_error"],
-                      end_reason=hooks.end_reason, ticks=n)
-        decision = "accept"
+                      **common)
+        decision_out, what = "accept", "ACCEPTED"
+    elif verdict["episode_success"]:
+        ledger.append("discard", seed=seed, reason="operator discard of a successful episode "
+                      "(recommended %s)" % rep["recommend"], saved=repo_relpath(path), **common)
+        decision_out, what = "discard", "DISCARDED by the operator, kept for audit"
     else:
         ledger.append("discard", seed=seed, reason="failed: %s (%s)"
                       % (verdict["attributed_to"] or "unknown", hooks.end_reason),
-                      label=label, saved=repo_relpath(path), keypoints=repo_relpath(kp_path),
-                      checks=checks, end_reason=hooks.end_reason, ticks=n,
-                      placement_error=meta["outcome"]["placement_error"])
-        decision = "failed"
-    print("  %s -> %s (%d ticks, %s, placement %.3f m, degraded %d)"
-          % ("ACCEPTED" if decision == "accept" else "FAILED, kept for audit",
-             repo_relpath(path), n, hooks.end_reason, meta["outcome"]["placement_error"],
-             meta["degraded_ticks"]))
-    return decision
+                      saved=repo_relpath(path), **common)
+        decision_out, what = "failed", "FAILED, kept for audit"
+    print("  %s -> %s (%d ticks, %s, placement %.3f m, degraded %d; decided by %s)"
+          % (what, repo_relpath(path), n, hooks.end_reason, meta["outcome"]["placement_error"],
+             meta["degraded_ticks"], by))
+    return decision_out
 
 
 def assert_out_dir_compatible(out_dir: str, rule: LockConfig) -> None:
     """One out-dir = one spec version, one contact contract, one lock rule -
-    including the failed/ folder, so a session cannot start a mix that the
-    dataset builder would refuse later."""
-    eps = DS.scan(out_dir, require_uniform=False) + DS.scan(
-        os.path.join(out_dir, FAILED_DIR), require_uniform=False)
+    including the failed/ and discarded/ folders, so a session cannot start a
+    mix that the dataset builder would refuse later."""
+    eps = DS.scan(out_dir, require_uniform=False)
+    for sub in (FAILED_DIR, DISCARDED_DIR):
+        eps += DS.scan(os.path.join(out_dir, sub), require_uniform=False)
     if not eps:
         return
     DS.assert_uniform(eps)
@@ -592,17 +783,9 @@ def assert_out_dir_compatible(out_dir: str, rule: LockConfig) -> None:
 
 
 def assert_seeds_are_training_seeds(seeds) -> None:
-    """Never record a demonstration on an evaluation or selection seed."""
-    held = {}
-    for name in ("exp1_seeds.json", "exp2_seeds.json", "select_seeds.json"):
-        p = os.path.join(DS.EVAL, name)
-        if os.path.exists(p):
-            for s in DS.load_seed_file(p):
-                held[int(s)] = name
-    bad = sorted(s for s in seeds if int(s) in held)
-    if bad:
-        raise SystemExit("refusing: seed(s) %s belong to %s - evaluation/selection seeds "
-                         "are never demonstrated" % (bad[:10], sorted({held[s] for s in bad})))
+    """Never record a demonstration on an evaluation or selection seed
+    (g1_teleop.operator_config: one rule for collection and practice)."""
+    OC.assert_not_held_out(seeds)
 
 
 # ─── idle screen (interactive only): physics paused between episodes ─────────
@@ -614,11 +797,17 @@ def idle(S, seed: int, k: int, total: int, label: str, last: str) -> str:
         cv2.namedWindow(RIC.WINDOW, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(RIC.WINDOW, RIC.ZED_PANEL_W + RIC.MJ_PANEL_W, RIC.PANEL_H)
         S.window_open = True
+    # The floor guide on the reset scene: where to walk before ENTER. A fresh
+    # predicate's terms are a pure function of the state (read-only).
+    terms = LockPredicate(S.plat_geo, S.lock_rule).terms(
+        S.sp.build_state(S.model, S.data, S.ix, sync=False))
     while True:
         frame, _ = S.grabber.latest()
         left = (RIC.fit_to_box(frame.image, RIC.ZED_PANEL_W, RIC.PANEL_H) if frame is not None
                 else np.zeros((RIC.PANEL_H, RIC.ZED_PANEL_W, 3), np.uint8))
         S.renderer.update_scene(S.data, camera=S.cam, scene_option=S.scene_option)
+        if S.guide is not None:
+            S.guide.draw(S.renderer.scene, terms, S.lock_rule, S.data, S.ix, False)
         right = RIC.fit_to_box(cv2.cvtColor(S.renderer.render(), cv2.COLOR_RGB2BGR),
                                RIC.MJ_PANEL_W, RIC.PANEL_H)
         RIC.text(right, "NEXT  %s  seed %d   (%d of %d)" % (label, seed, k, total), (16, 46), 0.9,
@@ -750,7 +939,6 @@ def make_fake_take(a) -> int:
     seed = int((a.seed_list or "0").split(",")[0])
     ns = RIC.build_parser().parse_args(["keyboard", str(seed), "--synthetic", "none", "--headless"])
     S = RIC.open_session(ns)
-    S.twin_qpos0 = S.twin.data.qpos.copy()
     try:
         info = reset_for_episode(S, a, seed)
         twin, model, data = S.twin, S.model, S.data
@@ -816,6 +1004,13 @@ def build_parser():
                     help="lock rule (g1_data.phases.LOCK_RULES; default: LockConfig's, "
                          "currently %s). Stored per episode." % LockConfig().version)
     ap.add_argument("--max-ticks", type=int, default=MAX_TICKS)
+    ap.add_argument("--auto", choices=("off", "pass"), default=None,
+                    help="after each episode: off = the operator answers a/d (default "
+                         "interactive); pass = take the recommendation (default with "
+                         "--headless; refused with --source zed)")
+    ap.add_argument("--guide", choices=OC.GUIDE_CHOICES, default=OC.GUIDE_DEFAULT,
+                    help="base-lock floor guide in the MuJoCo view (purely visual; "
+                         "stored per episode as operator_ui.guide). Default %(default)s")
     ap.add_argument("--start-xy", type=lambda s: tuple(float(v) for v in s.split(",")),
                     default=START_XY, help="base start x,y (default the deploy/scripted start)")
     ap.add_argument("--start-standoff", type=float, default=None,
@@ -849,6 +1044,11 @@ def main(argv=None) -> int:
             ap.error("--headless is for --source fake (a live operator needs the window)")
         if not a.operator:
             ap.error("--source zed needs --operator <id>")
+        if a.auto == "pass":
+            ap.error("--auto pass is for --source fake: a real demonstration is accepted "
+                     "or discarded by its operator")
+    if a.auto is None:
+        a.auto = "pass" if a.headless else "off"
     a.operator = a.operator or "fake"
     if a.invariance:
         return cmd_invariance(a)

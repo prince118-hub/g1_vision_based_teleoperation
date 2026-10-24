@@ -20,7 +20,7 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, merged, fake-tested): `docs/LIVE_RECORDING_CHECKLIST.md` steps 2–5 BLOCKED - no ZED available (2026-10-24).
+**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, merged, fake-tested): `docs/LIVE_RECORDING_CHECKLIST.md` steps 2–5 BLOCKED - no ZED available (2026-10-24). Operator a/d verdict, floor guide, `walk_test.py` practice: `docs/OPERATOR_GUIDE.md` (fake-tested, `NOTES.md` operator tools).
 scripted_v3 (rule v2) survey 14/300; **lock rule v3 is the default** (ACT 2→5, LSTM 3→5 /20). FREEZE 2026-10-23: no walk-in fix, no release gate, β 10 (`NOTES.md`). g1-spec-1.2.0 refuses 1.1.0. ONE heavy process at a time. **Exp 1/2:** Run B (160) DONE; Run A (n40) launchers ready, not run (§8 2026-10-23).
 
 ## 3. Full pipeline (end to end)
