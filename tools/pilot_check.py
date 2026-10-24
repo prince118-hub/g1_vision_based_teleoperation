@@ -306,7 +306,7 @@ def run_tool(main_fn: Callable[[], object], argv: List[str], log_path: str):
     return code, tail
 
 
-def split_norm(ep_dir: str, scratch: str, val_frac: float):
+def split_norm(ep_dir: str, scratch: str, val_frac: float, allow_synthetic: bool = False):
     import build_dataset as BD
     splits = os.path.join(scratch, "splits.json")
     norm = os.path.join(scratch, "norm_stats.npz")
@@ -325,7 +325,8 @@ def split_norm(ep_dir: str, scratch: str, val_frac: float):
                       "episodes, or --val-frac)" % (len(sp["train"]), len(sp["val"]))],
                      details), None
     code, tail = run_tool(BD.main, ["build_dataset.py", "norm", "--episodes", ep_dir,
-                                    "--splits", splits, "--norm", norm],
+                                    "--splits", splits, "--norm", norm]
+                          + (["--allow-synthetic"] if allow_synthetic else []),
                           os.path.join(scratch, "norm.log"))
     if code or not os.path.exists(norm):
         return Check("split + norm", FAIL, ["norm exited %s:" % code] + tail, details), None
@@ -530,7 +531,9 @@ def run(a) -> int:
         checks.append(Check("split + norm", SKIP, ["blocked: the dataset guards failed "
                                                    "(build_dataset refuses the same)"]))
     else:
-        c, paths = split_norm(ep_dir, scratch, a.val_frac)
+        # Fake episodes reach here only under --allow-fake (the guards refuse
+        # them otherwise); the norm step needs the same permission, stated.
+        c, paths = split_norm(ep_dir, scratch, a.val_frac, allow_synthetic=bool(a.allow_fake))
         checks.append(c)
         say("[%s] split + norm" % c.status)
     if a.skip_train:

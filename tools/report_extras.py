@@ -123,7 +123,7 @@ def _who(metas: List[dict]) -> str:
 
 def data_quality(folder: str) -> dict:
     folder = os.path.abspath(folder)
-    row = dict(dataset=os.path.relpath(folder, ROOT) if folder.startswith(ROOT + os.sep)
+    row = dict(dataset=IO.repo_relpath(folder) if folder.startswith(ROOT + os.sep)
                else folder)
     led = IO.open_ledger(folder)
     if led is None:

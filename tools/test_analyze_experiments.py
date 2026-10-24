@@ -377,6 +377,29 @@ def test_d19_sensitivity_counts_and_the_bit_identity_filter():
     assert t.detail_unknown == 0 and t.d19 == 5, t
 
 
+def test_bc_control_is_compared_to_bc_and_kept_out_of_the_pairwise_tests():
+    """Review M3: bc_b256_<size>_seed<k> folders parse as the control model, get
+    their own table against BC, and do not enter the three-model Fisher pairs."""
+    root = os.path.join(_tmp(), "control", "eval")
+    write_run(root, "bc", "n40", 0, (0, 0))
+    write_run(root, "bc", "n40", 1, (0, 0))
+    write_run(root, "act", "n40", 0, (17, 4))
+    write_run(root, "bc_b256", "n40", 0, (9, 2), palm=False)
+    write_run(root, "bc_b256", "n40", 1, (6, 1), palm=False)
+    res = AE.analyze([root], os.path.join(_tmp(), "control", "report"), figures=False)
+    T = res["tables"]
+    assert AE.parse_run("bc_b256_n40_seed1") == dict(model="bc_b256", size="n40", train_seed=1)
+    c = _get(T["control"], size="n40", exp="exp1")
+    assert (c.base_success, c.base_n, c.control_success, c.control_n) == (0, 200, 15, 200), c
+    assert (c.base_seeds, c.control_seeds) == (2, 2)
+    assert abs(c.fisher_p - AE.fisher(15, 200, 0, 200)[1]) < 1e-12
+    assert "bc_b256" not in set(T["fisher"].model_a) | set(T["fisher"].model_b)
+    assert len(T["fisher"][T["fisher"].exp == "exp1"]) == 1          # bc vs act only
+    s = _get(T["summary"], model="bc_b256", size="n40", exp="exp1")
+    assert s.pooled_successes == 15
+    assert "BC control" in open(res["report"], encoding="utf-8").read()
+
+
 def test_zzz_cleanup():
     if "tmp" in _CACHE:
         shutil.rmtree(_CACHE.pop("tmp"), ignore_errors=True)

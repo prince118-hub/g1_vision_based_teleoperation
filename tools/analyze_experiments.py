@@ -86,12 +86,17 @@ DEFAULT_SPLITS = (("160", os.path.join(ROOT, "data", "processed", "splits_script
                   ("n40", os.path.join(ROOT, "data", "processed", "splits_scripted_v3_n40.json")))
 
 MODELS = ("bc", "act", "act_lstm")
-MODEL_LABEL = {"bc": "BC", "act": "ACT", "act_lstm": "ACT-LSTM"}
+#: CONTROL runs (review M3, 2026-10-25): BC at its OWN default batch 256 instead
+#: of the ladder's batch 8. Reported in the per-model tables and against its base
+#: model in `control_comparison`, but never inside the three-model pairwise tests,
+#: so those tests and their Holm families are exactly what they were.
+CONTROLS = {"bc_b256": "bc"}
+MODEL_LABEL = {"bc": "BC", "act": "ACT", "act_lstm": "ACT-LSTM", "bc_b256": "BC (b256)"}
 EXPS = ("exp1", "exp2")
 EXP_LABEL = {"exp1": "Exp 1 (in-distribution)", "exp2": "Exp 2 (held-out patch)"}
 STAGES = ("grasp", "lift", "transport", "place")
 FAIL_ORDER = ("WALK_IN", "GRASP", "LIFT", "TRANSPORT", "PLACE", "fell", "other")
-RUN_RE = re.compile(r"^(?P<model>act_lstm|act|bc)_(?P<size>n?\d+)_seed(?P<seed>\d+)$")
+RUN_RE = re.compile(r"^(?P<model>act_lstm|act|bc_b256|bc)_(?P<size>n?\d+)_seed(?P<seed>\d+)$")
 GRASP_GATE_M = 0.16            # g1_teleop/grasp.py palm radius (deploy.py's docstring)
 THRESHOLDS_M = (0.05, 0.10)
 Z95 = 1.959963984540054
@@ -354,7 +359,7 @@ def load(roots: Sequence[str]):
 
 def _order(df, col="model"):
     import pandas as pd
-    key = {m: i for i, m in enumerate(MODELS)}
+    key = {m: i for i, m in enumerate(MODELS + tuple(CONTROLS))}
     df = df.copy()
     df["_o"] = df[col].map(lambda m: key.get(m, 99))
     sort = ["_o"] + [c for c in ("size_n", "train_seed", "exp") if c in df.columns]
@@ -562,6 +567,30 @@ def size_comparison(summary):
             row.update(diff=row["rate_%s" % big] - row["rate_%s" % small], fisher_p=p)
         rows.append(row)
     return _order(pd.DataFrame(rows))
+
+
+def control_comparison(E):
+    """Each CONTROL against its base model (BC batch 256 vs the ladder's BC batch
+    8), per data size and experiment, pooled over training seeds: successes,
+    stage counts, Fisher's exact test on success (two-sided, no Holm - one test
+    per cell, not a family)."""
+    import pandas as pd
+    rows = []
+    for ctrl, base in CONTROLS.items():
+        for (size, exp), g in E[E.model.isin([ctrl, base])].groupby(["size", "exp"], dropna=False):
+            a, b = g[g.model == base], g[g.model == ctrl]
+            if not len(a) or not len(b):
+                continue
+            row = dict(control=ctrl, base=base, size=size, size_n=size_n(size), exp=exp,
+                       base_seeds=a.train_seed.nunique(), control_seeds=b.train_seed.nunique())
+            for tag, d in (("base", a), ("control", b)):
+                row.update({"%s_n" % tag: len(d), "%s_success" % tag: int(d.success.sum())})
+                row.update({"%s_%s" % (tag, st): int(d[st].sum()) for st in STAGES})
+            _, row["fisher_p"] = fisher(row["control_success"], row["control_n"],
+                                        row["base_success"], row["base_n"])
+            rows.append(row)
+    return pd.DataFrame(rows).sort_values(["size_n", "exp"]).reset_index(drop=True) \
+        if rows else pd.DataFrame(columns=["control", "base", "size", "exp"])
 
 
 def coverage(splits=DEFAULT_SPLITS) -> dict:
@@ -974,6 +1003,19 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
                             ("placed", "d19_placed"), ("resting", "d19_resting"),
                             ("released", "d19_released"), ("upright", "d19_upright"),
                             ("all four", "d19_all_place_conditions"), ("success", "success")]))
+    if len(T["control"]):
+        L += ["### BC control: own default batch 256 vs the ladder's batch 8 (review M3)", "",
+              "Pooled over training seeds; Fisher's exact test on success, two-sided. The "
+              "control is not part of the three-model pairwise tests above.", ""]
+        L.append(_md(T["control"], [
+            ("size", "size"), ("exp", "exp"),
+            ("BC b8", lambda r: "%d/%d (g %d l %d t %d p %d)" % (
+                r.base_success, r.base_n, r.base_grasp, r.base_lift, r.base_transport, r.base_place)),
+            ("BC b256", lambda r: "%d/%d (g %d l %d t %d p %d)" % (
+                r.control_success, r.control_n, r.control_grasp, r.control_lift,
+                r.control_transport, r.control_place)),
+            ("seeds b8/b256", lambda r: "%d/%d" % (r.base_seeds, r.control_seeds)),
+            ("Fisher p", lambda r: _p(r.fisher_p))]))
     L += ["## 4. Figures", ""]
     for name, path in figs:
         if path:
@@ -1037,7 +1079,8 @@ def analyze(roots: Sequence[str], out: str, splits=DEFAULT_SPLITS, figures: bool
     by_run = success_by_run(E)
     T = dict(by_run=by_run, summary=success_summary(by_run), gap=generalization_gap(by_run),
              stages=stage_rates(E), fail=failure_phase(E), fisher=fisher_table(E),
-             dist=distance_tests(E), thr=thresholds(E), d19=d19_sensitivity(E))
+             dist=distance_tests(E), thr=thresholds(E), d19=d19_sensitivity(E),
+             control=control_comparison(E))
     T["sizes"] = size_comparison(T["summary"])
     E.to_csv(os.path.join(out, "episodes.csv"), index=False)
     R.to_csv(os.path.join(out, "runs.csv"), index=False)
@@ -1045,7 +1088,7 @@ def analyze(roots: Sequence[str], out: str, splits=DEFAULT_SPLITS, figures: bool
                       ("gap", "generalization_gap"), ("stages", "stage_rates"),
                       ("fail", "failure_phase"), ("fisher", "fisher"), ("dist", "distance_tests"),
                       ("thr", "thresholds"), ("sizes", "size_comparison"),
-                      ("d19", "d19_sensitivity")):
+                      ("d19", "d19_sensitivity"), ("control", "bc_control")):
         T[key].to_csv(os.path.join(out, name + ".csv"), index=False)
     figs = []
     if figures:

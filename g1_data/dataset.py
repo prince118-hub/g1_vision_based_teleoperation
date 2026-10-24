@@ -577,13 +577,20 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
             % (split,))
     if not eps:
         raise DatasetError("no episodes to fit normalization on")
-    synth = [e for e in eps if e.meta.get("source", "").startswith("scripted")]
+    # Real or not is the SOURCE REGISTRY's `real` flag (recorder.SOURCES), not
+    # the source string's prefix: the prefix test labelled live-recorder dry
+    # runs (`teleop_live_fake`) and the teleop fixture "real" and let them past
+    # the allow_synthetic gate (2026-10-25). An unregistered source raises.
+    from g1_data import recorder as REC
+    synth = [e for e in eps
+             if not REC.source_info(e.meta.get("source"), where=os.path.basename(e.path))["real"]]
     if synth and not allow_synthetic:
         raise DatasetError(
-            "%d of %d episodes are SCRIPTED (data/synthetic). Normalization is "
-            "fitted from real collected demonstrations; pass allow_synthetic=True "
-            "to do this deliberately, and the stats file will say so."
-            % (len(synth), len(eps)))
+            "%d of %d episodes are NOT real demonstrations (sources: %s). "
+            "Normalization is fitted from real collected demonstrations; pass "
+            "allow_synthetic=True to do this deliberately, and the stats file "
+            "will say so." % (len(synth), len(eps),
+                              ", ".join(sorted({str(e.meta.get("source")) for e in synth}))))
     S, A = [], []
     for e in eps:
         arrays, _ = e.load()
@@ -592,7 +599,8 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
     S, A = np.concatenate(S), np.concatenate(A)
     assert_masked_actions_constant(A, where="%d %s episodes" % (len(eps), split))
     report = dict(n_episodes=len(eps), n_ticks=int(len(S)),
-                  source="synthetic" if synth else "real",
+                  source=("real" if not synth else
+                          "synthetic" if len(synth) == len(eps) else "mixed"),
                   split=split, seeds=sorted(e.seed for e in eps))
 
     def _stats(X, kind, mask):

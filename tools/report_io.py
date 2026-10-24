@@ -49,6 +49,18 @@ def ledger_module():
     return _LEDGER_MOD
 
 
+def _paths_module():
+    """g1_data/paths.py, loaded from its file (importing g1_data loads mujoco)."""
+    s = importlib.util.spec_from_file_location("_g1_paths_ro", os.path.join(ROOT, "g1_data", "paths.py"))
+    mod = importlib.util.module_from_spec(s)
+    s.loader.exec_module(mod)
+    return mod
+
+
+#: g1_data.paths.repo_relpath - the repo's one relpath (test_dataset enforces it).
+repo_relpath = _paths_module().repo_relpath
+
+
 def open_ledger(folder: str):
     """The folder's own ledger (`<folder>/ledger.jsonl`), or None if absent.
     Never creates one: `EpisodeLedger.__init__` only makes the directory, which

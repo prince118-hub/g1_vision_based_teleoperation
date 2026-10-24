@@ -246,7 +246,12 @@ def test_saved_episode_passes_spec_validation_and_the_training_loader():
     info = REC.source_info(meta["source"])
     assert info["real"] is False and meta["source"] == REC.SOURCE_TELEOP_LIVE_FAKE
 
-    st, ac, _ = DS.fit_norm_stats(eps, split="train")
+    # A fake-source episode is not a demonstration: fitting stats on it is
+    # refused unless stated, and then labelled synthetic (2026-10-25; it used
+    # to pass unflagged, labelled "real").
+    _raises(DS.DatasetError, DS.fit_norm_stats, eps, split="train")
+    st, ac, rep = DS.fit_norm_stats(eps, split="train", allow_synthetic=True)
+    assert rep["source"] == "synthetic", rep["source"]
     cfg = LD.LoaderConfig(chunk_size=10, obs_window=12, tracking=LD.TrackingPolicy())
     e = _raises(DS.DatasetError, LD.ChunkDataset, eps, cfg, st, ac, None)
     assert "did not succeed" in str(e), e

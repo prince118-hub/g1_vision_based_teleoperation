@@ -361,8 +361,9 @@ def test_split_is_deterministic():
 
 def test_norm_stats_refuse_synthetic_by_default():
     """Fitting statistics on the demonstrator has to be a deliberate act."""
+    from g1_data.recorder import SOURCE_SCRIPTED
     e = _ep(0)
-    e.meta["source"] = "scripted_demo"
+    e.meta["source"] = SOURCE_SCRIPTED      # was "scripted_demo": never a registered source
     err = _raises(DS.DatasetError, DS.fit_norm_stats, [e], "train")
     assert "scripted" in str(err) or "synthetic" in str(err)
     _raises(DS.DatasetError, DS.fit_norm_stats, [], "train")
@@ -375,11 +376,41 @@ def test_norm_stats_split_must_be_stated():
     import inspect
     sig = inspect.signature(DS.fit_norm_stats).parameters["split"]
     assert sig.default is inspect.Parameter.empty, "split must have no default"
+    from g1_data.recorder import SOURCE_SCRIPTED
     e = _ep(0)
-    e.meta["source"] = "scripted_demo"
+    e.meta["source"] = SOURCE_SCRIPTED      # was "scripted_demo": never a registered source
     for bad in ("", None):
         err = _raises(DS.DatasetError, DS.fit_norm_stats, [e], bad)
         assert "split" in str(err).lower()
+
+
+def test_norm_stats_source_label_comes_from_the_registry():
+    """2026-10-25: "real" was any source not starting with "scripted", so live-
+    recorder dry runs (teleop_live_fake) and the teleop fixture were labelled
+    real AND passed without allow_synthetic. The registry's `real` flag decides."""
+    from g1_data import recorder as REC
+    got = _fake_episode_files(2)
+    if got is None:
+        print("      (skipped: nothing staged in data/synthetic)")
+        return
+    tmp, eps = got
+    try:
+        def as_(*sources):
+            return [DS.Episode(e.path, dict(e.meta, source=s)) for e, s in zip(eps, sources)]
+        for src in (REC.SOURCE_TELEOP_LIVE_FAKE, REC.SOURCE_TELEOP_FIXTURE, REC.SOURCE_SCRIPTED):
+            e = _raises(DS.DatasetError, DS.fit_norm_stats, as_(src, src), "train")
+            assert "NOT real" in str(e) and src in str(e), e
+            assert DS.fit_norm_stats(as_(src, src), "train",
+                                     allow_synthetic=True)[2]["source"] == "synthetic"
+        live = REC.SOURCE_TELEOP_LIVE
+        assert DS.fit_norm_stats(as_(live, live), "train")[2]["source"] == "real"
+        mixed = as_(live, REC.SOURCE_TELEOP_LIVE_FAKE)
+        _raises(DS.DatasetError, DS.fit_norm_stats, mixed, "train")
+        assert DS.fit_norm_stats(mixed, "train", allow_synthetic=True)[2]["source"] == "mixed"
+        _raises(REC.UnknownSource, DS.fit_norm_stats, as_("who_knows", live), "train",
+                allow_synthetic=True)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_norm_stats_refuse_a_masked_action_dim_that_is_not_constant():
