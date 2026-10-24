@@ -19,7 +19,9 @@ action swapped for the policy's. Tick order, as in collection:
        are ZEROS in normalized space (loader.py:371-379; the model never sees a mask)
     -> policy, eval mode, no grad: BC applies its single action (first_action);
        ACT / ACT-LSTM are queried EVERY tick and their chunks temporally ensembled
-       (TemporalEnsembler, m = 0.01, reset per episode)
+       (TemporalEnsembler, m = 0.01, reset per episode). act_orig is ACT at
+       W_o = 1; act_lstm_full also carries its LSTM's (h, c) from tick to tick
+       (`step`, g1_model/act_memory.py), reset per episode with the window
     -> denormalize -> post-process (below) -> route: 17 joint targets through
        spec.upper_ctrl_from_action, the gripper into GraspWeld.update (the SAME
        geometric weld gate as collection), the velocity into the walking policy
@@ -152,6 +154,11 @@ class CheckpointPolicy:
                              % ((kw.get("cfg") or kw)["chunk_size"], self.K))
         self.device = device or T.select_device()
         self.model = model.to(self.device).eval()
+        # act_lstm_full (g1_model/act_memory.py) reads the whole episode: its
+        # LSTM (h, c) is carried tick by tick through `step` and reset with the
+        # episode. Every other model is a function of the window alone.
+        self.recurrent = bool(getattr(self.model, "CARRIES_MEMORY", False))
+        self.memory = None
         self.ckpt_info = dict(file=ckpt, step=ck.get("step"), epoch=ck.get("epoch"),
                               val_loss=ck.get("val_loss"), git_commit=ck.get("git_commit"))
         # ensemble=False (open item 32): a chunked policy is still queried EVERY
@@ -173,6 +180,7 @@ class CheckpointPolicy:
 
     def reset(self) -> None:
         self.window = np.zeros((self.W, spec.STATE_DIM), dtype=np.float32)
+        self.memory = None                          # a recurrent policy's (h, c): tick 0
         if self.ens is not None:
             self.ens.reset()
 
@@ -184,7 +192,10 @@ class CheckpointPolicy:
         self.window = np.concatenate([self.window[1:], z[None]], axis=0)
         obs = torch.from_numpy(self.window).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            pred = self.model(obs)                            # (1, K, 22)
+            if self.recurrent:
+                pred, self.memory = self.model.step(obs, self.memory)
+            else:
+                pred = self.model(obs)                        # (1, K, 22)
             if self.ens is None:
                 a = pred[0, 0]
             else:
@@ -749,6 +760,9 @@ def main(argv=None):
                   success_hold_ticks=SUCCESS_HOLD_TICKS, fall_z=FALL_Z,
                   git_commit=__import__("g1_data.recorder", fromlist=["_git_commit"])._git_commit(),
                   determinism=det.get("notes") if isinstance(det, dict) else None)
+    if policy.recurrent:                                # act_lstm_full only
+        header["lstm_memory"] = ("(h, c) carried tick by tick from a zero state, reset "
+                                 "per episode (g1_model/act_memory.py)")
     print("deploy %s (%s, K=%d, W_o=%d, lock rule %s) on %d seed(s) -> %s"
           % (policy.name, policy.kind, policy.K, policy.W, rule.version, len(seeds), a.out))
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)

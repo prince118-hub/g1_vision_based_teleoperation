@@ -7547,3 +7547,86 @@ FILES ONLY - no existing code changed (another session edits deploy/eval): `tool
   ACT-LSTM 6.0-7.8 ms; all well inside the 40 ms tick. Replay check of scripted_v3 not run (column "not run").
 - Documentation videos: `tools/record_exp_videos.py` ready (208 videos = 160 successes + 48 typical failures,
   ~1.5 GB, hash-checked); NOT run yet (Charles, 2026-10-25: later).
+
+## 2026-10-24f — Memory design: `act_orig` and `act_lstm_full`, opt-in, UNTRAINED (branch `memory-design`)
+
+Linux CPU container (torch 2.14.1+cu130 CPU, mujoco 3.6.0, numpy 2.5.3), no GPU. **Nothing here is a result** (O34
+Option B): no model was trained beyond 200-step plumbing runs. Two NEW model names; every existing model, config
+option, default, file, test and run folder is unchanged (proof below). Teleop, recording, spec, success, phases and
+the evaluation rules are untouched.
+
+- **`act_orig`** = ACT on the original paper's input: the CURRENT observation only, W_o = 1 (`reference/act/utils.py:37`,
+  `detr_vae.py:80`; correspondence row 53). Not new code: `ACTPolicy` from `ACTConfig(obs_window=1)`, which act.py has
+  always accepted. K, beta 10, lr 1e-5, weight decay, dropout, batch and temporal ensembling are ACT's. The runner's
+  act_orig config EQUALS its `act --obs-window 1` config and builds the same weights (test).
+- **`act_lstm_full`** = act_orig + an LSTM over the WHOLE episode so far (tick 0..t, variable length) whose last-layer
+  final hidden state is the third encoder token, exactly where ACT-LSTM puts its window summary ([latent, proprio,
+  lstm], `lstm_pos_embed`; 2 layers, hidden 256, dropout 0.3 between layers, PyTorch default init). `ACTLSTMFullPolicy`
+  (g1_model/act_memory.py) IS `ACTPolicy(use_lstm=True)` at W_o = 1 with ONE override, `_lstm_token` (what the LSTM
+  reads): forward, CVAE encoder (current state only, never the token), decoder, loss and guard declarations are
+  ACT-LSTM's own code. `ACTFullHistoryConfig` adds no field: act_orig vs act_lstm_full configs differ in `use_lstm`
+  alone; the LSTM is built last, so act_lstm_full from a seed carries every act_orig parameter bit-identically; on a
+  one-tick history it IS ACT-LSTM at W_o = 1 (all tested).
+- **Training** (g1_model/history.py): `HistoryChunkDataset` = `ChunkDataset` (same index, normalization, masks, K-chunk,
+  refusals) + each sample's normalized states 0..t. Samples are random (episode, t) through the shared loop's shuffled
+  index, as every model; `collate_history` pads per batch and the LSTM reads it packed (`pack_padded_sequence`,
+  `enforce_sorted=False`) from ZERO memory - padding never read (tested to the bit), a sample independent of its
+  batch-mates. Nothing carried, so the loop, `masked_l1` + KL, `score_deployment` and `_DeploymentGuard` apply
+  unchanged. The batch's `obs` is a `HistoryObs` that presents the current (B, 1, 48) window to ACT through the four
+  tensor methods ACTPolicy calls (dim/shape/reshape/dtype-device). Hook in train.py: `_collate_for(ds)` = the dataset's
+  `collate_fn` else `collate_chunks` (3 call sites; ChunkDataset has none).
+- **Deployment**: `ACTLSTMFullPolicy.step(obs, (h, c))` advances the LSTM one tick and returns the chunk and the new
+  state; `deploy.CheckpointPolicy` keeps (h, c) in the WRAPPER (never on the model), resets it with the window per
+  episode, header gets `lstm_memory`. Carried vs re-reading 0..t: max |diff| 1.7e-6 (normalized action, full-size
+  model, 700 ticks, no drift); through CheckpointPolicy with ensembling and denormalization < 1e-4 on 150 ticks of a
+  recorded episode.
+- **Disclose / for Charles:** (1) deploy runs to 900 ticks, longer than any training episode (548-692): the LSTM then
+  reads a history length it never trained on. (2) Untrained, default-init LSTM (forget bias 0) keeps ~1e-6 of tick 0
+  after 30 ticks - long memory has to be LEARNED; the test checks the dependence exactly and by gradient, not by size.
+  (3) The neighbour-ambiguity reference of act_lstm_full is computed on the W_o = 1 view (no estimator for a variable
+  history); stated in run metadata. (4) Scoring re-reads the history per sample, O(T^2) per episode. (5) D8 pending:
+  these are two extra conditions, not a replacement of the three-model ladder.
+- **CLI**: `train_bc.py --model act_orig|act_lstm_full --obs-window 1` (the default 12 is REFUSED for them; existing
+  default unchanged); `config.notes.model` + `notes.memory_design` in metadata. deploy/eval_scripted need no model
+  name: they read the run. `eval_scripted.HEAVY` also names the new launcher (its --wait-for-training waits for it).
+- **Regression proof.** (a) Suite `pytest g1_data g1_teleop g1_model tools`, 2 scripted episodes staged in
+  data/synthetic: branch 441 passed / 3 failed / 1 skipped; clean main worktree 404 / the SAME 3 / 1 (+37 new tests).
+  The 3 fail on main too: `test_v1_episode_replays_with_its_own_rule` and `test_normalizer_from_another_split_is_refused`
+  expect scripted_v1 episodes in data/synthetic (pass when nothing is staged), `test_d19_sensitivity_counts...` fails
+  on main with or without data in this environment (pandas 3.0.5). No existing test was changed. (b)+(c)
+  `tools/check_memory_design_regression.py` (old code in a git worktree of origin/main e10052b vs this branch, one
+  probe): bc K1/K100, act, act_lstm, gate and train configs - config, class, hparams, every tensor (sha256), optimizer
+  and regularization statements, output bytes - IDENTICAL; old-format checkpoints written by main's `save_checkpoint`
+  load in the new deploy and give bit-identical actions over 60 ticks (ensembling, non-trivial norm stats). Negative
+  control: m 0.01 -> 0.0100001 and LSTM dropout 0.31 are flagged. New `g1_model/test_ladder_golden.py` pins those
+  fingerprints (weights/outputs on torch 2.14.1+cu130 only, the rest everywhere). (d) test_deploy (replay bit-for-bit,
+  parity 1-4, determinism, ensemble) passes unchanged.
+- **CPU cost** (`tools/bench_memory_design.py`; Xeon 2.1 GHz, 4 threads; synthetic 600-tick episodes; K 100, batch 8;
+  median of 20 steps):
+
+  | model | W_o | params | step s | peak RSS GB | train RSS GB | score s/episode |
+  |---|---|---|---|---|---|---|
+  | act_lstm (now) | 12 | 41.7 M | 0.682 | 1.69 | 0.89 | 5.84 |
+  | act_orig | 1 | 40.2 M | 0.706 (1.03x) | 1.66 (0.98x) | 0.86 (0.97x) | 5.94 (1.02x) |
+  | act_lstm_full | 1 | 41.2 M | 2.412 (3.54x) | 1.85 (1.09x) | 1.05 (1.18x) | 7.77 (1.33x) |
+
+  A 200k-step run with 200 validation passes over 40 val episodes: ~51 h / 52 h / 151 h on THIS CPU (2.97x). The
+  laptop's GPU ratio will differ (the LSTM is sequential); measure it there before launching.
+- **Launcher** `tools/train_memory_design_n40.ps1` (-DryRun: 200 steps + one 100-tick deploy per run): act_orig s0 ->
+  act_lstm_full s0 -> eval both -> act_orig s1, s2 -> act_lstm_full s1, s2 -> eval those, into
+  `runs/scripted_v3_memory_design/` (eval in its `eval/`, so Run A/B and `analyze_experiments` are untouched; its
+  RUN_RE does not parse the new names - the header's `kind` is used). Completion from result.json / selection.json +
+  complete exp JSONLs, never exit codes; an interrupted run is moved to `_failed/` and restarted from scratch (as the
+  n40 launcher; a resume would split the periodic checkpoints across two folders). Parsed and its completion checks
+  executed in PowerShell 7 here; the whole `-DryRun` ran end to end under PowerShell 7.4 on Linux (a path-translated
+  copy, 4 recorded scripted episodes, split 3/1): 6 trainings `hard_cap` in the stated order (act_orig 2.5 min,
+  act_lstm_full 7.9 min per 200 steps on this CPU; peak RAM 2.5 / 2.7 GB), 6 deploys written (header kind, W_o 1,
+  ensembling, `lstm_memory` for act_lstm_full only). Re-run with one result.json removed: that run moved to `_failed/`
+  with its eval folder and retrained, every other step SKIPPED; `write_resources.py` and `eval_scripted._launcher_ended`
+  read the summary. NOT run: the Windows-only process wait (Get-CimInstance) and a full eval step (hours on CPU).
+- **Laptop commands** (in this order): `python -m pytest g1_data g1_teleop g1_model tools -q`;
+  `python tools/check_memory_design_regression.py --base main --real runs/scripted_v3/act_lstm_n40_seed0:best.pt
+  --real runs/scripted_v3/act_n40_seed0:best.pt --real runs/scripted_v3/bc_n40_seed0:best.pt` (must print ALL
+  IDENTICAL); `python tools/bench_memory_design.py --device cuda --out runs/bench_memory_design_gpu.json`;
+  `powershell -NoProfile -ExecutionPolicy Bypass -File tools\train_memory_design_n40.ps1 -DryRun` (then delete
+  `runs\scripted_v3_memory_design_dryrun`); then the same without `-DryRun`.

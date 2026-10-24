@@ -28,6 +28,15 @@ If a stage fails, that is the finding. Do not add capacity, raise the learning
 rate, or train longer to force it through - a failure says something specific
 about the loss or the plumbing and forcing it through destroys the evidence.
 
+MEMORY-DESIGN MODELS (g1_model/act_memory.py)
+---------------------------------------------
+`--model act_orig` is ACT on the original paper's input, the current observation
+only (W_o = 1); `--model act_lstm_full` adds an LSTM over the whole episode
+history 0..t (variable length, g1_model/history.py). Both take --chunk 100 and
+--batch 8 as ACT does, and --obs-window 1, which defines them: any other window,
+the default 12 included, is refused. The name is stored in metadata.json
+(`config.notes.model`).
+
 WHAT IT IS NOT (C5)
 -------------------
 Every gate in Phase 4 runs on SCRIPTED episodes. They are smoother and more
@@ -59,7 +68,12 @@ from g1_model.models import (K_PROVISIONAL, PROVISIONAL, BCConfig,
                              BCPolicy, build_bc)
 from g1_model import ambiguity as AMB
 from g1_model.act import ACTConfig, build_act
+from g1_model import act_memory as AM
+from g1_model.history import HistoryChunkDataset
 from g1_model import train as T
+
+#: Every model trained with ACT's objective (L1 + beta * KL) and its metadata notes.
+ACT_FAMILY = ("act", "act_lstm") + AM.MEMORY_DESIGN_MODELS
 
 # The data a run reads: an episode folder, a split file and a norm-stats file.
 # Set ONCE from the command line in main() (defaults are the v1 paths every
@@ -83,9 +97,12 @@ def _tracking_policy() -> TrackingPolicy:
 
 def _load(seeds, mcfg, norm_meta, norm_fit_seeds=None) -> ChunkDataset:
     """The loader shape comes from the MODEL's own config (BCConfig or ACTConfig),
-    so the window the loader cuts is the window the model was built for."""
+    so the window the loader cuts is the window the model was built for.
+    act_lstm_full's config selects the history loader, which adds each sample's
+    episode states 0..t to exactly this dataset (g1_model/history.py)."""
     st, ac, meta = DS.load_norm_stats(DATA["norm"])
-    return ChunkDataset.from_directory(
+    cls = HistoryChunkDataset if isinstance(mcfg, AM.ACTFullHistoryConfig) else ChunkDataset
+    return cls.from_directory(
         DATA["episodes"],
         LoaderConfig(chunk_size=mcfg.chunk_size, obs_window=mcfg.obs_window,
                      tracking=_tracking_policy()),
@@ -108,7 +125,27 @@ def _model_config(kind, K, W, batch, gate):
 
     `W` is the observation window, shared by every model (CLAUDE.md §8
     2026-09-27): it comes from --obs-window, never from another model's config.
+
+    act_orig and act_lstm_full (g1_model/act_memory.py) are the memory-design
+    pair: ACT on the original paper's input, the CURRENT observation only, and
+    the same plus an LSTM over the whole episode history. W_o = 1 is what defines
+    them, so it must be stated (--obs-window 1; None, from code, also means 1)
+    and any other value - the parser's default 12 included - is refused.
+    Everything else is the ACT branch's own: lr, weight decay (0 at the gate),
+    dropout, K from --chunk; the two configs differ in `use_lstm` alone, as act
+    and act_lstm do.
     """
+    if kind in AM.MEMORY_DESIGN_MODELS:
+        from g1_model.act import LR as ACT_LR, WEIGHT_DECAY as ACT_WD
+        if W is not None and int(W) != AM.ORIGINAL_OBS_WINDOW:
+            raise SystemExit("--model %s is defined by W_o = %d (the current observation "
+                             "only): pass --obs-window %d. Got %s (12 is the parser's "
+                             "default, the window bc/act/act_lstm share) - refused"
+                             % (kind, AM.ORIGINAL_OBS_WINDOW, AM.ORIGINAL_OBS_WINDOW, W))
+        cfg_cls = AM.ACTFullHistoryConfig if kind == AM.ACT_LSTM_FULL else ACTConfig
+        return cfg_cls(obs_window=AM.ORIGINAL_OBS_WINDOW, chunk_size=K, lr=ACT_LR,
+                       weight_decay=0.0 if gate else ACT_WD,
+                       use_lstm=(kind == AM.ACT_LSTM_FULL))
     if kind == "bc":
         return BCConfig(obs_window=int(W), chunk_size=K, batch_size=int(batch),
                         **(dict(dropout=0.0, weight_decay=0.0) if gate else {}))
@@ -126,7 +163,29 @@ def _model_config(kind, K, W, batch, gate):
         return ACTConfig(obs_window=int(W), chunk_size=K, lr=ACT_LR,
                          weight_decay=0.0 if gate else ACT_WD,
                          use_lstm=(kind == "act_lstm"))
-    raise SystemExit("unknown --model %r (bc|act|act_lstm)" % kind)
+    raise SystemExit("unknown --model %r (bc|act|act_lstm|%s)"
+                     % (kind, "|".join(AM.MEMORY_DESIGN_MODELS)))
+
+
+def _memory_design_notes(kind) -> dict:
+    """What a memory-design model reads, for its run metadata (g1_model/
+    act_memory.py). {} for every other model, whose metadata is unchanged."""
+    if kind not in AM.MEMORY_DESIGN_MODELS:
+        return {}
+    full = kind == AM.ACT_LSTM_FULL
+    return dict(memory_design=dict(
+        model=kind, input=AM.INPUT_DESCRIPTION[kind],
+        obs_window=AM.ORIGINAL_OBS_WINDOW,
+        sampling="each sample a random (episode, t), the shared loop's shuffled index"
+                 + ("; the LSTM re-reads states 0..t from zero memory (packed "
+                    "variable-length batches)" if full else ""),
+        deployment=("temporal ensembling as ACT; the LSTM's (h, c) carried tick by "
+                    "tick and reset per episode (tools/deploy.py)" if full else
+                    "temporal ensembling as ACT; no memory"),
+        ambiguity_reference=("computed for the W_o = 1 current observation only: the "
+                             "variable-length history has no neighbour-ambiguity "
+                             "estimator" if full else
+                             "computed for the model's whole input (W_o = 1)")))
 
 
 def observed_dropout(model) -> list:
@@ -199,6 +258,8 @@ def _train_config(mcfg, epochs, batch, **kw):
 def _make_model(mcfg, tcfg):
     """Build through `seeded_build` (D10): seeding inside `train()` is already
     too late to control weight initialisation."""
+    if isinstance(mcfg, AM.ACTFullHistoryConfig):          # before its parent class
+        return T.seeded_build(tcfg, AM.build_act_lstm_full, cfg=mcfg)
     if isinstance(mcfg, ACTConfig):
         return T.seeded_build(tcfg, build_act, cfg=mcfg)
     return T.seeded_build(tcfg, build_bc, cfg=mcfg)
@@ -358,6 +419,7 @@ def cmd_overfit10(a):
     ds = _load(seeds, mcfg, meta, norm_fit_seeds=tr)
     name = ("ACT (K=%d)" % K if a.model == "act"
             else "ACT-LSTM (K=%d)" % K if a.model == "act_lstm"
+            else "%s (K=%d)" % (a.model, K) if a.model in AM.MEMORY_DESIGN_MODELS
             else "BC" if K == 1 else "CHUNKED BC (K=%d)" % K)
     _banner(ds, "OVERFIT-10 GATE: %s on %d episodes, seeds %s"
             % (name, len(seeds), seeds))
@@ -393,7 +455,8 @@ def cmd_overfit10(a):
                            "balance needs beta'=14.70. beta=10 is used here because the "
                            "overfit-10 gate cannot discriminate between them; the choice "
                            "is DEFERRED to a validation signal. NOT rescaled silently."),
-                   ) if a.model in ("act", "act_lstm") else {}),
+                   ) if a.model in ACT_FAMILY else {}),
+                   **_memory_design_notes(a.model),
                    criterion="train error < neighbour-ambiguity reference for "
                              "this loader configuration (NOTES.md 2026-09-21)",
                    ambiguity_reference=ref.as_metadata(),
@@ -502,7 +565,8 @@ def cmd_full(a, purpose="plumbing"):
         _budget=_budget(a, tds), **_step_kwargs(a),
         notes=dict(chunk_size=K, model=a.model, **what,
                    **(dict(kl_weight_used=float(mcfg.kl_weight))
-                      if a.model in ("act", "act_lstm") else {}),
+                      if a.model in ACT_FAMILY else {}),
+                   **_memory_design_notes(a.model),
                    ambiguity_reference_train=ref_tr.as_metadata(),
                    ambiguity_reference_val=ref_va.as_metadata(),
                    provisional_hyperparameters=PROVISIONAL,
@@ -592,6 +656,8 @@ def _factory_for(ck):
     checkpoint's own TrainConfig, is supplied, and the fact is recorded."""
     if ck["model_cls"] == "BCPolicy":
         return build_bc, None
+    if ck["model_cls"] == AM.ACTLSTMFullPolicy.__name__:     # written after TR28: has lr
+        return AM.build_act_lstm_full, None
     if ck["model_cls"] != "ACTPolicy":
         raise SystemExit("no builder for %r" % ck["model_cls"])
     kw = dict(ck["model_kwargs"]["cfg"])
@@ -636,7 +702,11 @@ def cmd_rescore_gate(a):
                          % (ck["data"]["seeds"], seeds))
     K, W = int(meta["loader"]["chunk_size"]), int(meta["loader"]["obs_window"])
     st, ac, nmeta = DS.load_norm_stats(DATA["norm"])
-    ds = _load(seeds, BCConfig(obs_window=W, chunk_size=K), nmeta, norm_fit_seeds=tr)
+    # act_lstm_full's own config selects the history loader; every other model is
+    # scored on the plain loader of its shape, as before
+    shape = (model.cfg if isinstance(model, AM.ACTLSTMFullPolicy)
+             else BCConfig(obs_window=W, chunk_size=K))
+    ds = _load(seeds, shape, nmeta, norm_fit_seeds=tr)
     device = T.select_device()
     ref = AMB.neighbour_ambiguity(ds, device=device)
     if abs(ref.mean - float(old_ref["mean"])) > 1e-9 or ref.samples != old_ref["samples"]:
@@ -752,11 +822,13 @@ def main():
         if name in ("overfit10", "full", "train"):
             p.add_argument("--chunk", type=int, default=1,
                            help="K. 1 = BC, >1 = chunked BC (same class)")
-            p.add_argument("--model", default="bc", choices=("bc", "act", "act_lstm"))
+            p.add_argument("--model", default="bc",
+                           choices=("bc", "act", "act_lstm") + AM.MEMORY_DESIGN_MODELS)
             p.add_argument("--obs-window", type=int, default=12,
                            help="W_o, shared by every model (CLAUDE.md §8 "
                                 "2026-09-27): 12 = 0.48 s at 25 Hz. 1 reproduces "
-                                "the pre-2026-09-27 gates")
+                                "the pre-2026-09-27 gates. act_orig and act_lstm_full "
+                                "are W_o = 1 by definition: state --obs-window 1")
             p.add_argument("--batch", type=int, default=256,
                            help="batch size. ACT's 4 GB ceiling is 32 (measured)")
         if name == "rescore-gate":
