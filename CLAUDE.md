@@ -49,7 +49,7 @@ is deliberately NOT repeated here — `NOTES.md`, the suites and the run directo
 
 ## 5. Not yet built
 
-The Exp 1 / Exp 2 evaluation runs (the closed-loop harness is `tools/deploy.py`). Dataset and evaluation design — 150 episodes, splits, fixed eval seeds, nested scaling subsets, the statistical limit — is in PLAN.md and `NOTES.md` "PHASE 2 CLOSEOUT".
+The Exp 1 / Exp 2 evaluation runs (the closed-loop harness is `tools/deploy.py`; analysis of their output: `tools/analyze_experiments.py`, `docs/ANALYSIS.md`). Dataset and evaluation design — 150 episodes, splits, fixed eval seeds, nested scaling subsets, the statistical limit — is in PLAN.md and `NOTES.md` "PHASE 2 CLOSEOUT".
 
 ## 6. State and action vectors
 
