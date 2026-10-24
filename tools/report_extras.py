@@ -274,15 +274,26 @@ def benchmark_checkpoint(run_dir: str, ckpt: str, device: str = "cpu",
     W = int(cfg["obs_window"])
     obs = torch.zeros(1, W, int(cfg.get("state_dim", spec.STATE_DIM)), device=device)
     sync = torch.cuda.synchronize if device == "cuda" else None
+    # act_lstm_full (CARRIES_MEMORY) refuses a plain tensor - it has no history.
+    # Deployed, it is called through step() with the LSTM's (h, c) carried tick
+    # to tick (tools/deploy.py CheckpointPolicy), so THAT call is timed: one LSTM
+    # step + the policy, a per-tick cost independent of how far into the episode.
+    recurrent = bool(getattr(model, "CARRIES_MEMORY", False))
+    memory = [None]
 
     def call():
         with torch.no_grad():
-            model(obs)
+            if recurrent:
+                _, memory[0] = model.step(obs, memory[0])
+            else:
+                model(obs)
     r = time_calls(call, n_iter=n_iter, sync=sync)
+    what = ("step() with carried LSTM memory (as deployed)" if recurrent
+            else "model forward only")
     return dict(infer_ms_mean=r["ms_mean"], infer_ms_p95=r["ms_p95"], infer_device=device,
                 infer_ckpt=ckpt,
-                infer_note="model forward only, (1, %d, 48) window, %d calls, torch threads %d"
-                           % (W, r["n"], torch.get_num_threads()))
+                infer_note="%s, (1, %d, 48) window, %d calls, torch threads %d"
+                           % (what, W, r["n"], torch.get_num_threads()))
 
 
 def compute_row(run_dir: str, eval_dir: Optional[str] = None, bench: bool = True,

@@ -76,7 +76,7 @@ command applied FROM `state[t]`; build the pair at ONE point in the loop, before
 | D5 | §3.3.1 joints start at zero | legs start at `DEFAULT_ANGLES` | the walking policy cannot recover from straight legs | 3.3.1, 3.8.1 |
 | D6 | §3.3.4 pelvis-velocity trigger | **abandoned**; `KeyboardCommand` | §3.3.4 and §3.3.8 are incompatible (TR1); written up as a negative result | 3.3.4, 3.3.8 |
 | D7 | §3.3.6 grippers press via IK error | pads press; arm holds a clean pose | IK-error pressing corrupts the arm dims it is recorded into | 3.3.6 |
-| D8 | two policies | three (BC, ACT, ACT-LSTM); **all at W_o = 12 (ACT reference: 1) — pending adviser approval** (§8 2026-09-25, 2026-09-27) | isolates the LSTM instead of confounding it with chunking; one shared window leaves each model's own mechanism the only difference | 3.6–3.8.4, RQ2 |
+| D8 | two policies | three: **BC (batch 256), ACT = `act_orig` (W_o = 1, the reference's input), ACT-LSTM = `act_lstm_full` (whole-episode LSTM)**; ACT-12 / ACT-LSTM-12 (W_o = 12) = short-memory ablation — **pending adviser approval** (`NOTES.md` 2026-10-25b; was: all at W_o = 12, §8 2026-09-25/27) | act_orig is the reference's own model; act_lstm_full adds only an episode-long memory (configs differ in `use_lstm` alone); the W_o = 12 pair separates short from long memory | 3.6–3.8.4, RQ2 |
 | D9 | §3.9 Ubuntu + ROS2 | Windows 11, no ROS | ROS adds no value for a single-process sim | 3.9 |
 | D10 | §3.4 waist as live DOF | waist pinned at 0 | torso-yaw sign unverified; waist motion perturbs the locomotion policy | 3.4 |
 | D11 | §3.3.6 friction grasp | **weld**, gated on palm proximity/opposition/separation | friction holds 1 of 9 standoffs and couples to unrelated foot contacts; reportable negative result | 3.3.6 + limits |

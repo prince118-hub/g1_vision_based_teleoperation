@@ -177,6 +177,32 @@ def test_benchmark_without_torch_is_na(tmp_path):
 
 
 # ═══ (c) offline vs real ══════════════════════════════════════════════════════
+def test_benchmark_times_act_lstm_full_through_step(tmp_path):
+    """act_lstm_full refuses a plain (1, 1, 48) tensor; the benchmark must time
+    the deployed call, step() with carried (h, c) - and still time ACT as before."""
+    torch = pytest.importorskip("torch")
+    try:
+        from g1_model import act_memory as AM
+        from g1_model.act import ACTConfig, build_act
+        from g1_data import spec
+    except Exception:                                   # noqa: BLE001  (no mujoco here)
+        pytest.skip("model stack not importable")
+    small = dict(obs_window=1, chunk_size=8, lr=1e-5, hidden_dim=64, dim_feedforward=128,
+                 nheads=4, enc_layers=1, dec_layers=1)
+    for kind, model in (("act_lstm_full", AM.build_act_lstm_full(cfg=AM.ACTFullHistoryConfig(**small))),
+                        ("act", build_act(cfg=ACTConfig(**small)))):
+        d = tmp_path / kind
+        d.mkdir()
+        torch.save(dict(state_dict=model.state_dict(), model_cls=type(model).__name__,
+                        model_kwargs=model.hparams, spec_version=spec.SPEC_VERSION,
+                        config={}, step=0, epoch=0, val_loss=None, git_commit=None),
+                   str(d / "best.pt"))
+        r = RE.benchmark_checkpoint(str(d), "best.pt", device="cpu", n_iter=5)
+        assert "infer_ms_mean" in r and r["infer_ms_mean"] > 0, r
+        want = "step() with carried LSTM memory" if kind == "act_lstm_full" else "model forward only"
+        assert r["infer_note"].startswith(want), r["infer_note"]
+
+
 def _selection(eval_root, run, cands, chosen):
     d = os.path.join(eval_root, run)
     os.makedirs(d, exist_ok=True)

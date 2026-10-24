@@ -7630,3 +7630,31 @@ the evaluation rules are untouched.
   IDENTICAL); `python tools/bench_memory_design.py --device cuda --out runs/bench_memory_design_gpu.json`;
   `powershell -NoProfile -ExecutionPolicy Bypass -File tools\train_memory_design_n40.ps1 -DryRun` (then delete
   `runs\scripted_v3_memory_design_dryrun`); then the same without `-DryRun`.
+
+## 2026-10-25b — DECISION (Charles): episode-long memory re-opened; D8 = BC (b256), act_orig, act_lstm_full
+
+**Recorded here, not in CLAUDE.md §8: that file is at its 400-line cap. The §7 D8 row was rewritten in place.**
+
+- **act_lstm_full re-opens Option A of 2026-09-25** (hidden state over the whole episode), which was rejected then
+  for two reasons: it needed a sequential sampler ACT does not use, and a carried-state exemption from the
+  deployment guard (TR31). Random full-prefix training removes both: each sample is a random (episode, t) through
+  the shared loop's shuffled index, and the LSTM re-reads states 0..t **from zero memory** every time (packed,
+  `g1_model/history.py`). Nothing is carried in training or scoring, so the loop, the loss, `score_deployment`
+  and `_DeploymentGuard` apply unchanged, with no exemption. Memory is carried only at deployment, as (h, c) in
+  the deploy wrapper and reset per episode. Carried vs re-read: max |diff| 1.7e-6 over 700 ticks (NOTES 2026-10-24f).
+- **D8 now compares three policies:** **BC (batch 256**, its own default, review M3: `bc_b256_*`), **ACT = act_orig**
+  (the reference's input, W_o = 1), **ACT-LSTM = act_lstm_full** (whole-episode LSTM). act_orig vs act_lstm_full
+  configs differ in `use_lstm` alone, and act_lstm_full from a seed carries every act_orig parameter bit-identically.
+- **Short-memory ablation:** ACT-12 / ACT-LSTM-12 = the existing `act` / `act_lstm` runs at W_o = 12 (Run A/B).
+  With the headline pair, they separate "memory of the last 0.48 s" from "memory of the whole episode".
+- **Disclose in Chapter 3/4:**
+  1. This supersedes the 2026-09-27 "one shared window for every model" invariant for the HEADLINE comparison.
+     BC (b256) keeps W_o = 12 and batch 256, while ACT/act_lstm_full run W_o = 1 and batch 8. The ladder no longer
+     changes one thing per rung; BC is a baseline, not a rung.
+  2. BC scored 0/100 at both batch sizes (2026-10-25), so the BC row is a floor whichever batch is reported.
+  3. act_lstm_full is deployed to 900 ticks, longer than any training episode (548-692).
+  4. Its ambiguity reference is computed on the W_o = 1 view.
+  5. Cost: measured on the laptop before launch (bench below).
+  6. D8 is still PENDING adviser approval.
+- report_extras inference timing: act_lstm_full is timed through `step()` with carried (h, c), the deployed call;
+  `model(obs)` on a plain tensor is refused by the model.
