@@ -7675,3 +7675,33 @@ the evaluation rules are untouched.
   - **`bench_memory_design.py --device cuda`** (RTX 3050, K 100, batch 8; estimate per 200k-step run): act_lstm 5.2 h
     (measured on real runs: 4.7 h, so the bench reads ~10% high), act_orig 4.7 h (0.91x), act_lstm_full 8.7 h
     (1.66x; step 0.131 s vs 0.071 s). Expect about 4.3 h and 7.9 h.
+
+## 2026-10-25c — act_lstm_full_n40_seed0 crashed: cuDNN packed-LSTM native abort; fix (unpacked LSTM + gather)
+
+- **Crash.** act_lstm_full_n40_seed0 (memory-design launcher, commit 1c6eaf7) died at **14:46:43 after 58.9 min**,
+  at about **step 25,000 of 200,000**. The last logged window was step 24,000 (val loss 0.0621, falling), and the crash
+  came 132 s later against ~124 s windows, most likely in the step-25k validation pass.
+  - Exit **0xC0000409**. Windows Application log: python.exe, faulting module ucrtbase.dll.
+  - train.log: "Unhandled exception caught in c10/util/AbortHandler.h". A CUDA check (`c10_cuda_check_implementation`)
+    threw inside cuDNN's RNN (`_cudnn_rnn`, via `lstm_data` = the PACKED-sequence LSTM) and could not propagate, so
+    the process terminated and the CUDA error text was never printed.
+  - Not out-of-memory (peak GPU 2.3 / 4 GB; an OOM would be a Python exception), not a Python exception (stderr
+    empty), not a display-driver reset (no TDR event in the System log), not divergence.
+  - result.json stayed "running" (written per window), so the launcher skipped its eval and went on.
+  - act_lstm (W_o 12, cuDNN, NOT packed) ran 3 x 200k steps without a mid-run crash.
+- **Fix** (`g1_model/act_memory.read_history`): the LSTM runs over the padded batch UNPACKED, and the last layer's output
+  at index length-1 (= its hidden state after the last real tick) is gathered per sample. The LSTM is causal, so
+  padding cannot reach that output or its gradient. Deployment (`step()`, (h, c) carried tick by tick) is unchanged.
+  - Checked on CPU only (GPU busy training, `CUDA_VISIBLE_DEVICES=-1`): test_act_memory + test_ladder_golden 19/19
+    (padding never read, to the bit; sample alone vs in batch; tick-by-tick deployment = re-reading the history;
+    gradient), tools/test_memory_design 19/19 (deploy wrapper, carried memory).
+  - `check_memory_design_regression.py` with real act_lstm_n40_seed0, act_n40_seed0 and bc_n40_seed0 best.pt:
+    ALL IDENTICAL against `--base HEAD` (pre-fix) and against `--base add437b` (pre-PR #7).
+  - On act_lstm_full_n40_seed0's real best.pt, histories of 1-700 ticks: packed vs unpacked max |diff| 4.5e-8
+    (hidden scale 0.12), i.e. rounding.
+  - Cost: compute on the padding (each batch is padded to its longest history).
+  - Not proven: that the unpacked cuDNN LSTM is crash-free at ~700-tick sequences; act_lstm's record is at 12 ticks.
+    Seed 1 is the test.
+- **act_lstm_full_n40_seed0 must be RETRAINED.** After this pass of the launcher ends, relaunch it: it moves the
+  incomplete folder (and its eval) to `runs\scripted_v3_memory_design\_failed\` and trains seed 0 from scratch.
+  Seeds 1 and 2 start in new Python processes, so they pick up this fix if it is committed before they start.

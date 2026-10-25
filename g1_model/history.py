@@ -20,9 +20,10 @@ THE BATCH
 ---------
 Histories differ in length, so `collate_chunks`' plain stack cannot batch them.
 `collate_history` pads each batch's histories with zeros to its longest and
-records each one's length; the model reads them with `pack_padded_sequence`, so
-the padding is never computed on (test_act_memory checks that changing it moves
-nothing). Every other key is stacked by `collate_chunks` itself. The batch's
+records each one's length; the model runs the LSTM over the padded batch and
+gathers each sample's output at its last real step, so the padding (causal: it
+comes after) cannot reach the token (test_act_memory checks that changing it
+moves nothing). Packed until 2026-10-25 (cuDNN's packed LSTM aborted natively). Every other key is stacked by `collate_chunks` itself. The batch's
 `obs` is a `HistoryObs`. The shared loop finds the batcher through the dataset's
 `collate_fn` attribute (`train._collate_for`); a `ChunkDataset` has none, so
 every existing model's batches are built exactly as before.
@@ -77,8 +78,8 @@ class HistoryObs(_CurrentWindow):
       current : (B, W_o, 48)  the window act_orig is given (W_o = 1: the state at t)
       history : (B, T, 48)    each sample's normalized states 0..t, oldest first,
                               right-padded with zeros to the longest in the batch
-      lengths : (B,) int64    t + 1 per sample; kept on the CPU, where
-                              `pack_padded_sequence` requires it
+      lengths : (B,) int64    t + 1 per sample; kept on the CPU (the model
+                              moves the gather index to the output's device)
 
     Only `history[b, :lengths[b]]` is data. `collate_history` checks that the
     newest history row IS the current state, so the LSTM's last input is the

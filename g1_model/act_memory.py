@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import torch
-from torch.nn.utils.rnn import pack_padded_sequence
+
 
 from g1_model.act import ACTConfig, ACTPolicy
 from g1_model.history import CarriedObs, HistoryObs
@@ -152,13 +152,20 @@ class ACTLSTMFullPolicy(ACTPolicy):
 
     def read_history(self, history: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """(B, T, 48) padded histories, (B,) lengths -> (B, H) last-layer hidden
-        state after each sample's LAST REAL step, from zero memory. Packed, so the
-        padding is never read; `enforce_sorted=False` returns `h_n` in the batch's
-        own order."""
-        packed = pack_padded_sequence(history, lengths.cpu(), batch_first=True,
-                                      enforce_sorted=False)
-        _, (h_n, _) = self.lstm(packed)                             # (L, B, H)
-        return h_n[-1]
+        state after each sample's LAST REAL step, from zero memory.
+
+        UNPACKED (2026-10-25): the LSTM runs over the whole padded batch and the
+        last layer's output at index length - 1 - which IS that layer's hidden
+        state after the last real step - is gathered per sample. An LSTM is
+        causal, so the padding after it cannot reach that output or its gradient
+        (tested to the bit). Until 2026-10-25 this packed the batch
+        (`pack_padded_sequence`), and cuDNN's packed-sequence LSTM aborted the
+        process natively on the laptop (0xC0000409, act_lstm_full_n40_seed0 at
+        ~step 25k); the unpacked call is the cuDNN path act_lstm uses. Costs the
+        compute on the padding."""
+        out, _ = self.lstm(history)                                 # (B, T, H)
+        idx = (torch.as_tensor(lengths, dtype=torch.int64) - 1).to(out.device)
+        return out[torch.arange(out.shape[0], device=out.device), idx]
 
     # ---- deployment -------------------------------------------------------
     def step(self, obs: torch.Tensor,
