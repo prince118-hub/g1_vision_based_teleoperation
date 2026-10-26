@@ -947,8 +947,17 @@ def score_deployment(model: nn.Module, ds: ChunkDataset,
 
     Returns a `Quantity` measured `MEASURED_AT_DEPLOYMENT` - the only kind
     `ambiguity.gate` accepts.
+
+    A dataset may declare `score_batch_size` (scoring batch, overriding
+    `batch_size`) and `empty_cache_after_scoring` (release the CUDA cache after
+    the pass). Only `history.HistoryChunkDataset` (act_lstm_full) does, since
+    2026-10-26: 256 full histories padded to ~700 ticks reserved 1.5 GB per pass
+    and, alternating with training shapes, fragmented the 4 GB laptop GPU into
+    OOMs and cuDNN aborts after hours. `ChunkDataset` declares neither, so every
+    other model scores exactly as before.
     """
     from g1_model.ambiguity import Quantity, RECON_UNITS, MEASURED_AT_DEPLOYMENT
+    batch_size = int(getattr(ds, "score_batch_size", batch_size))
     device = device or next(model.parameters()).device
     if dim_mask is None:
         dim_mask = torch.from_numpy(
@@ -969,6 +978,9 @@ def score_deployment(model: nn.Module, ds: ChunkDataset,
             n += int(count)
         if probe_obs is not None:
             guard.finish(probe_obs, probe_out)
+    if getattr(ds, "empty_cache_after_scoring", False) and torch.device(device).type == "cuda":
+        del probe_obs, probe_out
+        torch.cuda.empty_cache()
     return Quantity(total / max(n, 1), RECON_UNITS, measured=MEASURED_AT_DEPLOYMENT)
 
 

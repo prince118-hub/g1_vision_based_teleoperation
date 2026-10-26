@@ -240,6 +240,37 @@ def test_tick_by_tick_deployment_equals_rereading_the_whole_history():
     assert torch.equal(a, b)
 
 
+def test_segmented_read_equals_one_unpacked_lstm_call():
+    """2026-10-26: read_history reads in fixed READ_SEGMENT-tick segments carrying
+    (h, c). It must equal ONE unpacked LSTM call over the same padded batch,
+    gathered at length - 1 (within 1e-6), for lengths below, at and across the
+    segment boundary - on the CPU, and on CUDA when present."""
+    S = AM.READ_SEGMENT
+    lengths = [1, S - 1, S, S + 1, 2 * S + 5, 3 * S]
+    devices = [torch.device("cpu")] + ([torch.device("cuda")] if torch.cuda.is_available() else [])
+    for dev in devices:
+        m = _full().to(dev)
+        x = torch.randn(len(lengths), max(lengths) + 7, spec.STATE_DIM, device=dev)
+        L = torch.tensor(lengths, dtype=torch.int64)
+        with torch.no_grad():
+            seg = m.read_history(x, L)
+            out, _ = m.lstm(x)
+            one = out[torch.arange(len(lengths), device=dev), (L - 1).to(dev)]
+        d = float((seg - one).abs().max())
+        assert d < 1e-6, (str(dev), d)
+
+
+def test_only_the_history_dataset_changes_how_it_is_scored():
+    """Fixes A/C (2026-10-26) are attributes of HistoryChunkDataset alone; the
+    plain ChunkDataset every other model trains on declares neither, so
+    score_deployment keeps batch 256 and the cache for them."""
+    from g1_model.history import HistoryChunkDataset
+    assert HistoryChunkDataset.score_batch_size == 32
+    assert HistoryChunkDataset.empty_cache_after_scoring is True
+    assert not hasattr(ChunkDataset, "score_batch_size")
+    assert not hasattr(ChunkDataset, "empty_cache_after_scoring")
+
+
 def test_step_from_no_memory_is_tick_zero():
     m = _full()
     s = torch.randn(1, 1, spec.STATE_DIM)

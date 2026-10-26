@@ -86,6 +86,42 @@ def test_selection_paths_are_repo_relative():
     assert sel["seed_set"].replace("\\", "/") == "data/eval/select_seeds.json"
 
 
+def test_a_failed_deploy_is_retried_once_then_refused():
+    """2026-10-26: a short write is re-run once from scratch; a second short
+    write stops the evaluation. The deploy subprocess is replaced by a stub."""
+    tmp = tempfile.mkdtemp()
+    real = E.subprocess.call
+    calls = []
+
+    def fake(cmd, stdout=None, stderr=None, cwd=None, script=None):
+        calls.append(cmd)
+        part = cmd[cmd.index("--out") + 1]
+        n = fake.rows.pop(0)
+        with open(part, "w", encoding="utf-8") as fh:
+            fh.writelines(json.dumps(dict(seed=i, success=False)) + "\n" for i in range(n))
+        return 0 if n == 3 else 1
+    try:
+        E.subprocess.call = fake
+        fake.rows = [1, 3]                                  # fails, then succeeds
+        rows = E.deploy("run", "best.pt", ["--seed-list", "1,2,3"], 3,
+                        os.path.join(tmp, "a", "exp1.jsonl"), "v3", os.path.join(tmp, "a", "logs"))
+        assert len(rows) == 3 and len(calls) == 2
+        assert os.path.exists(os.path.join(tmp, "a", "logs", "exp1.attempt1.log"))
+        calls.clear()
+        fake.rows = [1, 2]                                  # fails twice
+        try:
+            E.deploy("run", "best.pt", ["--seed-list", "1,2,3"], 3,
+                     os.path.join(tmp, "b", "exp1.jsonl"), "v3", os.path.join(tmp, "b", "logs"))
+        except SystemExit as e:
+            assert "after one retry" in str(e) and len(calls) == 2
+        else:
+            raise AssertionError("two short writes must stop the evaluation")
+        assert not os.path.exists(os.path.join(tmp, "b", "exp1.jsonl"))
+    finally:
+        E.subprocess.call = real
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _tests():
     return [(n, f) for n, f in sorted(globals().items())
             if n.startswith("test_") and callable(f)]

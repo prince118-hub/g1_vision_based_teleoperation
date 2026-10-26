@@ -7705,3 +7705,43 @@ the evaluation rules are untouched.
 - **act_lstm_full_n40_seed0 must be RETRAINED.** After this pass of the launcher ends, relaunch it: it moves the
   incomplete folder (and its eval) to `runs\scripted_v3_memory_design\_failed\` and trains seed 0 from scratch.
   Seeds 1 and 2 start in new Python processes, so they pick up this fix if it is committed before they start.
+
+## 2026-10-26 — act_lstm_full GPU memory: diagnosis of the overnight crashes, fixes A/B/C, deploy retry, -Plan finish
+
+- **Overnight (commit fdc1cdc, unpacked read):**
+  - act_lstm_full_n40_seed1: **CUDA out of memory at step 56,109**, in a training step (`clip_grad_norm_`), then
+    the known cuDNN exit abort. Peak GPU 3,935 MiB.
+  - act_lstm_full_n40_seed2: **native abort at ~step 124k** (0xC0000409, 08:16:32). The same failed CUDA check
+    inside cuDNN's RNN as seed 0, now on the UNPACKED path (`lstm_input`), so the 2026-10-25c fix did not address
+    the cause. Peak GPU 3,949 MiB.
+  - Diagnosis: GPU memory exhaustion on the 4 GB card for all three seeds. The cause was **scoring at batch 256**:
+    every window's `score_deployment` padded 256 full histories (~700 ticks). Measured on seed 2's best.pt at 692
+    ticks: 1.08 GB peak / 1.54 GB reserved per pass, vs a training step's 0.96 GB. Alternating with training
+    batches of a different shape each time fragmented the CUDA cache until a request failed. Seed 0's "packed"
+    crash was almost certainly the same; the 5-s GPU poll missed its spike.
+- **Eval failure** (act_orig_n40_seed1 Exp 1): CUDA OOM on episode 17 at 09:11:55, inside a batch-1 act_orig deploy.
+  - Measured: deploy holds 0.2 GB, flat over episodes, no leak.
+  - Not ours: no project process was alive then (seed 2 had exited 08:16; the rerun started 09:16).
+  - So another application held the shared NVIDIA GPU. Unverifiable after the fact.
+- **Fixes, act_lstm_full only:**
+  - A. `HistoryChunkDataset.score_batch_size = 32`.
+  - B. `act_memory.read_history` reads in fixed `READ_SEGMENT` = 64-tick segments carrying (h, c), one call shape.
+  - C. `HistoryChunkDataset.empty_cache_after_scoring = True`.
+  - `score_deployment` reads A and C from the dataset; `ChunkDataset` declares neither, so every other model
+    scores exactly as before.
+  - Plus **one automatic retry** of a short deploy in `eval_scripted.deploy` (log of the first attempt kept as
+    `*.attempt1.log`).
+- **Verified on the GPU (other GPU apps closed):**
+  1. Exactness: test_act_memory + test_ladder_golden + test_memory_design 40/40, incl. segmented = one unpacked
+     call < 1e-6 on CPU AND CUDA, padding never read, carried = re-read. `check_memory_design_regression --base
+     HEAD` with real act_lstm/act/bc n40 best.pt: ALL IDENTICAL.
+  2. Soak, real n40 data, full-size model: 2,000 random-length training steps alternating with 8 full validation
+     passes. Reserved memory levels off at 1.07-1.09 GB (training) / 0.85-0.91 GB (after scoring), peak reserved
+     1.17 GB, device-wide 1.18 GB.
+  3. Real `train_bc --model act_lstm_full --max-steps 4000`: peak device GPU 1,171 MiB in every window (was
+     ~3,940), status hard_cap.
+  - **Cost:** a window takes 146.6 s instead of ~125 s (+17%), so a 200k-step run takes ~8.1 h (was ~7 h).
+  - pytest full suite `g1_data g1_teleop g1_model tools`: 449 passed, 1 skipped, 0 failed.
+- **`train_memory_design_n40.ps1 -Plan finish`:** (a) eval act_orig_n40_seed1/2, (b) train act_lstm_full_n40_seed0,
+  1, 2 (crashed folders and their evals moved to `_failed\`), (c) eval them. Dry run in that order: 3 x 200 steps
+  at peak GPU 1,171-1,177 MiB, 3 deploys ok.

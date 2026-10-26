@@ -210,11 +210,27 @@ def deploy(run_dir: str, ckpt: str, seed_args, n_seeds: int, out: str, lock_rule
            "--ckpt", ckpt, "--lock-rule", lock_rule, "--out", part] + list(seed_args) + (
                ["--allow-lock-rule-mismatch"] if allow_mismatch else [])
     t0 = time.time()
-    with open(lg, "w", encoding="utf-8") as fh:
-        code = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=ROOT)
-    rows = _lines(part) if os.path.exists(part) else []
+    # ONE automatic retry (2026-10-26): a deploy that writes fewer rows than seeds
+    # is run once more from scratch. The case that motivated it: an act_orig Exp 1
+    # deploy died of CUDA out-of-memory on episode 17 while deploy itself held
+    # ~0.2 GB - another process had the shared laptop GPU. Deployment is
+    # deterministic, so a retry reproduces the same episodes. The failed attempt's
+    # log is kept as <name>.attempt1.log.
+    for attempt in (1, 2):
+        if os.path.exists(part):
+            os.remove(part)
+        with open(lg, "w", encoding="utf-8") as fh:
+            code = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=ROOT)
+        rows = _lines(part) if os.path.exists(part) else []
+        if len(rows) == n_seeds:
+            break
+        if attempt == 1:
+            kept = lg.replace(".log", ".attempt1.log")
+            os.replace(lg, kept)
+            log("  %s: deploy wrote %d/%d episodes (exit %s) - retrying once (log kept: %s)"
+                % (os.path.basename(out), len(rows), n_seeds, code, os.path.basename(kept)))
     if len(rows) != n_seeds:
-        raise SystemExit("deploy of %s/%s wrote %d/%d episodes (exit %s) - see %s"
+        raise SystemExit("deploy of %s/%s wrote %d/%d episodes (exit %s) after one retry - see %s"
                          % (os.path.basename(run_dir), ckpt, len(rows), n_seeds, code, lg))
     os.replace(part, out)
     log("  %-24s %2d/%d success  (%.1f min, exit %s)"

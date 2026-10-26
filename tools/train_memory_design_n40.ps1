@@ -44,11 +44,19 @@
 # is only waiting with --wait-for-training is not heavy, and itself waits for THIS
 # launcher - eval_scripted.HEAVY names it).
 #
+# -Plan finish (2026-10-26): the remaining work after the overnight crashes, in
+# this order - (a) eval act_orig_n40_seed1/2 (trained), (b) train
+# act_lstm_full_n40_seed0, 1, 2, (c) eval those three. Same restart rules: a
+# complete training or evaluation is SKIPPED, an incomplete training folder (the
+# crashed seeds, with their evaluation) is moved to _failed\ and retrained from
+# scratch. -Plan full (the default) is the original eight-step order.
+#
 # -DryRun: every training at --max-steps 200 (window 100, no periodic checkpoints), and
 # each eval step replaced by ONE short deploy per run (selection seed 679, 100 ticks, on
 # best.pt), into runs\scripted_v3_memory_design_dryrun\ - a plumbing/memory/time check of
 # every path the real launch takes. Delete that folder after.
-param([switch]$DryRun, [int]$PollSeconds = 300)
+param([switch]$DryRun, [int]$PollSeconds = 300,
+      [ValidateSet("full", "finish")][string]$Plan = "full")
 
 $ErrorActionPreference = "Continue"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -83,6 +91,15 @@ $Steps = @(
     (Train "act_lstm_full_n40_seed2" "act_lstm_full" 2),
     @{ Kind = "eval"; Runs = @("act_orig_n40_seed1", "act_orig_n40_seed2", "act_lstm_full_n40_seed1", "act_lstm_full_n40_seed2") }
 )
+if ($Plan -eq "finish") {
+    $Steps = @(
+        @{ Kind = "eval"; Runs = @("act_orig_n40_seed1", "act_orig_n40_seed2") },
+        (Train "act_lstm_full_n40_seed0" "act_lstm_full" 0),
+        (Train "act_lstm_full_n40_seed1" "act_lstm_full" 1),
+        (Train "act_lstm_full_n40_seed2" "act_lstm_full" 2),
+        @{ Kind = "eval"; Runs = @("act_lstm_full_n40_seed0", "act_lstm_full_n40_seed1", "act_lstm_full_n40_seed2") }
+    )
+}
 
 # ---- wait until no other heavy process runs -------------------------------------
 function Heavy {
@@ -111,7 +128,7 @@ if ($dirty) {
     Write-Host $dirty
 }
 
-"$Tag memory_design n40 training started $(Get-Date -Format s)  commit $(git rev-parse --short HEAD)" | Out-File -Encoding utf8 -Append $Summary
+"$Tag memory_design n40 training started $(Get-Date -Format s)  commit $(git rev-parse --short HEAD)  plan $Plan" | Out-File -Encoding utf8 -Append $Summary
 
 function Say($Line) {
     # Out-File utf8, never Tee-Object -Append (UTF-16 in Windows PowerShell 5.1):

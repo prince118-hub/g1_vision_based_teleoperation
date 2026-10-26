@@ -177,6 +177,13 @@ class HistoryChunkDataset(ChunkDataset):
 
     #: Read by `train._collate_for`: the shared loop's batcher for this dataset.
     collate_fn = staticmethod(collate_history)
+    #: Read by `train.score_deployment` (2026-10-26, GPU memory): score in batches
+    #: of 32 histories, not 256 - measured on the full-size model at 692 ticks,
+    #: peak 1.08 GB -> 0.28 GB - and release the CUDA cache after each pass, so
+    #: the scoring blocks do not fragment the memory the training steps reuse.
+    #: Same math: a sample does not depend on its batch-mates.
+    score_batch_size = 32
+    empty_cache_after_scoring = True
 
     def __getitem__(self, i: int) -> Dict[str, torch.Tensor]:
         s = super().__getitem__(i)

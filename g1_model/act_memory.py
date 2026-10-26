@@ -68,6 +68,10 @@ ORIGINAL_OBS_WINDOW: int = 1
 #: Written into act_lstm_full's `hparams` (and so into every checkpoint's
 #: `model_kwargs`), so a checkpoint states what its LSTM reads.
 LSTM_INPUT = "episode_history"
+#: Ticks per LSTM call when `read_history` re-reads an episode (2026-10-26).
+#: One fixed shape keeps the CUDA allocator from fragmenting; any value gives
+#: the same recurrence. 64 ticks = 2.56 s at 25 Hz.
+READ_SEGMENT = 64
 LSTM_INPUT_DESCRIPTION = (
     "the WHOLE episode so far: normalized states from tick 0 to the current tick, "
     "variable length, oldest first. Training re-reads it from zero memory for every "
@@ -154,18 +158,34 @@ class ACTLSTMFullPolicy(ACTPolicy):
         """(B, T, 48) padded histories, (B,) lengths -> (B, H) last-layer hidden
         state after each sample's LAST REAL step, from zero memory.
 
-        UNPACKED (2026-10-25): the LSTM runs over the whole padded batch and the
-        last layer's output at index length - 1 - which IS that layer's hidden
-        state after the last real step - is gathered per sample. An LSTM is
-        causal, so the padding after it cannot reach that output or its gradient
-        (tested to the bit). Until 2026-10-25 this packed the batch
-        (`pack_padded_sequence`), and cuDNN's packed-sequence LSTM aborted the
-        process natively on the laptop (0xC0000409, act_lstm_full_n40_seed0 at
-        ~step 25k); the unpacked call is the cuDNN path act_lstm uses. Costs the
-        compute on the padding."""
-        out, _ = self.lstm(history)                                 # (B, T, H)
-        idx = (torch.as_tensor(lengths, dtype=torch.int64) - 1).to(out.device)
-        return out[torch.arange(out.shape[0], device=out.device), idx]
+        SEGMENTED (2026-10-26): the padded batch is zero-padded on to a multiple
+        of `READ_SEGMENT` ticks and read in segments of exactly that length, (h, c)
+        carried from one segment to the next - the same recurrence as one call
+        and as deployment's tick-by-tick `step` (equal to float rounding,
+        tested) - stopping after the segment that holds the longest sample's last
+        real tick. Each sample's last-layer output at index length - 1 (its hidden
+        state after its last real tick) is taken from the segment holding it. An
+        LSTM is causal: padding after that tick cannot reach it or its gradient
+        (tested to the bit). Why segments: every LSTM call has ONE shape, (B, 64,
+        48), instead of one per padded batch length - the varying shapes
+        fragmented the 4 GB laptop GPU until training OOMed or cuDNN aborted
+        (seeds 0-2, 25k-124k steps, NOTES 2026-10-26) - and a scoring pass peaks
+        at 0.33 GB instead of 0.88 GB (LSTM, batch 256, 692 ticks).
+        History: packed until 2026-10-25, one unpacked call on 2026-10-25."""
+        B, T = history.shape[0], history.shape[1]
+        idx = (torch.as_tensor(lengths, dtype=torch.int64) - 1).to(history.device)
+        S = READ_SEGMENT
+        end = (int(idx.max()) // S + 1) * S if B else 0
+        if end > T:
+            history = torch.nn.functional.pad(history, (0, 0, 0, end - T))
+        rows = torch.arange(B, device=history.device)
+        token, memory = None, None
+        for s in range(0, end, S):
+            out, memory = self.lstm(history[:, s:s + S], memory)        # (B, S, H)
+            here = (idx >= s) & (idx < s + S)
+            pick = out[rows, (idx - s).clamp(0, S - 1)]
+            token = pick if token is None else torch.where(here[:, None], pick, token)
+        return token
 
     # ---- deployment -------------------------------------------------------
     def step(self, obs: torch.Tensor,
