@@ -20,6 +20,7 @@ text bar sits on top of each frame.
 from __future__ import annotations
 
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -188,15 +189,22 @@ def outcome_text(row: dict) -> str:
     return "FAIL: %s" % (row.get("fail_reason") or "?")
 
 
+def _load_paths():
+    """g1_data/paths.py by file: importing the g1_data package loads MuJoCo,
+    and this module needs none (as tools/analyze_experiments.py)."""
+    spec_ = importlib.util.spec_from_file_location(
+        "_g1_paths", os.path.join(ROOT, "g1_data", "paths.py"))
+    mod = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(mod)
+    return mod
+
+
 def safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.+-]+", "-", s).strip("-") or "x"
 
 
 def rel(path: str) -> str:
-    try:
-        return os.path.relpath(path, ROOT)
-    except ValueError:                                    # another Windows drive
-        return os.path.abspath(path)
+    return _load_paths().repo_relpath(path, ROOT)
 
 
 # ─── drawing ─────────────────────────────────────────────────────────────────

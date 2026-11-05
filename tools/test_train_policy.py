@@ -167,7 +167,8 @@ def _norm_text(s: str, outs) -> str:
     s = s.replace("train_policy.py", "<PROG>").replace("train_bc.py", "<PROG>")
     s = re.sub(r"\d+(?:\.\d+)?\s*(?:steps/s|s)\b", "<TIME>", s)
     # argparse wraps its usage lines by the program name's length, which differs
-    return re.sub(r"[ \t]*\n[ \t]+(?=[\[\-({])", " ", s)
+    # (Python 3.10 can also break before a flag's metavar or the subcommands' "...")
+    return re.sub(r"[ \t]*\n[ \t]+(?=[\[\-({A-Z.])", " ", s)
 
 
 def _diff(a, b, outs, path="", acc=None):
