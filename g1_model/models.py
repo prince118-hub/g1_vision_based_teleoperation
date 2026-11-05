@@ -1,48 +1,7 @@
-"""The policies. Stage 3 has ONE class: BC at K=1, chunked BC at K>1.
+"""The policies: BC at K=1, chunked BC at K>1, ONE class.
 
-=============================================================================
-EVERY HYPERPARAMETER IN THIS FILE IS PROVISIONAL. NONE OF IT IS TUNED.
-=============================================================================
-They were chosen on SCRIPTED DEMONSTRATOR data - `data/synthetic`, produced by
-`g1_data/scripted_demo.py`, not by a human at the ZED. The scripted action
-distribution is smoother, more repeatable and lower-entropy than piloted
-teleoperation will be: the same staged raise every episode, the same cosine
-eases, no reaction time, no tracking dropout, no operator correction. A width, a
-depth or a learning rate that suits that distribution has no claim on the one
-that replaces it.
-
-So: nothing here was swept, searched or tuned, deliberately. The values are
-ordinary ones from the behavioural-cloning literature, written down so the next
-session can see exactly what was assumed. Choosing them carefully on this data
-would be worse than choosing them carelessly - it would produce numbers that
-LOOK tuned, and the tuning would be to a distribution that is being thrown away.
-
-WHEN PILOTED DATA EXISTS, EVERY VALUE BELOW IS RE-OPENED. A result obtained with
-these numbers on scripted data is a plumbing check, never a finding.
-=============================================================================
-
-WHY AN MLP
-----------
-BC here is the FLOOR: the comparison it exists for is "does chunking help" (ACT)
-and "does recurrence help" (ACT-LSTM), and a floor that is itself an interesting
-architecture makes both of those harder to read. The proposal's D8 adds plain ACT
-precisely so the LSTM is isolated rather than confounded with chunking; the same
-logic applies downward. A plain MLP with no memory, no chunk and no attention is
-the honest zero point.
-
-THE SHAPE CONTRACT
-------------------
-Every model in this file, and every model added later, takes
-
-    obs : (B, W_o, 48)      and returns      action : (B, K, 22)
-
-so `train.train()` does not change between stages. BC is the W_o=1, K=1 corner
-of that contract, not a different interface: it flattens the window and emits one
-timestep. It predicts all 22 dims, including the 6 constant ones - the loss masks
-them, and having the head emit 22 keeps the action vector one shape everywhere,
-so nothing downstream has to know which 16 were trained.
-
-Chunked BC is the SAME class at K>1. See `BCPolicy` for why that matters.
+Every hyperparameter is PROVISIONAL, not tuned: chosen on SCRIPTED data, re-opened on piloted.
+why: see DESIGN_NOTES.md#models-provisional
 """
 from __future__ import annotations
 
@@ -63,22 +22,12 @@ PROVISIONAL = (
     "piloted data exists; no result obtained with them may be cited as tuned."
 )
 
-#: The chunk length used for Stage 3 plumbing. PROVISIONAL, and NOT SWEPT.
-#: 100 ticks is 4.0 s at the 25 Hz record rate (D4) and is the value ACT uses in
-#: the original paper, which is the only reason it was picked: it is an ordinary
-#: number from the literature rather than a measurement on this task. Episodes
-#: here run 694-846 ticks, so it covers roughly an eighth of one. The right K
-#: depends on how long a piloted operator's intent stays coherent, which cannot
-#: be measured on a scripted demonstrator that never changes its mind. SETTLE IT
-#: ON PILOTED DATA.
+# PROVISIONAL, NOT SWEPT: ACT's published chunk (ACT ref: README.md:76), 4.0 s at 25 Hz.
+# SETTLE IT ON PILOTED DATA. why: see DESIGN_NOTES.md#models-k-provisional
 K_PROVISIONAL: int = 100
 
-#: THE gradient-clipping threshold (global L2 norm) for EVERY model in the ladder.
-#: Each model config declares it (`BCConfig.grad_clip`, `ACTConfig.grad_clip`), the
-#: loop checks the declaration against the TrainConfig (`train.assert_optimizer_source`)
-#: and REFUSES a model that declares any other value (`train.LADDER_INVARIANTS`).
-#: It used to arrive as `TrainConfig`'s default - TR28's third occurrence
-#: (docs/ACT_AUDIT_REPORT.md R1). To change it, change it HERE, for every model.
+#: THE global-norm clip for EVERY model (a ladder invariant): change it HERE, for every model.
+# why: see DESIGN_NOTES.md#models-grad-clip
 LADDER_GRAD_CLIP: float = 1.0
 
 #: Written into every run's metadata. The deviation is stated where the numbers go.
@@ -100,14 +49,8 @@ GRAD_CLIP_DISCLOSURE = (
 class BCConfig:
     """Every hyperparameter of the BC policy, in one place. See PROVISIONAL.
 
-    `obs_window` AND `chunk_size` ARE REQUIRED, with no defaults, for the same
-    reason `LoaderConfig` requires them: K is what separates BC from chunked BC,
-    and a default would make one of the two the normal case and the other an
-    opt-in. Stage 3 exists to isolate the effect of K, which it cannot do if K
-    can be inherited silently.
-
-    K_PROVISIONAL below is the value used for plumbing. It is NOT tuned and was
-    NOT swept - see PROVISIONAL - and it must be settled on piloted data.
+    `obs_window` and `chunk_size` are required: K must not be inherited silently.
+    why: see DESIGN_NOTES.md#models-bc-config
     """
 
     obs_window: int              # required (C3)
@@ -144,22 +87,10 @@ _ACT = dict(relu=nn.ReLU, gelu=nn.GELU, tanh=nn.Tanh, silu=nn.SiLU)
 
 
 class BCPolicy(nn.Module):
-    """Behavioural cloning: one observation in, K actions out.
+    """Behavioural cloning: one observation in, K actions out. K=1 is BC, K>1 is chunked BC.
 
-    K=1 IS BC. K>1 IS CHUNKED BC. THEY ARE THE SAME CLASS, DELIBERATELY.
-
-    Stage 2 refused `chunk_size > 1` here, so that chunked BC would have to be
-    written as its own class. That was wrong, and lifting it is the whole point
-    of Stage 3: if chunked BC were a separate class, the measured effect of
-    chunking would include every incidental difference between two
-    implementations - a different initialization, a different head, a different
-    anything - and the isolation this stage exists to provide would be gone.
-    The ONLY difference between the two conditions is now the number of actions
-    predicted from one observation, which is the variable under study.
-
-    The head emits K x 22 and reshapes. No temporal ensembling (C2): that is an
-    ACT mechanism and belongs to Stage 4, and mixing it in here would mean Stage
-    3 measured chunking-plus-ensembling. At deployment take `first_action`.
+    One class, so that K is the only difference. why: see DESIGN_NOTES.md#models-bc-policy
+    Why an MLP: DESIGN_NOTES.md#models-why-mlp; shapes: DESIGN_NOTES.md#models-shape-contract
     """
 
     def __init__(self, obs_window: int, chunk_size: int,
@@ -193,10 +124,7 @@ class BCPolicy(nn.Module):
             d = h
         layers.append(nn.Linear(d, self.chunk_size * spec.ACTION_DIM))
         self.net = nn.Sequential(*layers)
-        #: Set by `build_bc` from a BCConfig. A BCPolicy built from bare keyword
-        #: arguments (a checkpoint being loaded for scoring) declares nothing, and
-        #: `train.make_optimizer` refuses to train it: it has no stated source for
-        #: its learning rate, weight decay, optimizer or clip.
+        #: Set by `build_bc`; while None, `train.make_optimizer` refuses to train this model.
         self._declared_training: Optional[dict] = None
 
     def declare_training(self, optimizer_config: dict) -> "BCPolicy":
@@ -227,14 +155,8 @@ class BCPolicy(nn.Module):
 
 
 def first_action(pred: torch.Tensor) -> torch.Tensor:
-    """The action a chunked policy ACTUALLY executes: the chunk's first step.
-
-    (B, K, 22) -> (B, 22). No temporal ensembling (C2). ACT averages overlapping
-    chunk predictions across timesteps, which is a real mechanism with a real
-    effect, and folding it in here would mean Stage 3 measured chunking AND
-    ensembling and could not say which contributed. Stage 4 adds it; until then
-    a chunked policy commits to its first prediction and re-plans next tick.
-    """
+    """The action a chunked policy executes, (B, K, 22) -> (B, 22); no temporal ensembling (C2)."""
+    # why: see DESIGN_NOTES.md#models-first-action
     if pred.dim() != 3 or pred.shape[-1] != spec.ACTION_DIM:
         raise ValueError("expected (B, K, %d), got %s"
                          % (spec.ACTION_DIM, tuple(pred.shape)))

@@ -1,43 +1,7 @@
-"""The ONE training loop, the ONE loss, and the ONE evaluation path.
+"""The ONE training loop, the ONE loss, and the ONE evaluation path, shared by every model.
 
-WHY THIS IS SHARED, AND WHY IT IS BUILT BEFORE ANY MODEL
----------------------------------------------------------
-RQ2 and RQ3 are differences between BC, ACT and ACT-LSTM. A difference is only
-attributable to the architecture if everything else is held fixed, and "the
-training loop" is one of the things that has to be fixed. If BC gets its own
-loop and ACT gets another, then the measured gap contains the loop difference -
-a different shuffle, a different reduction, a different early stop - and no
-amount of care afterwards separates the two. Chapter 4 would be reporting the
-sum of an architecture effect and an implementation accident, with no way to say
-which is which.
-
-So the loop is written first, with no model in it, and the model is a PARAMETER.
-`train()` knows about `nn.Module`, batches, an optimizer and a loss. It does not
-know what BC is. Adding chunked BC, ACT or ACT-LSTM later must not require
-touching anything here except passing a different module.
-
-THE LOSS IS L1 FOR A SPECIFIC REASON
--------------------------------------
-ACT's objective is `L1 + beta * KL`. If BC trained under MSE and ACT under L1,
-the reconstruction terms would be on different scales and in different units,
-and "ACT beat BC" would partly mean "L1 and MSE are different numbers". The
-reconstruction term is therefore identical across every stage, and ACT's KL is
-ADDED to it rather than replacing it.
-
-TWO MASKS, AND THEY COMPOSE
-----------------------------
-  `spec.ACTION_MASK`   the 16 trainable dims of 22. The other 6 are constant by
-                       measurement (2026-09-10 audit): wrist yaws and the waist
-                       are hard zeros, and `a_gR` is bit-identical to `a_gL`.
-                       Training on them teaches a model to reproduce a constant,
-                       which is free, and inflates any average that includes it.
-  the padding mask     real timesteps only. Chunks near the end of an episode
-                       are padded to K (loader B3); a padded step is not data.
-
-The reduction is over the INTERSECTION, divided by the number of contributing
-elements. Not by `B*K*22`, which would make the loss depend on how much padding
-a batch happened to contain, so the same model would score differently at K=1
-and K=100 and the scaling comparison would be measuring the padding.
+The model is a parameter; everything else is held fixed so a difference is the architecture's.
+why: see DESIGN_NOTES.md#train-module
 """
 from __future__ import annotations
 
@@ -75,12 +39,7 @@ def select_device(prefer_cuda: bool = True) -> torch.device:
 
 
 def device_report(device: torch.device) -> dict:
-    """What was selected, and what it can hold. Printed at every startup.
-
-    The VRAM figure is here because it is the batch-size ceiling and because a
-    silent fallback to CPU is otherwise invisible until a run that should take
-    two minutes takes forty.
-    """
+    """What was selected, and what it can hold. Printed at every startup."""
     r = dict(device=str(device), torch=torch.__version__,
              cuda_available=bool(torch.cuda.is_available()),
              cuda_version=torch.version.cuda, python=platform.python_version())
@@ -96,22 +55,8 @@ def device_report(device: torch.device) -> dict:
 
 # ─── B3: determinism ──────────────────────────────────────────────────────────
 def set_determinism(seed: int, strict: bool = True) -> dict:
-    """Seed everything, and report HONESTLY what could not be made deterministic.
-
-    `torch.use_deterministic_algorithms(True)` makes any op without a
-    deterministic implementation RAISE rather than quietly vary. That is the
-    behaviour worth having: a nondeterministic op that nobody knew about is
-    exactly how "the same run gave a different number" happens, and a run that
-    refuses to start is cheaper than a result that cannot be reproduced.
-
-    cuBLAS needs `CUBLAS_WORKSPACE_CONFIG` set BEFORE its handle is created. It
-    is set here, before any CUDA work, and the report says whether that
-    succeeded - if the handle already exists, the setting is silently ignored by
-    the library, so it is verified rather than assumed.
-
-    The return value is written into the run metadata. Where determinism was not
-    achievable, that fact travels with the run instead of being forgotten.
-    """
+    """Seed everything, and report what could not be made deterministic (goes into run metadata)."""
+    # why: see DESIGN_NOTES.md#train-determinism
     notes: List[str] = []
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -144,21 +89,9 @@ def set_determinism(seed: int, strict: bool = True) -> dict:
 
 def seeded_build(train_cfg: "TrainConfig", factory: Callable[..., nn.Module],
                  /, **kw) -> nn.Module:
-    """Seed, THEN construct the model. Use this instead of building it yourself.
-
-    MEASURED, 2026-09-21: two "identical" 3-epoch runs differed by 6.0e-3 in
-    final loss. The cause was not a nondeterministic kernel - it was that
-    `train()` seeds at ENTRY, by which time the caller has already constructed
-    the model, so WEIGHT INITIALIZATION consumed whatever RNG state the process
-    happened to be in. The second run started from the state the first run's
-    training had left behind, so the two models began from different weights and
-    every later number differed.
-
-    That is the whole class of determinism bug worth worrying about here: not an
-    op that varies, but a seed that lands after the thing it was meant to
-    control. `train()` still seeds - the shuffle order needs it - and seeding
-    twice with the same value is harmless.
-    """
+    """Seed, THEN construct the model. Use this instead of building it yourself."""
+    # WARNING: `train()` seeds too late to control weight init.
+    # why: see DESIGN_NOTES.md#train-seeded-build
     set_determinism(train_cfg.seed, strict=train_cfg.strict_determinism)
     return factory(**kw)
 
@@ -171,34 +104,20 @@ def seed_worker(worker_id: int) -> None:
 
 
 def _collate_for(ds) -> Callable:
-    """The batcher for `ds`: its own `collate_fn` if it declares one, else
-    `collate_chunks`. A `ChunkDataset` declares none, so every existing model's
-    batches are built exactly as before. The episode-history loader of
-    act_lstm_full (`g1_model/history.py`) declares `collate_history`: its
-    samples' histories differ in length, so they are padded per batch."""
+    """The batcher for `ds`: its own `collate_fn` if it declares one, else `collate_chunks`."""
+    # why: see DESIGN_NOTES.md#train-collate
     return getattr(ds, "collate_fn", None) or collate_chunks
 
 
 # ─── B4: the loss ─────────────────────────────────────────────────────────────
+# why: see DESIGN_NOTES.md#train-why-l1, DESIGN_NOTES.md#train-two-masks
 def masked_l1(pred: torch.Tensor, target: torch.Tensor,
               pad_mask: torch.Tensor,
               dim_mask: Optional[torch.Tensor] = None,
               reduce: bool = True):
-    """Mean |pred - target| over (real timesteps) x (trainable dims).
+    """Mean |pred - target| over (real timesteps) x (trainable dims); returns (loss, n_elements).
 
-    pred, target : (B, K, A)
-    pad_mask     : (B, K)   True on real timesteps
-    dim_mask     : (A,)     True on trainable dims; `spec.ACTION_MASK` by default
-
-    Returns the scalar loss and the number of contributing elements. The count
-    is returned rather than hidden because an epoch mean has to be weighted by
-    it: averaging per-batch means would give a short final batch the same weight
-    as a full one, which is a real error of a few percent and a completely
-    invisible one.
-
-    A fully padded sample contributes nothing to either the numerator or the
-    denominator, so it is exactly zero rather than a small number - and a batch
-    that is entirely padding yields 0.0 instead of a NaN from 0/0.
+    `reduce=False` returns (err, mask). why: see DESIGN_NOTES.md#train-masked-l1
     """
     if dim_mask is None:
         dim_mask = torch.from_numpy(
@@ -220,20 +139,9 @@ def masked_l1(pred: torch.Tensor, target: torch.Tensor,
 
 # ─── the optional extra-loss hook ─────────────────────────────────────────────
 def forward_loss(model: nn.Module, obs, target, pad, dim_mask):
-    """(loss, reconstruction_l1, n_elements, extras) for ANY model in the ladder.
-
-    The loop stays model-agnostic. BC and chunked BC are plain feedforward maps,
-    so the default path is `pred = model(obs)` and the loss IS `masked_l1`. A
-    model that needs more than its own prediction to score itself - ACT, whose
-    CVAE encoder must see the action chunk, and which adds a KL term - declares
-    `loss_terms` and the loop delegates to it.
-
-    This is a hook, not a branch on a class name: nothing here imports ACT, and
-    adding ACT-LSTM later requires no change to this function. What it must NOT
-    become is a second reconstruction loss - `loss_terms` implementations are
-    required to build their reconstruction term from `masked_l1`, because one
-    reconstruction term across every stage is what the comparison rests on (D6).
-    """
+    """(loss, reconstruction_l1, n_elements, extras) for ANY model in the ladder."""
+    # WARNING: a `loss_terms` hook must build its reconstruction from `masked_l1` (D6).
+    # why: see DESIGN_NOTES.md#train-forward-loss
     fn = getattr(model, "loss_terms", None)
     if fn is not None:
         return fn(obs, target, pad, dim_mask)
@@ -245,22 +153,8 @@ def forward_loss(model: nn.Module, obs, target, pad, dim_mask):
 # ─── B6: the baselines ────────────────────────────────────────────────────────
 def baselines(ds: ChunkDataset, device: Optional[torch.device] = None,
               batch_size: int = 512) -> dict:
-    """What "near zero" is measured against, in the loss's own units.
-
-    ZERO      predict all zeros. In normalized space zero IS the training mean,
-              so this is the loss of the constant predictor and the number any
-              model must beat to have learned that actions vary at all.
-    COPY      predict the previous tick's action, held across the whole chunk.
-              The persistence baseline. At 25 Hz consecutive actions are very
-              similar, so this is a STRONG baseline and the meaningful one: a
-              model that beats ZERO but not COPY has learned the average pose,
-              not the task. At tick 0 there is no previous action, so zeros are
-              predicted there - the honest choice, since using the target itself
-              would let the baseline peek at the answer.
-
-    Computed through the SAME loss as training, over the same samples, so the
-    numbers are directly comparable rather than approximately comparable.
-    """
+    """The ZERO and COPY baselines, through the same loss and samples as training."""
+    # why: see DESIGN_NOTES.md#train-baselines
     device = device or torch.device("cpu")
     dim_mask = torch.from_numpy(
         np.asarray(spec.ACTION_MASK, dtype=bool).copy()).to(device)
@@ -297,21 +191,8 @@ def baselines(ds: ChunkDataset, device: Optional[torch.device] = None,
 # ─── B1/B5: the loop ──────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class StopRule:
-    """When a step-budgeted run counts as CONVERGED. Decided before running.
-
-    Training is logged in windows of `TrainConfig.window_steps` optimizer steps;
-    each window records its element-weighted mean of every monitored quantity.
-    After each window: for each monitored quantity, compare the best value in the
-    trailing `patience_windows` against the best value BEFORE them. If the
-    relative improvement is below `min_rel_improvement` for EVERY monitored
-    quantity, the run has stopped improving.
-
-    Best-of-span rather than last-value, because a single noisy window at batch 8
-    must neither end a run that is still improving nor keep alive one that is not.
-    Every monitored quantity must stall, because a model can trade them: a CVAE's
-    total loss keeps falling while its KL is spent even after reconstruction has
-    flattened, and the reverse.
-    """
+    """When a step-budgeted run counts as CONVERGED: every monitored quantity stalled."""
+    # why: see DESIGN_NOTES.md#train-stop-rule
 
     patience_windows: int
     min_rel_improvement: float
@@ -375,25 +256,10 @@ UNSTATED = _Unstated()
 
 @dataclass
 class TrainConfig:
-    """Everything a run needs that is not the model or the data.
+    """Everything a run needs that is not the model or the data; written into the run directory.
 
-    Every field is written verbatim into the run directory, so a run can be
-    reproduced from its own metadata rather than from someone's memory of which
-    flags they passed.
-
-    BUDGET: exactly one of `epochs` or `max_steps`. `epochs` is a DATASET-dependent
-    unit - an epoch here is every tick of every episode, in the ACT reference it
-    is one random tick per episode, and that difference is ~760x in optimizer
-    steps (NOTES.md 2026-09-21). Step-budgeted runs are the ones to compare.
-    `epochs` has no default and may be passed as None, so the choice is explicit.
-
-    NO FIELD THAT SHAPES THE TRAINED WEIGHTS HAS A DEFAULT (TR28, third and last
-    occurrence: `grad_clip = 1.0` reached every model from here, unstated). Every
-    field is classified in `TRAIN_CONFIG_FIELDS`; "model" fields must also equal
-    the model's own declaration (`assert_optimizer_source`), "run" fields are
-    stated by the caller, and only "environment"/"plumbing" fields - which cannot
-    change the hyperparameters of what is learned - keep defaults. A test fails if
-    a field is added without being classified.
+    Exactly one budget; no field that shapes the weights has a default (TR28).
+    why: see DESIGN_NOTES.md#train-config
     """
 
     epochs: Optional[int]
@@ -407,11 +273,8 @@ class TrainConfig:
     prefer_cuda: bool = True
     strict_determinism: bool = True
     log_every: int = 1
-    #: 0 = only last.pt and best.pt. N > 0 ALSO writes a weights checkpoint every
-    #: N optimizer steps (step budget; must be a multiple of window_steps, so the
-    #: checkpoint carries that window's losses) or every N epochs (epoch budget),
-    #: as ckpt_step0020000.pt / ckpt_epoch0030.pt, and keeps every one. For
-    #: choosing weights later by task success rather than by val loss.
+    #: 0 = only last.pt and best.pt; N > 0 also keeps a checkpoint every N steps or epochs
+    #: (step budget: N must be a multiple of window_steps). why: see DESIGN_NOTES.md#train-config
     checkpoint_every: int = 0
     run_name: str = "run"
     #: Free-form. The gate runner puts its data-provenance statement here, and
@@ -423,13 +286,9 @@ class TrainConfig:
     #: Step-budgeted runs must STATE this - `None` to run to the cap, or a rule.
     #: Left unstated it is `UNSTATED`, which a step-budgeted run refuses.
     stop_rule: Optional[StopRule] = UNSTATED
-    #: Optimizer steps per logged window in a step-budgeted run. Required there:
-    #: it is the stop rule's granularity and the selection cadence, so it decides
-    #: which weights a run ends on. Unused (None) in an epoch run.
+    #: Optimizer steps per logged window (required in a step budget): decides the final weights.
     window_steps: Optional[int] = UNSTATED
-    #: Write the resumable `state.pt` every this many windows. 1 = a kill costs
-    #: at most one window. The file holds weights plus AdamW's two moments, so
-    #: it is about 3x the weights on disk.
+    #: Write the resumable `state.pt` every this many windows (about 3x the weights on disk).
     state_every_windows: int = 1
 
     def __post_init__(self):
@@ -456,16 +315,8 @@ class TrainConfig:
                 raise TrainError("window_steps must be >= 1")
 
 
-#: EVERY TrainConfig field, classified. A test asserts this covers the dataclass
-#: exactly, so a field cannot be added without deciding where its value comes from.
-#:   model        a training hyperparameter. No default; the MODEL declares it
-#:                (`optimizer_config()`), and `assert_optimizer_source` refuses a
-#:                TrainConfig that disagrees. The TR28 class of bug lives here.
-#:   run          decided per run by the caller. No default (or, for the
-#:                step-budget fields, UNSTATED until stated). Recorded verbatim.
-#:   environment  changes floating-point bits, never a hyperparameter; recorded
-#:                in metadata (device, determinism). May keep a default.
-#:   plumbing     cannot change the trained weights at all. May keep a default.
+#: EVERY TrainConfig field, classified (test-enforced): model, run, environment or plumbing.
+# why: see DESIGN_NOTES.md#train-config-fields
 TRAIN_CONFIG_FIELDS: Dict[str, Tuple[str, str]] = dict(
     lr=("model", "optimizer step size"),
     weight_decay=("model", "AdamW decoupled weight decay"),
@@ -503,28 +354,12 @@ def _ladder_invariants() -> dict:
 
 
 class OptimizerSourceError(TrainError):
-    """A TrainConfig whose training hyperparameters are not the model's own (TR28),
-    a model that declares none or only some, or a declaration that breaks a
-    ladder invariant."""
+    """A TrainConfig whose hyperparameters are not the model's own, or a bad declaration (TR28)."""
 
 
 def assert_optimizer_source(model: nn.Module, cfg: TrainConfig) -> None:
-    """The model's DECLARED optimizer settings must be the ones being used.
-
-    TR28, made structural. The Stage-4 ACT gate ran at lr 1e-3 because the shared
-    runner built its `TrainConfig` from `BCConfig` - ACT's published 1e-5 never
-    reached it and nothing raised, because nothing compared. Sharing a training
-    LOOP is correct; sharing a hyperparameter SOURCE is the bug.
-
-    Every model must declare `optimizer_config()` covering EXACTLY
-    `MODEL_DECLARED_FIELDS`, and every declared value must equal the TrainConfig's.
-    A model that declares nothing is REFUSED: silence used to mean "unchecked",
-    which is how BC trained for a whole stage with no stated source for any of
-    its optimizer settings and how `grad_clip` reached every model as a loop
-    default. Declared values must also satisfy the ladder invariants
-    (`_ladder_invariants`): a clip that differed between ACT and ACT-LSTM would
-    sit inside the headline comparison.
-    """
+    """The model's DECLARED optimizer settings must be the ones being used (TR28)."""
+    # why: see DESIGN_NOTES.md#train-optimizer-source
     declared = getattr(model, "optimizer_config", None)
     want = declared() if declared is not None else None
     if want is None:
@@ -602,15 +437,8 @@ def make_run_dir(cfg: TrainConfig, root: str = RUNS) -> str:
 
 
 def dataset_provenance(ds: ChunkDataset) -> dict:
-    """WHICH DATA this ran on (C5). Written into every run's metadata.
-
-    Every gate in Phase 4 runs on SCRIPTED episodes, which are smoother and more
-    consistent than piloted data will be, and which cannot exercise `tracking_ok`
-    at all because there was no camera. A gate result from here is provisional on
-    the data, not only on the hyperparameters. That statement lives in the run
-    directory rather than in a report, because reports get lost and run
-    directories are what someone re-reads when they want to cite a number.
-    """
+    """WHICH DATA this ran on (C5), written into every run's metadata."""
+    # why: see DESIGN_NOTES.md#train-dataset-provenance
     sources = sorted({str(s) for s in ds.sources}) or ["unknown"]
     real = bool(ds.real_demonstration) and all(ds.real_demonstration)
     return dict(
@@ -628,52 +456,26 @@ def dataset_provenance(ds: ChunkDataset) -> dict:
             "Real teleoperated demonstrations."))
 
 
-#: What best.pt is chosen on, and what the gate scores: ONE quantity. Recorded in
-#: every best.pt and state.pt, so a resume never compares against a best value
-#: chosen on something else.
+#: What best.pt is chosen on and what the gate scores: ONE quantity.
+# why: see DESIGN_NOTES.md#train-selection
 SELECTION_CRITERION = ("deployment reconstruction (score_deployment): validation "
                        "set if given, else the training set")
 
 
 class ScoringError(TrainError):
-    """Scoring reached something the deployed policy never runs or never has: a
-    module in train mode, a module that reads the target action chunk, a latent
-    that is not the prior mean, randomness, or state carried between calls."""
+    """Scoring reached something the deployed policy never runs or never has."""
 
 
 # ─── the deployment guard ─────────────────────────────────────────────────────
-# docs/ACT_AUDIT_REPORT.md item 5 defeated the first version of this guard four
-# ways out of six, and measured that a leak moves the gated number by 1.0e-7 -
-# so no implausible score will ever reveal one. Every check below is therefore
-# STRUCTURAL: it fails on what the model does, never on what it scores.
-#
-#   attack (audit)                           closed by
-#   z drawn at inference, not the prior      PRIOR_LATENT_MODULES verified == 0 on
-#                                            every call, and every forward must
-#                                            pass through one; plus the RNG check
-#   encoder run via .forward() (no hooks)    the target-reading modules' forward
-#                                            is REPLACED on the instance, which
-#                                            .forward() and __call__ both reach;
-#                                            the NaN probe catches functional use
-#                                            of their weights
-#   functional dropout(training=True)        no RNG stream may advance; the probe
-#                                            batch must reproduce bit-for-bit
-#   target stashed in training, returned     no tensor may live on a module
-#   at inference                             outside its parameters and buffers
-#   (new) state carried between calls -      the above, plus: parameters and
-#   an un-reset ACT-LSTM hidden state        buffers may not change during
-#                                            scoring, and the first batch must
-#                                            score identically before and after
-#                                            the whole pass
+# WARNING: every check is STRUCTURAL, on what the model does: a leak moves the score only 1.0e-7.
+# why: see DESIGN_NOTES.md#train-deployment-guard (the attack table)
 
 #: What every nn.Module keeps in its own __dict__: bookkeeping, never model state.
 _MODULE_INTERNALS = frozenset(vars(nn.Module()).keys()) | {"forward"}
 
 
 def _holds_foreign_array(v, own: set, depth: int = 0) -> bool:
-    """True if `v` is, or contains, a tensor that is NOT one of the model's own
-    parameters or buffers, or any numpy array. Aliases of the model's own
-    parameters are not state: `nn.LSTM` keeps its weights in `_flat_weights`."""
+    """True if `v` is or holds a tensor outside the model's own (or an alias of one), or any numpy array."""
     if torch.is_tensor(v):
         return id(v) not in own
     if isinstance(v, np.ndarray):
@@ -688,10 +490,7 @@ def _holds_foreign_array(v, own: set, depth: int = 0) -> bool:
 
 
 def hidden_state(model: nn.Module) -> List[str]:
-    """Every tensor or array a module holds OUTSIDE its parameters and registered
-    buffers - state the checkpoint does not carry and a deployed policy starting
-    an episode would not have. A leftover recurrent hidden state, a cached
-    target, a memo: all land here. Empty for a stateless model."""
+    """Every tensor or array a module holds OUTSIDE parameters and buffers; empty if stateless."""
     own = {id(t) for t in model.parameters()} | {id(t) for t in model.buffers()}
     found = []
     for name, mod in model.named_modules():
@@ -737,9 +536,8 @@ def _rng_advanced(a: dict, b: dict) -> List[str]:
 
 
 class _DeploymentGuard:
-    """Eval mode, enforced; the encoder unreachable; z verified; no randomness;
-    no state. Entered by `score_deployment`, which also runs the checks that need
-    the finished pass (`finish`). Every change it makes is undone on exit."""
+    """Eval mode, enforced; the encoder unreachable; z verified; no randomness; no state."""
+    # Entered by `score_deployment`, which also runs `finish`; every change is undone on exit.
 
     def __init__(self, model: nn.Module):
         self.model = model
@@ -892,10 +690,7 @@ class _DeploymentGuard:
             self._nan_probe(probe_obs, probe_out)
 
     def _nan_probe(self, probe_obs, probe_out):
-        """Fill every weight of the target-reading modules with NaN and score the
-        probe batch again: if the output moves (or goes NaN), the prediction
-        depends on them - by any route, functional calls included. Weights are
-        restored bit-exactly from a CPU copy."""
+        """Fill the target-reading modules' weights with NaN, re-score: the output must not move."""
         m = self.model
         params, seen = [], set()
         for name in self.declared:
@@ -924,38 +719,9 @@ def score_deployment(model: nn.Module, ds: ChunkDataset,
                      device: Optional[torch.device] = None,
                      dim_mask: Optional[torch.Tensor] = None,
                      batch_size: int = 256):
-    """THE gated number: masked-L1 reconstruction of the DEPLOYED function.
-
-    One pass over `ds` on the weights as they are NOW, in eval mode, under no_grad,
-    calling `model(obs)` with the observation ALONE. The target is used only by
-    `masked_l1` after the prediction exists; the model is never handed it, so a
-    CVAE cannot condition on it and runs its prior (ACT: z = 0, encoder skipped,
-    detr_vae.py:113). Not `forward_loss`, not `loss_terms`: those feed the target
-    to the encoder even in eval mode.
-
-    `_DeploymentGuard` makes every property of "deployed" a CHECK rather than a
-    convention - see the attack table above it. A leak is invisible in the number
-    itself (1.0e-7 on the converged ACT gate weights), so nothing here relies on it.
-
-    Why deployment at all: the ambiguity reference describes the data, with no
-    dropout and no sampling. Scored as a train-mode window mean, converged ACT read
-    0.050886 (FAIL, 1.140); its deployed function reads 0.041081 (PASS, 0.920).
-
-    Batches are cut by index, not by a DataLoader: a DataLoader draws its base
-    seed from the GLOBAL generator even unshuffled, and scoring every window would
-    then shift the training run's dropout and shuffle streams.
-
-    Returns a `Quantity` measured `MEASURED_AT_DEPLOYMENT` - the only kind
-    `ambiguity.gate` accepts.
-
-    A dataset may declare `score_batch_size` (scoring batch, overriding
-    `batch_size`) and `empty_cache_after_scoring` (release the CUDA cache after
-    the pass). Only `history.HistoryChunkDataset` (act_lstm_full) does, since
-    2026-10-26: 256 full histories padded to ~700 ticks reserved 1.5 GB per pass
-    and, alternating with training shapes, fragmented the 4 GB laptop GPU into
-    OOMs and cuDNN aborts after hours. `ChunkDataset` declares neither, so every
-    other model scores exactly as before.
-    """
+    """THE gated number: masked-L1 reconstruction of the DEPLOYED function, as a `Quantity`."""
+    # WARNING: `model(obs)` alone: `forward_loss` and `loss_terms` feed the target to the encoder.
+    # why: see DESIGN_NOTES.md#train-score-deployment
     from g1_model.ambiguity import Quantity, RECON_UNITS, MEASURED_AT_DEPLOYMENT
     batch_size = int(getattr(ds, "score_batch_size", batch_size))
     device = device or next(model.parameters()).device
@@ -986,9 +752,7 @@ def score_deployment(model: nn.Module, ds: ChunkDataset,
 
 def evaluate(model: nn.Module, ds: ChunkDataset, device: torch.device,
              dim_mask: torch.Tensor) -> float:
-    """The ONE evaluation path, for validation and selection alike: the deployed
-    function, via `score_deployment`. Reconstruction only, identically for every
-    model - a number including ACT's KL would not be comparable with BC's."""
+    """The ONE evaluation path: reconstruction of the deployed function, for every model."""
     return float(score_deployment(model, ds, device, dim_mask).value)
 
 
@@ -1018,33 +782,9 @@ RESUME_MUST_MATCH = ("batch_size", "lr", "weight_decay", "optimizer", "grad_clip
 
 @dataclass(frozen=True)
 class Resume:
-    """Where a step-budgeted run continues from.
+    """Where a step-budgeted run continues from: a full `state.pt` (bit-exact) or weights only.
 
-    `path` is either a FULL STATE file (`state.pt`, written by this loop every
-    `state_every_windows` windows) or a WEIGHTS-ONLY checkpoint (`best.pt` /
-    `last.pt`). They are not equivalent, and the run's metadata records which
-    one was used and what that cost:
-
-      full state    model, optimizer (AdamW moments and step count), every RNG
-                    stream (torch CPU and CUDA, numpy, python), the data-order
-                    generator at the start of the current pass and how far into
-                    the pass the run had got, the history, the best value and the
-                    elapsed time. The continuation is BIT-EXACT: the resumed run
-                    produces the same numbers the uninterrupted run would have
-                    (`test_train.py::test_full_state_resume_is_bit_exact`).
-
-      weights only  model weights, plus - read from the prior run's own
-                    metrics.jsonl and metadata.json - the history, the step and
-                    the config. NOT restored: the optimizer's moments (AdamW
-                    restarts with zeroed m and v and a fresh bias correction, so
-                    its first steps are sign-like steps of size ~lr), the RNG
-                    streams, and the position within the data pass. The curve
-                    CONTINUES from where it was, but it is not the curve the
-                    uninterrupted run would have drawn, and a short transient
-                    after the resume point is expected.
-
-    `prior_run_dir` is the run directory a weights-only checkpoint came from;
-    defaults to the checkpoint's own directory.
+    why: see DESIGN_NOTES.md#train-resume
     """
 
     path: str
@@ -1113,9 +853,7 @@ def _load_resume(resume: Resume, model: nn.Module, opt, cfg: TrainConfig) -> tup
     _check_resume_config(prior_meta["config"], cfg, resume.path)
     rows = [json.loads(L) for L in open(os.path.join(prior, "metrics.jsonl"),
                                         encoding="utf-8") if L.strip()]
-    # save_checkpoint stores the window's total loss as a Python float; the metrics
-    # row stores the same float through JSON, which round-trips exactly. An EXACT
-    # match therefore identifies the window the weights are from.
+    # An EXACT match of the stored total loss identifies the window the weights are from.
     match = [r for r in rows if r.get("train_loss") == ck.get("train_loss")]
     if len(match) != 1 or "step" not in match[0]:
         raise TrainError(
@@ -1124,9 +862,7 @@ def _load_resume(resume: Resume, model: nn.Module, opt, cfg: TrainConfig) -> tup
             % (resume.path, len(match), ck.get("train_loss")))
     at = match[0]
     history = [dict(r) for r in rows if r["step"] <= at["step"]]
-    # Selection quantity only (val, else the deployment score). Rows from before
-    # the eval-mode fix carry neither, and their train-mode number is NOT the same
-    # quantity, so selection then restarts.
+    # Selection quantity only (val, else the deployment score); older rows have neither: restart.
     watch = [r["val_loss"] if r.get("val_loss") is not None else r.get("eval_recon_l1")
              for r in history]
     watch = [w for w in watch if w is not None]
@@ -1158,35 +894,10 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
           on_epoch: Optional[Callable[[dict], None]] = None,
           gate_reference=None,
           resume: Optional[Resume] = None) -> dict:
-    """Train any model on any ChunkDataset. Knows nothing about BC or ACT.
+    """Train any model on any ChunkDataset; it knows nothing about BC or ACT.
 
-    The model's contract is the whole interface: it takes `obs` of shape
-    (B, W_o, 48) and returns actions of shape (B, K, 22). BC is K=1 and W_o=1;
-    ACT is K=100. Nothing here changes between them.
-
-    BUILD THE MODEL WITH `seeded_build`, not by calling its constructor. Seeding
-    happens here, at entry, which is too late to control the weight
-    initialization the caller already did - see `seeded_build` for the 6.0e-3
-    divergence that produced.
-
-    SURVIVABILITY. A 2 h 19 min ACT run was lost to an out-of-memory kill at step
-    113,000 with no verdict written, because result.json and gate.json were only
-    written at the very end. Now, in a step-budgeted run, every window:
-      - appends to metrics.jsonl,
-      - rewrites result.json with status "running" and the history so far,
-      - rewrites gate.json with the PROVISIONAL verdict at that step, if a
-        `gate_reference` was given,
-      - writes a full resumable `state.pt` every `cfg.state_every_windows`.
-    All writes are write-then-rename, so a kill mid-write never truncates them.
-    A Python-level failure (an out-of-memory error IS one) also records status
-    "crashed" and its reason before re-raising; a hard kill leaves the last
-    window's files, which is what a reader needs: the step the run was last alive.
-
-    RESUMING: pass `resume=Resume(path)`. Step-budgeted runs only. See `Resume`
-    for the difference between a full state file and a weights-only checkpoint.
-    The resumed run writes into its OWN run directory, with the prior segment's
-    history copied in first, so the curve is continuous and the killed run's
-    directory is left untouched as evidence.
+    WARNING: build the model with `seeded_build`; seeding here is too late for its init.
+    why: see DESIGN_NOTES.md#train-loop (resuming: DESIGN_NOTES.md#train-resume)
     """
     det = set_determinism(cfg.seed, strict=cfg.strict_determinism)
     device = select_device(cfg.prefer_cuda)
@@ -1204,8 +915,8 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
     tl = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
                     collate_fn=_collate_for(train_ds), num_workers=cfg.num_workers,
                     generator=g, worker_init_fn=seed_worker, drop_last=False)
-    # Validation and selection are scored by `score_deployment` directly on the
-    # dataset (no DataLoader: see its docstring on the global generator).
+    # Validation and selection are scored by `score_deployment` on the dataset, with no DataLoader.
+    # why: see DESIGN_NOTES.md#train-score-deployment
     vl = val_ds
     # The training set is scored the same way whenever it is the selection
     # quantity (no validation set) or the gate needs it.
@@ -1319,11 +1030,7 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
         return elapsed0 + (time.perf_counter() - t0)
 
     def _write_progress(final: bool = False, error: Optional[str] = None):
-        """result.json and gate.json as of NOW. Called every window, at the end,
-        and on a crash - so a kill costs at most one window, never the verdict.
-
-        The gate scores `dep["q"]`: the deployed function on the weights at
-        `dep["step"]` - the final weights when `final`, else the latest window's."""
+        """result.json and gate.json as of NOW: a kill costs at most one window."""
         if not history:
             return
         last = history[-1]
@@ -1415,8 +1122,7 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
         w_tot, w_rec, w_n, w_ext, w_t0 = 0.0, 0.0, 0, {}, time.perf_counter()
 
     if rng_to_restore is not None:
-        # LAST thing before the first step, after every RNG-consuming setup call
-        # (baselines draws a loader seed from the global generator).
+        # WARNING: LAST thing before the first step (baselines draws from the global generator).
         torch.set_rng_state(rng_to_restore["torch"])
         np.random.set_state(rng_to_restore["numpy"])
         random.setstate(rng_to_restore["python"])
@@ -1437,9 +1143,7 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
             skip_batches = 0
             for batch in tl:
                 if skip:
-                    # Full-state resume: this pass's permutation is reproduced from
-                    # the saved generator state, and the batches the interrupted run
-                    # had already trained on are passed over without training.
+                    # Full-state resume: pass over the batches already trained on.
                     skip -= 1
                     batches_done += 1
                     continue
@@ -1536,9 +1240,7 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
             if on_epoch:
                 on_epoch(row)
     except BaseException as e:                                  # noqa: BLE001
-        # An out-of-memory error, a KeyboardInterrupt, anything Python can see:
-        # record WHY and WHERE before dying, then die. A hard OS kill cannot be
-        # caught; for that, the last window's files are the record.
+        # Record WHY and WHERE before dying (a hard OS kill leaves the last window's files instead).
         status["value"] = "crashed"
         msg = str(e).splitlines()[0] if str(e) else ""
         try:
@@ -1561,9 +1263,7 @@ def train(model: nn.Module, train_ds: ChunkDataset, cfg: TrainConfig,
                   final_recon_l1=history[-1]["recon_l1"],
                   final_deployment_recon=float(dep["q"].value),
                   final_val_loss=history[-1]["val_loss"],
-                  # Labelled AT THE SOURCE (TR29): the gate accepts only a
-                  # Quantity in the reference's units, and only this loop knows
-                  # which of these numbers is which.
+                  # Labelled AT THE SOURCE (TR29): only this loop knows which number is which.
                   quantities=dict(
                       # the gate accepts ONLY this one
                       deployment_recon=dep["q"],
@@ -1591,9 +1291,8 @@ def save_checkpoint(path: str, model: nn.Module, cfg: TrainConfig, meta: dict,
                     epoch: int, train_loss: float,
                     val_loss: Optional[float], step: Optional[int] = None,
                     selected_on: Optional[float] = None) -> str:
-    """Weights and provenance - NOT a resumable state (no optimizer, no RNG).
-    `state.pt`, written by `train()`, is the resumable one. `step` is recorded
-    so a weights-only resume need not infer it."""
+    """Weights and provenance, NOT a resumable state (`train()` writes that, as `state.pt`)."""
+    # why: see DESIGN_NOTES.md#train-checkpoints
     torch.save(dict(state_dict=model.state_dict(), config=asdict(cfg),
                     model_cls=type(model).__name__,
                     model_kwargs=getattr(model, "hparams", {}),
@@ -1610,9 +1309,7 @@ def save_checkpoint(path: str, model: nn.Module, cfg: TrainConfig, meta: dict,
 
 
 def load_checkpoint(path: str, model_factory: Callable[..., nn.Module]) -> tuple:
-    """(model, checkpoint). Refuses a checkpoint from another spec version -
-    the dimension layout may differ, so the weights would be read into a
-    different meaning of the same 47 and 22 numbers."""
+    """(model, checkpoint). Refuses another spec version: the dim layout may differ."""
     ck = torch.load(path, map_location="cpu", weights_only=False)
     spec.assert_spec_version(ck["spec_version"], where=os.path.basename(path))
     model = model_factory(**(ck.get("model_kwargs") or {}))

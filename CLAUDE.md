@@ -357,7 +357,7 @@ Full listing in `NOTES.md`. Only the entries that carry a decision live here:
   layout (TR17). `g1_teleop/contact_contract.py` (D18) — the setting, the compiled-model check and the runtime toggle.
 - `docs/ACT_AUDIT.md` + `docs/ACT_AUDIT_REPORT.md` — the ACT audit checklist and its report: **the record, never edit**; act on them
   elsewhere. `docs/ACT_CORRESPONDENCE.md` — row-by-row reference table. `g1_model/train.py` `_DeploymentGuard` — the gate's ONLY defence
-  against a leak (TR31); read its attack table before touching scoring.
+  against a leak (TR31); read its attack table (`docs/DESIGN_NOTES.md#train-deployment-guard`; that file holds the long explanations moved out of `g1_model/` comments) before touching scoring.
 - `locomotion_input.py` — **do not delete**: `PelvisVelocity` is the evidence for D6. `g1_teleop/gating.py` — DEAD, kept for `RejectReason` (O6).
 - `tools/` — `record_keypoints.py`, `analyze_keypoints.py`, `teleop_physics_check.py`, `teleop_throughput.py`, `bprime_validate.py`,
   `plot_platform_regions.py`. `../docs/Thesis_Proposal.pdf` — Ch.3 at PDF pages 33–56. `../NOTES.md` — overflow for this file.

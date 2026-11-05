@@ -1,56 +1,7 @@
-"""ACT, state-only: the CVAE that chunked BC is missing.
+"""State-only ACT: the CVAE that chunked BC is missing; ACT-LSTM is this class with `use_lstm=True`.
 
-WHAT THIS ADDS, AND ONLY THIS
------------------------------
-The ladder adds one thing per rung: BC -> chunked BC adds chunking, chunked BC ->
-ACT adds the CVAE, ACT -> ACT-LSTM adds recurrence. So everything here that is
-not the CVAE must be the same as chunked BC's setting: the same W_o (12 for every
-model, CLAUDE.md §8 2026-09-27), K = 100, the same loader, the same
-`train.masked_l1`, the same loop. What ACT contributes is the
-style variable z and the transformer that consumes it.
-
-THE REFERENCE, AND WHAT WAS DROPPED
------------------------------------
-Pinned at `tonyzhaozh/act` commit 742c753c0d4a5d87076c8f69e5628c79a8cc5488,
-cloned (gitignored) to `reference/act/`. Paper arXiv 2304.13705v1. Every
-architectural constant below is cited to a file and line in that clone;
-`docs/ACT_CORRESPONDENCE.md` carries the row-by-row table and the reasons.
-
-Vision is DROPPED: we are state-only, in simulation, with ground-truth state, and
-the research question is recurrence, not perception (correspondence table §3).
-That removes the ResNet backbones, the 2-D image position embeddings and the
-~300-token-per-camera image sequence, and nothing else.
-
-    !!! THE STATE-ONLY PATH IS BUILT FROM THE REFERENCE'S *VISION* PATH !!!
-
-`DETRVAE.forward` has a `backbones is None` branch (`detr_vae.py:132-136`) that
-looks like exactly what a state-only port wants. It is unreachable - `build()`
-constructs backbones unconditionally (`detr_vae.py:235-237`) - and it calls the
-transformer with FOUR arguments, never passing `latent_input`, where the vision
-path passes seven (`detr_vae.py:131`). Copying it yields a model with no CVAE
-conditioning at all: chunked BC with an unused encoder, which would pass every
-gate we have and silently make RQ2/RQ3 a comparison of a model against itself.
-This file therefore mirrors the VISION path (`detr_vae.py:116-131` ->
-`transformer.py:59-63`) and deletes only the image tokens. `test_act.py`'s
-latent-reaches-the-decoder test is the standing guard.
-
-THE TRANSFORMER IS REIMPLEMENTED, NOT IMPORTED
-----------------------------------------------
-The clone is a read-only reference outside the tracked tree, so importing from it
-would make this repo depend on an untracked directory. The layers below mirror
-`transformer.py` with line citations, including the two details a stock
-`nn.Transformer` does not reproduce: position embeddings are added to the
-attention QUERY and KEY but never to the VALUE (`transformer.py:171-173`,
-`:236-244`), and the decoder returns every layer's output so the head can select
-one (`transformer.py:129-141`).
-
-ACT-LSTM IS THIS CLASS WITH `use_lstm=True`
-------------------------------------------
-Not a second implementation: two would let incidental differences sit inside the
-measured effect of recurrence (D8). The flag adds an LSTM over the observation
-window whose final hidden state becomes ONE extra token for the policy
-transformer, and changes nothing else (CLAUDE.md §8 2026-09-25, Option B). The
-reference has no recurrence anywhere (correspondence row 54, ADDITION).
+ACT ref: paths are relative to reference/act/ at tonyzhaozh/act@742c753c; paper arXiv:2304.13705v1.
+why: see DESIGN_NOTES.md#act-module
 """
 from __future__ import annotations
 
@@ -68,92 +19,64 @@ from g1_data import spec
 from g1_model.models import LADDER_GRAD_CLIP
 
 # ─── reference constants ──────────────────────────────────────────────────────
-# Every value here is the reference's, cited. Values that are OURS are in
-# ACTConfig and marked PROVISIONAL there.
+# ACT ref: values match the reference unless marked DIFFERS or OURS (docs/ACT_CORRESPONDENCE.md).
+# why: see DESIGN_NOTES.md#act-reference
 REF_COMMIT = "742c753c0d4a5d87076c8f69e5628c79a8cc5488"
 REF_PAPER = "arXiv:2304.13705v1"
 
-#: reference/act/detr/models/detr_vae.py:67 — `self.latent_dim = 32  # TODO tune`.
-#: Carried unchanged; the reference itself flags it as untuned.
+# ACT ref: detr/models/detr_vae.py:67 (latent_dim = 32, flagged "TODO tune" there)
 LATENT_DIM: int = 32
-#: reference/act/README.md:76 `--hidden_dim 512`; paper Table III "hidden dimension 512".
-#: NOT main.py:41's default of 256, which the published command overrides.
+# ACT ref: README.md:76 --hidden_dim 512; paper Table III (overrides detr/main.py:41's 256)
 HIDDEN_DIM: int = 512
-#: reference/act/README.md:76 `--dim_feedforward 3200`; paper Table III.
+# ACT ref: README.md:76 --dim_feedforward 3200; paper Table III
 DIM_FEEDFORWARD: int = 3200
-#: reference/act/imitate_episodes.py:56 `nheads = 8`; paper Table III "# heads 8".
+# ACT ref: imitate_episodes.py:56 nheads = 8; paper Table III
 NHEADS: int = 8
-#: reference/act/imitate_episodes.py:54 `enc_layers = 4`. Used for BOTH the CVAE
-#: encoder and the policy's transformer encoder — `detr_vae.py:217` reads the same
-#: `args.enc_layers` ("# TODO shared with VAE decoder"). Separate modules, same depth.
+# ACT ref: imitate_episodes.py:54 enc_layers = 4; CVAE encoder too (detr/models/detr_vae.py:217)
 ENC_LAYERS: int = 4
-#: reference/act/imitate_episodes.py:55 `dec_layers = 7`; paper Table III.
-#: What the REFERENCE builds. Kept, cited, so the divergence below is visible.
+# ACT ref: imitate_episodes.py:55 dec_layers = 7; paper Table III
 REF_DEC_LAYERS: int = 7
-#: What WE build: ONE decoder layer. This supersedes the earlier decision (D4) to
-#: build all seven for fidelity. The reference reads `hs[0]` (`detr_vae.py:131`),
-#: the FIRST decoder layer's output, so layers 2-7 compute values nothing reads
-#: and receive exactly zero gradient. MEASURED 2026-09-21: a 7-layer model read at
-#: hs[0] and a 1-layer model built from the same seed give bit-identical forward
-#: output, loss and every gradient - `test_act.py::
-#: test_one_decoder_layer_is_bit_identical_to_the_references_seven`. There is no
-#: fidelity to preserve in weights no computation depends on, and they cost 49.5%
-#: of step time. The observation about layers 2-7 stands as a DESCRIPTIVE note
-#: about the reference, not a criticism of it (NOTES.md 2026-09-21).
+# DIFFERS from ACT: one layer built, not 7; bit-identical because the reference reads hs[0].
+# why: see DESIGN_NOTES.md#act-decoder-layers
 DEC_LAYERS: int = 1
-#: reference/act/detr/main.py:43 `--dropout 0.1`, not overridden by README.md:76.
+# ACT ref: detr/main.py:43 --dropout 0.1 (README.md:76 does not override it)
 DROPOUT: float = 0.1
-#: reference/act/detr/models/detr_vae.py:219 — hardcoded "relu".
+# ACT ref: detr/models/detr_vae.py:219 (hardcoded "relu")
 ACTIVATION: str = "relu"
-#: reference/act/detr/main.py:49 `--pre_norm` is store_true and is NOT passed in
-#: README.md:76, so the published model is POST-norm.
+# ACT ref: detr/main.py:49 --pre_norm is not passed in README.md:76, so POST-norm
 PRE_NORM: bool = False
-#: reference/act/README.md:76 `--kl_weight 10`; paper Table III "beta 10";
-#: consumed as `policy.py:34` `l1 + kl * kl_weight`.
+# ACT ref: README.md:76 --kl_weight 10; policy.py:34 (l1 + kl * kl_weight); paper Table III
 KL_WEIGHT: float = 10.0
-#: reference/act/imitate_episodes.py:255 — `k = 0.01` inside the temporal-ensemble
-#: block. The paper gives the FORM `w_i = exp(-m*i)` (§IV-A) but NO numeric value:
-#: NOT FOUND IN SOURCE. Note the reference's variable is named `k`, colliding with
-#: the paper's `k` for chunk size; renamed `m` here to match the paper's symbol.
+# ACT ref: imitate_episodes.py:255 (k = 0.01, renamed m); the paper gives no value (§IV-A).
+# why: see DESIGN_NOTES.md#act-constants
 TEMPORAL_ENSEMBLE_M: float = 0.01
 
-#: reference/act/README.md:77 `--lr 1e-5`; paper Table III "learning rate 1e-5".
-#: NOT `detr/main.py:14`'s default of 1e-4, which the published command overrides.
-#: TR28: this value must be STATED by ACT, never inherited from another model's
-#: config. The Stage-4 gate ran at 1e-3 because the shared runner drew `lr` from
-#: `BCConfig`, and nothing raised.
+# ACT ref: README.md:77 --lr 1e-5; paper Table III (overrides detr/main.py:14's 1e-4).
+# WARNING: state it here, never inherit it from another model (TR28).
+# why: see DESIGN_NOTES.md#act-constants
 LR: float = 1e-5
-#: reference/act/detr/main.py:17 `--weight_decay 1e-4`, not overridden by README.md:76.
+# ACT ref: detr/main.py:17 --weight_decay 1e-4 (README.md:76 does not override it)
 WEIGHT_DECAY: float = 1e-4
-#: reference/act/detr/main.py:87 `torch.optim.AdamW`.
+# ACT ref: detr/main.py:87 (torch.optim.AdamW)
 OPTIMIZER: str = "adamw"
 
-#: MEASURED on the pinned commit, 2026-09-21. `detr_vae.py:131` reads `hs[0]`, and
-#: `transformer.py:76` returns (num_dec_layers, bs, num_queries, d), so index 0 is
-#: the FIRST decoder layer's output. Backward through `hs[0]` on a 7-layer decoder
-#: gives layer 1 a gradient of L1 7.41e-05 and layers 2-7 exactly 0.0. We read the
-#: same index the reference reads, and build only the one layer that index depends
-#: on (see DEC_LAYERS). NOT "fixed" to hs[-1]: reading the last of seven layers
-#: would be a deeper, different model, and an RQ2/RQ3 result obtained with it could
-#: not be attributed to ACT's design.
+# ACT ref: detr/models/detr_vae.py:131 reads hs[0].
+# WARNING: never "fix" to hs[-1]: a different model. why: see DESIGN_NOTES.md#act-decoder-read
 DECODER_LAYER_READ: int = 0
 
 # ─── ACT-LSTM constants (OURS: the reference has no recurrence, row 54) ───────
+# why: see DESIGN_NOTES.md#act-lstm-flag
 #: The proposal's value, "2 stacked" (PLAN.md Phase 4; CLAUDE.md §8 2026-09-25).
 LSTM_LAYERS: int = 2
 #: OURS, CLAUDE.md §8 2026-09-25. Not from the proposal, not tuned.
 LSTM_HIDDEN: int = 256
-#: The proposal's value (PLAN.md Phase 4; CLAUDE.md §8 2026-09-25). Applied as
-#: `nn.LSTM(dropout=...)` does it: BETWEEN stacked layers only, so with two
-#: layers it acts on layer 1's outputs
-#: and never on the final hidden state that becomes the token. DISCLOSED
-#: (CLAUDE.md §8 2026-09-28, correspondence row 54), not "fixed" with an extra
-#: nn.Dropout: that would be a second design choice the proposal did not state.
+#: The proposal's value; `nn.LSTM` applies it BETWEEN stacked layers only, never on the token.
+# why: see DESIGN_NOTES.md#act-lstm-dropout
 LSTM_DROPOUT: float = 0.3
 
 
 def _get_activation_fn(activation: str):
-    """reference/act/detr/models/transformer.py:306-314."""
+    # ACT ref: detr/models/transformer.py:306-314 (_get_activation_fn)
     if activation == "relu":
         return F.relu
     if activation == "gelu":
@@ -164,19 +87,14 @@ def _get_activation_fn(activation: str):
 
 
 def _clones(module: nn.Module, n: int) -> nn.ModuleList:
-    """reference/act/detr/models/transformer.py:289-290."""
+    # ACT ref: detr/models/transformer.py:289-290 (_get_clones)
     return nn.ModuleList([copy.deepcopy(module) for _ in range(n)])
 
 
 def sinusoid_table(n_position: int, d_hid: int) -> torch.Tensor:
-    """reference/act/detr/models/detr_vae.py:23-31, reproduced exactly.
-
-    FIXED, not learned. In the reference it is a `register_buffer`
-    (`detr_vae.py:72`) applied with `.clone().detach()` (`:101`), so it never
-    appears in `model.parameters()`. A learned table here would train perfectly
-    well and would change what the CLS token summarises, which is why
-    `test_act.py` asserts it is a buffer.
-    """
+    """Fixed (not learned) sinusoidal position table, (1, n_position, d_hid)."""
+    # ACT ref: detr/models/detr_vae.py:23-31 (get_sinusoid_encoding_table)
+    # WARNING: must stay a buffer. why: see DESIGN_NOTES.md#act-sinusoid
     def angle_vec(position):
         return [position / np.power(10000, 2 * (j // 2) / d_hid) for j in range(d_hid)]
 
@@ -187,19 +105,18 @@ def sinusoid_table(n_position: int, d_hid: int) -> torch.Tensor:
 
 
 def reparametrize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-    """reference/act/detr/models/detr_vae.py:17-20.
-
-    `std = logvar.div(2).exp()`. A missing `div(2)` trains fine and silently
-    halves the effective KL scale, so the factor is asserted in the tests.
-    """
+    """z = mu + std * eps, the CVAE's reparameterisation."""
+    # ACT ref: detr/models/detr_vae.py:17-20 (reparametrize)
+    # WARNING: keep the div(2), asserted in the tests. why: see DESIGN_NOTES.md#act-reparametrize
     std = logvar.div(2).exp()
     eps = torch.randn_like(std)
     return mu + std * eps
 
 
 # ─── transformer, mirroring reference/act/detr/models/transformer.py ──────────
+# why: see DESIGN_NOTES.md#act-transformer-reimplemented
 class _EncoderLayer(nn.Module):
-    """reference/act/detr/models/transformer.py:144-201."""
+    # ACT ref: detr/models/transformer.py:144-201 (TransformerEncoderLayer)
 
     def __init__(self, d_model, nhead, dim_feedforward, dropout, activation,
                  normalize_before):
@@ -217,11 +134,11 @@ class _EncoderLayer(nn.Module):
 
     @staticmethod
     def _with_pos(tensor, pos):
-        """transformer.py:163-164 — pos is added to Q and K, never to V."""
+        # ACT ref: detr/models/transformer.py:163-164 (with_pos_embed): pos goes to Q and K, never V
         return tensor if pos is None else tensor + pos
 
     def forward(self, src, src_key_padding_mask=None, pos=None):
-        if self.normalize_before:                        # transformer.py:181-193
+        if self.normalize_before:  # ACT ref: detr/models/transformer.py:181-193
             src2 = self.norm1(src)
             q = k = self._with_pos(src2, pos)
             src2 = self.self_attn(q, k, value=src2,
@@ -230,7 +147,7 @@ class _EncoderLayer(nn.Module):
             src2 = self.norm2(src)
             src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
             return src + self.dropout2(src2)
-        # transformer.py:166-179 (post-norm, the published configuration)
+        # ACT ref: detr/models/transformer.py:166-179 (post-norm, the published configuration)
         q = k = self._with_pos(src, pos)
         src2 = self.self_attn(q, k, value=src,
                               key_padding_mask=src_key_padding_mask)[0]
@@ -240,7 +157,7 @@ class _EncoderLayer(nn.Module):
 
 
 class _Encoder(nn.Module):
-    """reference/act/detr/models/transformer.py:79-100."""
+    # ACT ref: detr/models/transformer.py:79-100 (TransformerEncoder)
 
     def __init__(self, layer, num_layers, norm=None):
         super().__init__()
@@ -258,7 +175,7 @@ class _Encoder(nn.Module):
 
 
 class _DecoderLayer(nn.Module):
-    """reference/act/detr/models/transformer.py:204-286."""
+    # ACT ref: detr/models/transformer.py:204-286 (TransformerDecoderLayer)
 
     def __init__(self, d_model, nhead, dim_feedforward, dropout, activation,
                  normalize_before):
@@ -283,7 +200,7 @@ class _DecoderLayer(nn.Module):
 
     def forward(self, tgt, memory, pos=None, query_pos=None,
                 memory_key_padding_mask=None):
-        if self.normalize_before:                        # transformer.py:252-...
+        if self.normalize_before:  # ACT ref: detr/models/transformer.py:252-273
             tgt2 = self.norm1(tgt)
             q = k = self._with_pos(tgt2, query_pos)
             tgt2 = self.self_attn(q, k, value=tgt2)[0]
@@ -297,7 +214,7 @@ class _DecoderLayer(nn.Module):
             tgt2 = self.norm3(tgt)
             tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
             return tgt + self.dropout3(tgt2)
-        # transformer.py:229-250 (post-norm, the published configuration)
+        # ACT ref: detr/models/transformer.py:229-250 (post-norm, the published configuration)
         q = k = self._with_pos(tgt, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt)[0]
         tgt = self.norm1(tgt + self.dropout1(tgt2))
@@ -311,12 +228,8 @@ class _DecoderLayer(nn.Module):
 
 
 class _Decoder(nn.Module):
-    """reference/act/detr/models/transformer.py:103-141.
-
-    `return_intermediate=True` (set by `build_transformer`, `transformer.py:302`)
-    stacks EVERY layer's output, with the last replaced by the final normed one
-    (`:132-136`). The head then selects an index — see DECODER_LAYER_READ.
-    """
+    # ACT ref: detr/models/transformer.py:103-141 (TransformerDecoder); stacks every layer's output.
+    # why: see DESIGN_NOTES.md#act-decoder-intermediate
 
     def __init__(self, layer, num_layers, norm, return_intermediate=True):
         super().__init__()
@@ -347,25 +260,16 @@ class _Decoder(nn.Module):
 # ─── configuration ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class ACTConfig:
-    """ACT's hyperparameters. Reference values are cited at their constants above.
+    """ACT's hyperparameters; reference values are cited at their constants above.
 
-    `obs_window` and `chunk_size` are REQUIRED with no default, as everywhere else
-    in this codebase: K is what separates ACT from chunked BC on the ladder, and
-    W_o is the parameter that could hand the transformer the history ACT-LSTM is
-    meant to supply. Neither may be inherited silently.
-
-    The reference's observation is a single timestep (`utils.py:37`,
-    `detr_vae.py:80`). We run W_o = 12, the window EVERY model shares (CLAUDE.md
-    §8 2026-09-27; correspondence row 53, ADAPTED); 1 remains valid and
-    reproduces the reference's observation.
+    `obs_window` and `chunk_size` are required: neither may be inherited silently.
+    why: see DESIGN_NOTES.md#act-config
     """
 
-    obs_window: int                 # required; 12 shared by every model, 1 = reference
+    obs_window: int                 # required; 1 = reference and act_orig, 12 = ablation
     chunk_size: int                 # required; K = number of decoder queries
-    #: REQUIRED, no default (TR28). ACT's published value is `LR` = 1e-5; the
-    #: field is left unset so that a caller who does not think about it gets a
-    #: TypeError instead of somebody else's learning rate. The Stage-4 gate at
-    #: lr 1e-3 is what this field exists to prevent.
+    #: REQUIRED, no default (TR28): ACT's published value is `LR`, never another model's.
+    # why: see DESIGN_NOTES.md#act-config
     lr: float
 
     hidden_dim: int = HIDDEN_DIM
@@ -380,22 +284,15 @@ class ACTConfig:
     kl_weight: float = KL_WEIGHT
     weight_decay: float = WEIGHT_DECAY
     optimizer: str = OPTIMIZER
-    #: NOT the reference's: it never clips (`detr/main.py:20` "# not used"). The
-    #: ladder's one value, identical for every model and refused if it differs -
-    #: see `models.LADDER_GRAD_CLIP` and `models.GRAD_CLIP_DISCLOSURE`.
+    #: DIFFERS from ACT: never clipped there (detr/main.py:20); see `models.GRAD_CLIP_DISCLOSURE`.
     grad_clip: float = LADDER_GRAD_CLIP
 
-    #: OURS, PROVISIONAL. The reference's action head is `Linear(hidden, 14)`
-    #: (`detr_vae.py:52`, `state_dim = 14` hardcoded at `:230`). Our action is
-    #: 22-D and our state 48-D (`g1_data/spec.py`); pure dimensionality.
+    #: OURS: 48-D state, 22-D action; the reference hardcodes 14 (detr/models/detr_vae.py:52, :230).
     state_dim: int = spec.STATE_DIM
     action_dim: int = spec.ACTION_DIM
 
-    #: ACT-LSTM (D8). False is ACT, bit-identical to the model before the flag
-    #: existed (test_act.py golden fingerprint). The three `lstm_*` fields below
-    #: are carried by ACT's config too and are INERT there - accepted
-    #: (CLAUDE.md §8 2026-09-28) so that the ACT and ACT-LSTM configs differ in
-    #: `use_lstm` ALONE, which is PLAN.md Phase 4's exit check.
+    #: ACT-LSTM (D8). False is ACT, bit-identical to the model before the flag existed; the
+    #: `lstm_*` fields are INERT then, so the two configs differ in `use_lstm` alone.
     use_lstm: bool = False
     lstm_layers: int = LSTM_LAYERS
     lstm_hidden: int = LSTM_HIDDEN
@@ -419,13 +316,7 @@ class ACTConfig:
                              % (self.lstm_dropout,))
 
     def optimizer_config(self) -> dict:
-        """The optimizer settings ACT declares for itself (TR28).
-
-        `train.make_optimizer` compares this against the `TrainConfig` it was
-        handed and RAISES on any disagreement, so a runner that assembles the
-        TrainConfig from another model's config cannot start. The Stage-4 leak
-        was silent precisely because no such comparison existed.
-        """
+        """The optimizer settings ACT declares; `train.make_optimizer` refuses a mismatch (TR28)."""
         return dict(lr=float(self.lr), weight_decay=float(self.weight_decay),
                     optimizer=str(self.optimizer), grad_clip=float(self.grad_clip))
 
@@ -446,53 +337,18 @@ class ACTConfig:
 class ACTPolicy(nn.Module):
     """State-only ACT: a CVAE whose decoder is a transformer emitting K actions.
 
-    Shape contract, identical to every other model in the ladder so that
-    `train.train()` does not change between stages:
-
-        obs : (B, W_o, 48)   ->   action : (B, K, 22)
-
-    `forward(obs)` is inference. `forward(obs, actions=..., action_mask=...)` is
-    training and additionally returns `mu`/`logvar`. Which mode is in force is
-    decided by whether the action chunk was supplied (`detr_vae.py:85`
-    `is_training = actions is not None`), so a caller cannot accidentally run the
-    CVAE encoder at inference — it has nothing to run it on.
-
-    ACT-LSTM, `use_lstm=True` (D8; CLAUDE.md §8 2026-09-25, Option B): an LSTM
-    reads the SAME (B, W_o, 48) window, oldest step first, starting from zero
-    memory on EVERY call; its last layer's final hidden state is projected to
-    `hidden_dim` and appended as a THIRD token, [latent, proprio, lstm], with its
-    own one-entry position embedding. Nothing else moves: the CVAE encoder does
-    not see it, `proprio` is still the flattened window, and the queries,
-    decoder and head are shared. No (h, c) is passed in or kept, so no state
-    crosses calls and `train._DeploymentGuard`'s carried-state check applies
-    unchanged (TR31). Rejected, Option A: hidden state carried across the
-    episode, which needs a sequential sampler ACT does not use.
-
-    The LSTM modules are built AFTER every ACT module and after
-    `_reset_parameters`, so construction consumes the RNG identically up to that
-    point: ACT-LSTM from a seed starts with every ACT parameter bit-identical to
-    ACT from the same seed, and `use_lstm=False` builds exactly the old model.
-    The LSTM keeps PyTorch's default init; xavier is the reference's, and the
-    reference applies it to its transformer only.
+    `forward(obs)` is inference; adding `actions`, `action_mask` is training and returns mu, logvar.
+    why: see DESIGN_NOTES.md#act-policy (ACT-LSTM: DESIGN_NOTES.md#act-policy-lstm)
     """
 
-    #: The modules that read the TARGET action chunk: exactly the CVAE encoder,
-    #: used only by `encode`. During scoring `train._DeploymentGuard` replaces the
-    #: `forward` of every one of them AND their submodules so that any call -
-    #: `__call__` or `.forward()` - raises, and after the pass fills their weights
-    #: with NaN and re-scores a probe batch, so even a functional use of a weight
-    #: is caught. `cls_embed` is read through `.weight`, never CALLED: the NaN
-    #: probe is what covers it. A declaration, not a change to the model: nothing
-    #: reads it at training or inference time. Checked against `encode` by
-    #: test_train.
+    #: The modules that read the TARGET chunk (CVAE encoder); `train._DeploymentGuard` bars them.
+    # why: see DESIGN_NOTES.md#act-guard-declarations
     TARGET_READING_MODULES = ("cls_embed", "encoder_action_proj",
                               "encoder_joint_proj", "latent_proj", "encoder")
 
-    #: The modules whose INPUT is the latent z. `train.score_deployment` checks,
-    #: on every call during scoring, that what enters them is EXACTLY zero - the
-    #: prior mean (`detr_vae.py:113`; paper §IV-B p.5) - and that every forward
-    #: pass went through one of them, so z = 0 is verified at the gate rather than
-    #: left to this file and a unit test. A declaration, not a change to the model.
+    #: The modules whose INPUT is z; `train.score_deployment` verifies z == 0 on every call.
+    # ACT ref: detr/models/detr_vae.py:113; paper §IV-B.
+    # why: see DESIGN_NOTES.md#act-guard-declarations
     PRIOR_LATENT_MODULES = ("latent_out_proj",)
 
     def __init__(self, cfg: ACTConfig):
@@ -502,8 +358,8 @@ class ACTPolicy(nn.Module):
         self.hparams = dict(cfg=asdict(cfg))
         h, K = cfg.hidden_dim, cfg.chunk_size
 
-        # ---- CVAE encoder (detr_vae.py:66-72) ----------------------------
-        # [CLS] + proprio + action chunk -> mu, logvar. Runs ONLY at training.
+        # ---- CVAE encoder --------------------------------------------------
+        # ACT ref: detr/models/detr_vae.py:66-72. [CLS] + proprio + chunk -> mu, logvar; training only.
         self.cls_embed = nn.Embedding(1, h)                        # :68
         self.encoder_action_proj = nn.Linear(cfg.action_dim, h)    # :69 (theirs 14)
         self.encoder_joint_proj = nn.Linear(
@@ -514,16 +370,14 @@ class ACTPolicy(nn.Module):
 
         enc_layer = _EncoderLayer(h, cfg.nheads, cfg.dim_feedforward, cfg.dropout,
                                   cfg.activation, cfg.pre_norm)
-        # build_encoder, detr_vae.py:212-226: norm only when pre_norm
+        # ACT ref: detr/models/detr_vae.py:212-226 (build_encoder): norm only when pre_norm
         self.encoder = _Encoder(enc_layer, cfg.enc_layers,
                                 nn.LayerNorm(h) if cfg.pre_norm else None)
 
-        # ---- decoder side (detr_vae.py:74-76) -----------------------------
+        # ---- decoder side; ACT ref: detr/models/detr_vae.py:74-76 --------------
         self.latent_out_proj = nn.Linear(cfg.latent_dim, h)        # :75
-        # LEARNED position embedding for exactly two tokens: [latent, proprio].
-        # Sized 2 in the reference (:76) because those are the only non-image
-        # tokens — which is the evidence that option A is the reference's own
-        # design for the non-image part, not our invention.
+        # LEARNED position embedding for exactly [latent, proprio], sized as in the reference.
+        # why: see DESIGN_NOTES.md#act-additional-pos
         self.additional_pos_embed = nn.Embedding(2, h)             # :76
         self.input_proj_robot_state = nn.Linear(
             cfg.state_dim * cfg.obs_window, h)                     # :58 (theirs 14)
@@ -535,22 +389,21 @@ class ACTPolicy(nn.Module):
                                   nn.LayerNorm(h) if cfg.pre_norm else None)
         t_dec_layer = _DecoderLayer(h, cfg.nheads, cfg.dim_feedforward,
                                     cfg.dropout, cfg.activation, cfg.pre_norm)
-        # decoder ALWAYS has a final LayerNorm (transformer.py:35)
+        # ACT ref: detr/models/transformer.py:35: the decoder ALWAYS has a final LayerNorm
         self.t_decoder = _Decoder(t_dec_layer, cfg.dec_layers, nn.LayerNorm(h),
                                   return_intermediate=True)
 
-        # LEARNED queries (detr_vae.py:54). The paper §IV-C calls them "a fixed
-        # position embedding"; code and paper disagree and we follow the code,
-        # which is the artefact that produced the published results.
+        # ACT ref: detr/models/detr_vae.py:54 (learned); DIFFERS from the paper's "fixed" (§IV-C).
+        # why: see DESIGN_NOTES.md#act-queries
         self.query_embed = nn.Embedding(K, h)                      # :54
         self.action_head = nn.Linear(h, cfg.action_dim)            # :52 (theirs 14)
-        # `is_pad_head` (:53) is DROPPED: the reference computes it (:138) and
-        # returns it (:139) and never uses it in any loss. Carrying it would add
-        # parameters that receive no gradient.
+        # DIFFERS from ACT: `is_pad_head` (detr/models/detr_vae.py:53) dropped; no loss uses it.
+        # why: see DESIGN_NOTES.md#act-queries
 
         self._reset_parameters()
 
-        # ---- ACT-LSTM (D8): LAST, after the init above - see the class doc ----
+        # ---- ACT-LSTM (D8): LAST, so every ACT parameter stays bit-identical ------
+        # why: see DESIGN_NOTES.md#act-policy-lstm
         if cfg.use_lstm:
             self.lstm = nn.LSTM(cfg.state_dim, cfg.lstm_hidden,
                                 num_layers=cfg.lstm_layers, batch_first=True,
@@ -565,19 +418,9 @@ class ACTPolicy(nn.Module):
         return self.cfg.optimizer_config()
 
     def _reset_parameters(self):
-        """reference/act/detr/models/transformer.py:44-47 — xavier_uniform_ on
-        every parameter with dim() > 1 of the POLICY transformer (`t_encoder`,
-        `t_decoder`), as in the reference, where `_reset_parameters` is a method of
-        `Transformer` and does not touch the projections built in `DETRVAE`.
-
-        DIVERGENCE, DISCLOSED (docs/ACT_AUDIT_REPORT.md R2; correspondence row 27):
-        it is ALSO applied to the CVAE encoder (`self.encoder`). The reference does
-        not do that: `build_encoder` (`detr_vae.py:212-226`) never re-initialises,
-        and `TransformerEncoder` deep-copies ONE layer (`transformer.py:83,
-        289-290`), so the reference's four CVAE-encoder layers start IDENTICAL,
-        with PyTorch's default init (measured: linear1 std 0.02553 vs xavier's
-        0.02321). Changes the starting point, not the function class. Left as is:
-        changing the init is a model change, and the passing gate used this one."""
+        """Xavier-uniform on the policy transformer and the CVAE encoder."""
+        # ACT ref: detr/models/transformer.py:44-47 (_reset_parameters)
+        # DIFFERS from ACT: the CVAE encoder too. why: see DESIGN_NOTES.md#act-reset-parameters
         for m in (self.encoder, self.t_encoder, self.t_decoder):
             for p in m.parameters():
                 if p.dim() > 1:
@@ -586,15 +429,10 @@ class ACTPolicy(nn.Module):
     # ---- the CVAE encoder --------------------------------------------------
     def encode(self, obs: torch.Tensor, actions: torch.Tensor,
                action_mask: Optional[torch.Tensor] = None):
-        """(mu, logvar) from [CLS] + proprio + action chunk. TRAINING ONLY.
-
-        `action_mask` is our loader's True-on-real mask; the reference's `is_pad`
-        is its complement (`utils.py:53-54`). D9: padded timesteps MUST be masked
-        out of attention or z is computed partly from zeros that are not data —
-        `detr_vae.py:98-99` prepends two `False` so [CLS] and qpos are never
-        masked, then passes it as `src_key_padding_mask` (`:104`). This is
-        gate-blind: without it the model trains perfectly and z is quietly wrong.
-        """
+        """(mu, logvar) from [CLS] + proprio + action chunk. TRAINING ONLY."""
+        # ACT ref: detr/models/detr_vae.py:88-108
+        # WARNING: padded steps must be masked or z is quietly wrong.
+        # why: see DESIGN_NOTES.md#act-encode-mask
         B = obs.shape[0]
         flat = obs.reshape(B, -1)
         action_embed = self.encoder_action_proj(actions)            # (B, K, h)
@@ -618,25 +456,16 @@ class ACTPolicy(nn.Module):
 
     # ---- the policy --------------------------------------------------------
     def _lstm_token(self, obs: torch.Tensor) -> torch.Tensor:
-        """(B, W_o, 48) -> (B, h): the LSTM's summary of the window.
-
-        NO (h0, c0) is passed, so every call starts from zero memory, and none is
-        returned or stored: nothing crosses calls (Option B). `h_n[-1]` is the
-        LAST layer's hidden state after the NEWEST step of the window.
-        """
+        """(B, W_o, 48) -> (B, h): the LSTM's summary of the window, from zero memory each call."""
+        # WARNING: nothing crosses calls (Option B). why: see DESIGN_NOTES.md#act-lstm-token
         _, (h_n, _) = self.lstm(obs)                                # (L, B, H)
         return self.lstm_proj(h_n[-1])                              # (B, h)
 
     def _decode(self, obs: torch.Tensor, latent_input: torch.Tensor) -> torch.Tensor:
-        """The two-token transformer encoder and the K-query decoder.
-
-        Mirrors the reference's VISION path with the image tokens removed:
-        `transformer.py:62` stacks [latent, proprio] and `:63` concatenates the
-        image tokens after them; with no images the stack IS the sequence, and
-        `:59-60` reduces to `additional_pos_embed` alone.
-
-        With `use_lstm` the LSTM token is appended third: [latent, proprio, lstm].
-        """
+        """The transformer encoder over [latent, proprio] (+ lstm), then the K-query decoder."""
+        # ACT ref: detr/models/transformer.py:59-63 (the vision path, image tokens removed)
+        # WARNING: never the `backbones is None` branch: it drops z.
+        # why: see DESIGN_NOTES.md#act-state-only-path
         B = obs.shape[0]
         proprio = self.input_proj_robot_state(obs.reshape(B, -1))   # (B, h)
         src = torch.stack([latent_input, proprio], dim=0)           # (2, B, h)
@@ -646,23 +475,18 @@ class ACTPolicy(nn.Module):
             pos = torch.cat([pos, self.lstm_pos_embed.weight.unsqueeze(1)
                              .repeat(1, B, 1)], dim=0)              # (3, B, h)
         query = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1)  # (K, B, h)
-        tgt = torch.zeros_like(query)                               # transformer.py:72
+        tgt = torch.zeros_like(query)  # ACT ref: detr/models/transformer.py:72
 
         memory = self.t_encoder(src, pos=pos)
         hs = self.t_decoder(tgt, memory, pos=pos, query_pos=query)  # (L, K, B, h)
         hs = hs.transpose(1, 2)                                     # (L, B, K, h)
-        return hs[DECODER_LAYER_READ]                               # detr_vae.py:131
+        return hs[DECODER_LAYER_READ]  # ACT ref: detr/models/detr_vae.py:131
 
     def forward(self, obs: torch.Tensor, actions: Optional[torch.Tensor] = None,
                 action_mask: Optional[torch.Tensor] = None):
-        """(B, W_o, 48) -> (B, K, 22), plus (mu, logvar) when training.
-
-        Mode is decided HERE, from whether an action chunk was supplied
-        (`detr_vae.py:85`), not by a caller-set flag. At inference z is the prior
-        mean, i.e. ZEROS (`detr_vae.py:113`; paper §IV-B "we set z to be the mean
-        of the prior distribution i.e. zero"), and the CVAE encoder is not run at
-        all — it is discarded at test time (paper §IV-B).
-        """
+        """(B, W_o, 48) -> (B, K, 22), plus (mu, logvar) when training."""
+        # ACT ref: detr/models/detr_vae.py:85 (the mode is whether an action chunk was supplied)
+        # why: see DESIGN_NOTES.md#act-forward
         if obs.dim() != 3 or obs.shape[-1] != self.cfg.state_dim:
             raise ValueError("obs must be (B, W_o, %d), got %s"
                              % (self.cfg.state_dim, tuple(obs.shape)))
@@ -672,6 +496,7 @@ class ACTPolicy(nn.Module):
         B = obs.shape[0]
 
         if actions is None:                                # inference
+            # WARNING: z must be zero at inference (ACT ref: detr/models/detr_vae.py:113)
             mu = logvar = None
             z = torch.zeros(B, self.cfg.latent_dim, dtype=obs.dtype,
                             device=obs.device)
@@ -691,17 +516,8 @@ class ACTPolicy(nn.Module):
 
     # ---- the loop's optional hook (train.forward_loss) --------------------
     def loss_terms(self, obs, target, pad_mask, dim_mask=None):
-        """(loss, reconstruction_l1, n_elements, extras) — ACT's L1 + beta*KL.
-
-        This is what lets ONE training loop serve every rung of the ladder. The
-        reconstruction term is `train.masked_l1`, the same function BC and
-        chunked BC are scored with (D6); ACT only ADDS the KL, exactly as the
-        reference does (`policy.py:34`, `l1 + kl * kl_weight`).
-
-        The action chunk and its mask are passed to the CVAE encoder here, which
-        is why the hook exists at all: a plain `model(obs)` cannot express a
-        model whose training-time forward needs the target.
-        """
+        """(loss, reconstruction_l1, n_elements, extras): ACT's L1 + beta*KL."""
+        # ACT ref: policy.py:34. why: see DESIGN_NOTES.md#act-loss-terms
         pred, mu, logvar = self(obs, actions=target, action_mask=pad_mask)
         loss, l1, kl, n = act_loss(pred, target, pad_mask, mu, logvar,
                                    self.cfg.kl_weight, dim_mask)
@@ -711,37 +527,19 @@ class ACTPolicy(nn.Module):
 
 # ─── the objective ────────────────────────────────────────────────────────────
 def kl_divergence(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-    """reference/act/policy.py:71-84, the `total_kld` branch.
-
-    `klds = -0.5 * (1 + logvar - mu^2 - exp(logvar))`, SUMMED over latent dims
-    and averaged over the batch (`policy.py:79-80`), consumed as `total_kld[0]`
-    (`:33`). The function also returns `dim_wise_kld` and `mean_kld` (`:84`) and
-    neither is used; taking `mean_kld` instead would rescale the KL by the latent
-    dimension — 32x — and would still train.
-    """
+    """KL to the standard normal: summed over latent dims, averaged over the batch."""
+    # ACT ref: policy.py:71-84 (kl_divergence, the total_kld branch)
+    # WARNING: `mean_kld` would rescale the KL 32x and still train. why: see DESIGN_NOTES.md#act-kl
     klds = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
     return klds.sum(1).mean(0)
 
 
 def act_loss(pred, target, pad_mask, mu, logvar, kl_weight: float,
              dim_mask=None):
-    """L1 + beta * KL (`reference/act/policy.py:34`).
-
-    The reconstruction term is `train.masked_l1` — the SAME function BC and
-    chunked BC use. One loss across every stage is the constraint the whole
-    ladder rests on; a second implementation here would put an unknown offset
-    inside every cross-model comparison.
-
-    DIVERGENCE, DISCLOSED AND MEASURED: the reference reduces with
-    `(all_l1 * ~is_pad).mean()` (`policy.py:31`), which zeroes padded entries and
-    then divides by the FULL element count, padding and all 14 dims included.
-    Ours divides by contributing elements (real timesteps x 16 trainable dims).
-    Measured 2026-09-21 on 7,628 real samples at K=100: our reconstruction term
-    is **1.4704x** the reference's scale, so preserving the reference's L1:KL
-    balance would need beta' = 14.70 rather than 10. beta = 10 is used here
-    because the overfit-10 gate cannot discriminate between them; the choice is
-    deferred to a validation signal. BOTH numbers are written into run metadata.
-    """
+    """L1 + beta * KL; the reconstruction term is the shared `train.masked_l1`."""
+    # ACT ref: policy.py:34
+    # DIFFERS from ACT: L1 divides by contributing elements, 1.4704x its scale.
+    # why: see DESIGN_NOTES.md#act-loss-reduction
     from g1_model.train import masked_l1
     l1, n = masked_l1(pred, target, pad_mask, dim_mask)
     kl = kl_divergence(mu, logvar)
@@ -750,29 +548,9 @@ def act_loss(pred, target, pad_mask, mu, logvar, kl_weight: float,
 
 # ─── A3: temporal ensembling (INFERENCE ONLY) ─────────────────────────────────
 class TemporalEnsembler:
-    """reference/act/imitate_episodes.py:218-259.
-
-    An INFERENCE mechanism. The policy is queried every tick, so chunks overlap
-    and several predictions exist for the same timestep; they are combined by an
-    exponential weighting over how long ago each was made:
-
-        exp_weights = np.exp(-m * np.arange(n))      imitate_episodes.py:256
-        exp_weights = exp_weights / exp_weights.sum()                    :257
-        raw_action  = (actions_for_curr_step * exp_weights).sum(dim=0)   :259
-
-    `w_0` weights the OLDEST prediction still in the buffer, and "a smaller m
-    means faster incorporation" of new observations (paper §IV-A, p.5, arXiv
-    2304.13705v1): with index 0 the oldest, a smaller m flattens the weights and
-    gives the newer predictions more of the average. (This line previously said
-    the opposite - docs/ACT_AUDIT_REPORT.md T1.) It is OFF by default
-    in the reference — `--temporal_agg` is `store_true` (`:433`) — and when on it
-    sets `query_frequency = 1` (`:193`).
-
-    It touches no parameter and appears nowhere in training. Stage 3 deliberately
-    excluded it so that chunked BC isolated chunking alone; it is built here
-    because it is part of ACT, and whether the final comparison enables it for
-    every rung or none is a decision that must be made once and applied uniformly.
-    """
+    """Inference only: overlapping chunk predictions weighted exp(-m * i), index 0 the OLDEST."""
+    # ACT ref: imitate_episodes.py:218-259
+    # why: see DESIGN_NOTES.md#act-temporal-ensembler
 
     def __init__(self, chunk_size: int, action_dim: int = spec.ACTION_DIM,
                  m: float = TEMPORAL_ENSEMBLE_M):
@@ -789,7 +567,8 @@ class TemporalEnsembler:
 
     @staticmethod
     def weights(n: int, m: float = TEMPORAL_ENSEMBLE_M) -> np.ndarray:
-        """imitate_episodes.py:256-257, exactly. Index 0 is the OLDEST."""
+        """Normalized exp(-m * i); index 0 is the OLDEST."""
+        # ACT ref: imitate_episodes.py:256-257
         w = np.exp(-m * np.arange(n))
         return w / w.sum()
 
