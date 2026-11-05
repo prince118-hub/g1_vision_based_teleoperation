@@ -7927,3 +7927,25 @@ result** (O34 Option B). Only NEW files were added: three tools, a shared module
   frame count == ticks (checked per panel, `frames_match_ticks`), and of the hash match. Found while writing the
   docs: `record_exp_videos.py` cannot share one `--video-root` between two run roots. Its index rebuild looks every
   folder up in its own eval root. `docs/VIDEOS.md` therefore uses one video root per results folder.
+
+## 2026-11-05 — PRs #8, #10, #9 merged; two decisions on human Exp 1/2 (Charles)
+
+- **DECISION: human Exp 1/2 use the 1.3x evaluation-cap rule.** `max_ticks = ceil(1.3 x longest ACCEPTED demo)`
+  (`g1_data/eval_cap.py`), applied with `--max-ticks-from <folder>` on `deploy.py` / `eval_scripted.py`. This settles
+  the method question left open in the Long episodes entry above. Scripted keeps 900.
+- **DECISION: validation-cost reduction is decided AFTER the pilot.** The options in the Long episodes entry stay NOT
+  implemented until the pilot gives real demo lengths to cost them against.
+- **Merged** in the order #8, #10, #9 onto base `2d0a5f7`; only NOTES.md conflicted, all entries kept (scripted check:
+  every line of each side present). `gh` is not logged in here, so these are local merge commits pushed to main, not merges through GitHub.
+- **Two suite failures found on this machine, neither in model code, fixed in `00786ae`:**
+  - `tools/video_common.py` `rel()`: a private copy of `repo_relpath`, refused by the relpath guard test. Now uses the
+    helper, loaded by file (as `analyze_experiments.py`) so the module stays MuJoCo-free. Behaviour unchanged.
+  - `tools/test_train_policy.py` `_norm_text`: argparse on Python 3.10 also wraps before a metavar and before the
+    subcommands' `...`, and the wrap depends on the program name's length. Test helper only; whitespace only.
+- **Suite** `pytest g1_data g1_teleop g1_model tools` on `00786ae`: **520 passed, 2 skipped, 0 failed** (Python 3.10.11,
+  torch 2.11.0+cu126, mujoco 3.6.0, numpy 1.26.4; no package installed or changed). The process exit code is still
+  0xC0000409 after the summary line: the known cuDNN crash at exit (CLAUDE.md §8 2026-09-29), so read the summary line.
+  `test_d19_sensitivity_counts...`, failing in the Long episodes container, passes here.
+- **Regression** `check_memory_design_regression.py --base 2d0a5f7` with `--real` act_lstm_n40_seed0:best.pt,
+  act_n40_seed0:best.pt, act_orig_n40_seed0:ckpt_step0200000.pt, act_lstm_full_n40_seed0:ckpt_step0020000.pt, on
+  `00786ae`: **ALL IDENTICAL**, 14/14 (7 model configs, 3 old-format checkpoints, 4 real checkpoints).
