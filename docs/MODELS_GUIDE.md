@@ -1,6 +1,6 @@
 # Models guide — the five policies: how to read, train and evaluate them
 
-A study guide to the model code. It describes the code as it is (main @ 2d0a5f7) and
+A study guide to the model code. It describes the code as it is and
 changes nothing. `file:line` references are to this repository. The companion documents
 are `docs/ACT_FAITHFULNESS.md` (our ACT against the original, row by row) and
 `docs/ACT_CORRESPONDENCE.md` (the full reference correspondence table and its reasons).
@@ -11,10 +11,10 @@ are `docs/ACT_FAITHFULNESS.md` (our ACT against the original, row by row) and
 
 | thesis name | role | code name (`--model`) | entry module (start reading here) | real class (file:line) | W_o | K | batch | memory carried at deployment |
 |---|---|---|---|---|---|---|---|---|
-| **BC** | headline | `bc` | `g1_model/policies/bc.py` | `BCPolicy` (`g1_model/models.py:146`) | 12 | 1 | 256 | none |
-| **ACT** | headline | `act_orig` | `g1_model/policies/act.py` | `ACTPolicy` (`g1_model/act.py:446`) | 1 | 100 | 8 | none (temporal ensembling only) |
-| **ACT-LSTM** | headline | `act_lstm_full` | `g1_model/policies/act_lstm.py` | `ACTLSTMFullPolicy` (`g1_model/act_memory.py:118`) | 1 + whole episode (LSTM) | 100 | 8 | LSTM `(h, c)`, reset per episode |
-| **ACT-12** | ablation | `act` | `g1_model/policies/act_12.py` | `ACTPolicy` (`g1_model/act.py:446`) | 12 | 100 | 8 | none |
+| **BC** | headline | `bc` | `g1_model/policies/bc.py` | `BCPolicy` (`g1_model/models.py:89`) | 12 | 1 | 256 | none |
+| **ACT** | headline | `act_orig` | `g1_model/policies/act.py` | `ACTPolicy` (`g1_model/act.py:337`) | 1 | 100 | 8 | none (temporal ensembling only) |
+| **ACT-LSTM** | headline | `act_lstm_full` | `g1_model/policies/act_lstm.py` | `ACTLSTMFullPolicy` (`g1_model/act_memory.py:71`) | 1 + whole episode (LSTM) | 100 | 8 | LSTM `(h, c)`, reset per episode |
+| **ACT-12** | ablation | `act` | `g1_model/policies/act_12.py` | `ACTPolicy` (`g1_model/act.py:337`) | 12 | 100 | 8 | none |
 | **ACT-LSTM-12** | ablation | `act_lstm` | `g1_model/policies/act_lstm_12.py` | `ACTPolicy`, `use_lstm=True` | 12 | 100 | 8 | none (the LSTM restarts every call) |
 
 Parameters (counted from the built models): BC 569,366 · ACT 40,227,030 · ACT-LSTM 41,198,806 ·
@@ -45,7 +45,7 @@ has `HEADLINE`, `ABLATION` and `BY_CODE_NAME`.
 original ACT repository, where one script, `imitate_episodes.py`, trains every policy and
 `--policy_class` chooses it (`reference/act/imitate_episodes.py:421`, the branch at `:53-73`,
 `make_policy` at `:121`; the policy classes are in `policy.py`). The name `train_bc.py` is historical — it was written for BC
-in Stage 2 and grew into the one loop the whole ladder shares (`g1_model/train.py:1-40`
+in Stage 2 and grew into the one loop the whole ladder shares (`docs/DESIGN_NOTES.md#train-module`
 explains why there must be exactly one). Launchers, NOTES.md and other tools name it, so it
 is not renamed.
 
@@ -73,7 +73,7 @@ command line, so a run started as `train_policy.py` is invisible to them. When a
 | the model's own config | `train_bc._model_config` (`:113-167`) | `BCConfig` / `ACTConfig` / `ACTFullHistoryConfig`, with the model's own lr, weight decay, grad clip (TR28). `act_orig`/`act_lstm_full` refuse any `--obs-window` but 1 (`:138-148`) |
 | the dataset class | `train_bc._load` (`:98-110`) | `HistoryChunkDataset` for `act_lstm_full`, `ChunkDataset` for the rest |
 | the factory | `train_bc._make_model` (`:258-265`) | `build_act_lstm_full` / `build_act` / `build_bc`, through `train.seeded_build` |
-| the loss | `train.forward_loss` (`g1_model/train.py:222-243`) | a model with `loss_terms` (the ACT family) adds β·KL; BC uses `masked_l1` alone |
+| the loss | `train.forward_loss` (`g1_model/train.py:141-151`) | a model with `loss_terms` (the ACT family) adds β·KL; BC uses `masked_l1` alone |
 
 Everything else — the loop, the optimizer construction, scoring, checkpoint selection, the
 files written — is `g1_model/train.py`, identical for every model.
@@ -89,24 +89,24 @@ files written — is `g1_model/train.py`, identical for every model.
 2. **`g1_data/dataset.py`** — `fit_norm_stats` (`:554`: per-dim mean/std over every tick of the
    TRAINING split; masked dims pinned to mean 0 / std 1), `save_norm_stats` (`:624`),
    `load_norm_stats` (`:680`).
-3. **`g1_model/loader.py`** — `ChunkDataset` (`:160`). One sample per `(episode, tick t)`.
-   `__getitem__` (`:370-404`): the observation is the W_o states **ending** at t, left-padded
+3. **`g1_model/loader.py`** — `ChunkDataset` (`:70`). One sample per `(episode, tick t)`.
+   `__getitem__` (`:238-269`): the observation is the W_o states **ending** at t, left-padded
    with zeros before the episode start; the target is the K actions **starting** at t,
-   right-padded with zeros and marked by `action_mask`. `collate_chunks` (`:429`).
-4. **`g1_model/train.py`** — `seeded_build` (`:145`: seed, THEN construct), `_collate_for`
-   (`:173`), `masked_l1` (`:183-219`), `forward_loss` (`:222-243`), `TrainConfig` (`:377`),
-   `assert_optimizer_source` (`:511`), `make_optimizer` (`:583-594`: AdamW over all
-   parameters), `_DeploymentGuard` (`:739`), `score_deployment` (`:923`), `train` (`:1155`;
-   one optimizer step at `:1449-1454`), `save_checkpoint` (`:1590`), `load_checkpoint`
-   (`:1612`).
+   right-padded with zeros and marked by `action_mask`. `collate_chunks` (`:294`).
+4. **`g1_model/train.py`** — `seeded_build` (`:90`: seed, THEN construct), `_collate_for`
+   (`:106`), `masked_l1` (`:114-138`), `forward_loss` (`:141-151`), `TrainConfig` (`:258`),
+   `assert_optimizer_source` (`:360`), `make_optimizer` (`:418-429`: AdamW over all
+   parameters), `_DeploymentGuard` (`:538`), `score_deployment` (`:718`), `train` (`:891`;
+   one optimizer step at `:1153-1158`), `save_checkpoint` (`:1290`), `load_checkpoint`
+   (`:1311`).
 5. **`tools/train_bc.py`** — `main` (`:765`), `_model_config` (`:113`), `_load` (`:98`),
    `_train_config` (`:242`), `_make_model` (`:258`), `cmd_full`/`cmd_train` (`:509`/`:504`),
    `cmd_overfit10` (`:405`), `_factory_for` (`:650`: the checkpoint loader deploy uses).
-6. **`tools/deploy.py`** — the module docstring (the tick order), `post_process` (`:98`),
-   `CheckpointPolicy` (`:122`; `reset` `:181`, `act` `:187-203`), `deploy_episode` (`:386`),
-   `main` (`:678`).
+6. **`tools/deploy.py`** — the module docstring (the tick order), `post_process` (`:104`),
+   `CheckpointPolicy` (`:128`; `reset` `:187`, `act` `:193-209`), `deploy_episode` (`:392`),
+   `main` (`:709`).
 7. **`tools/eval_scripted.py`** — the docstring (selection rule, Exp 1 / Exp 2), `select`
-   (`:270`), `main` (`:331`).
+   (`:342`), `main` (`:408`).
 
 ### One training step, for every model
 
@@ -123,13 +123,13 @@ loss, recon, n, extras = train.forward_loss(model, obs, action, action_mask, ACT
   - BC:         loss = masked_l1(model(obs), action)
         |
         v
-opt.zero_grad(); loss.backward(); clip_grad_norm_(params, 1.0); AdamW.step()      train.py:1449-1454
+opt.zero_grad(); loss.backward(); clip_grad_norm_(params, 1.0); AdamW.step()      train.py:1153-1158
 every window (step budget) / epoch: score_deployment on the val split
   (eval mode, model(obs) only, z = 0 for ACT, structural leak guard) -> best.pt;
   ckpt_stepNNNNNNN.pt every --checkpoint-every; last.pt; state.pt (resumable)
 ```
 
-`masked_l1` (`train.py:183-219`): the mean of |pred − target| over the INTERSECTION of real
+`masked_l1` (`train.py:114-138`): the mean of |pred − target| over the INTERSECTION of real
 timesteps and the 16 trainable dims, divided by the number of contributing elements, so it
 does not depend on how much padding a batch contains.
 
@@ -160,13 +160,13 @@ obs (B, 12, 48) --flatten--> (B, 576)
    -> view (B, 1, 22)
 ```
 
-**Read, in order:** `g1_model/policies/bc.py` → `g1_model/models.py` module docstring →
-`BCConfig` (`:99-140`) → `BCPolicy.__init__` (`:165-200`) → `BCPolicy.forward` (`:213-226`) →
-`build_bc` (`:244-253`) → `train.forward_loss`, default branch (`train.py:240-243`) →
+**Read, in order:** `g1_model/policies/bc.py` → `g1_model/models.py` module docstring (long form: `docs/DESIGN_NOTES.md#models-provisional`) →
+`BCConfig` (`:48-83`) → `BCPolicy.__init__` (`:96-128`) → `BCPolicy.forward` (`:141-154`) →
+`build_bc` (`:166-175`) → `train.forward_loss`, default branch (`train.py:148-151`) →
 `train.masked_l1`.
 
 **Forward pass.**
-1. Check `obs` is `(B, 12, 48)` — a different window is refused (`:215-223`).
+1. Check `obs` is `(B, 12, 48)` — a different window is refused (`:143-151`).
 2. Flatten to `(B, 576)`.
 3. Two hidden layers of 512 with ReLU; no dropout, no LayerNorm (`BCConfig` defaults).
 4. Linear to `K × 22 = 22`, reshaped to `(B, 1, 22)`: the normalized action for tick t.
@@ -176,15 +176,15 @@ obs (B, 12, 48) --flatten--> (B, 576)
 | setting | value | source |
 |---|---|---|
 | loss | masked L1 (16 dims, real steps) | `train.masked_l1` |
-| optimizer | AdamW, lr 1e-3, weight decay 0 | `BCConfig` (`models.py:122-125`) |
-| grad clip | 1.0 (global norm) | `models.LADDER_GRAD_CLIP` (`:82`) |
+| optimizer | AdamW, lr 1e-3, weight decay 0 | `BCConfig` (`models.py:65-68`) |
+| grad clip | 1.0 (global norm) | `models.LADDER_GRAD_CLIP` (`:31`) |
 | batch | 256 | `--batch 256` |
 | budget | 300 epochs, a checkpoint every 30 | `--epochs 300 --checkpoint-every 30` |
 | selection | task success on 20 selection seeds | `tools/eval_scripted.py` |
 | overfit-10 gate | dropout 0, weight decay 0 (already the defaults) | `train_bc._model_config` (`:149-151`) |
 
 **Deployment.** Queried every tick; `K = 1`, so there is nothing to ensemble
-(`deploy.py:167`, `ensemble = ... and K > 1`): the action is `pred[0, 0]` (`:199-200`).
+(`deploy.py:173`, `ensemble = ... and K > 1`): the action is `pred[0, 0]` (`:205-206`).
 
 **Train** (Run A, 40 episodes, seed 0; seeds 1–2 and the 160-episode run differ only in
 `--seed`, `--splits`, `--norm` and the folder):
@@ -224,31 +224,31 @@ python tools/eval_scripted.py --lock-rule v3 --allow-lock-rule-mismatch --runs b
      -> action_head Linear(512, 22) -> (B, 100, 22)
 ```
 
-**Read, in order:** `g1_model/policies/act.py` → `g1_model/act.py` module docstring (`:1-54`)
-→ reference constants (`:70-152`) → `ACTConfig` (`:348-442`) → `ACTPolicy` class docstring
-and `__init__` (`:446-561`) → `_reset_parameters` (`:567-584`) → `forward` (`:656-689`) →
-`encode` (`:587-617`) → `reparametrize` (`:189-197`) → `_decode` (`:630-654`) →
-`_EncoderLayer`, `_Encoder`, `_DecoderLayer`, `_Decoder` (`:201-344`) → `loss_terms`
-(`:693-709`) → `act_loss` (`:726-748`) → `kl_divergence` (`:713-723`) → `TemporalEnsembler`
-(`:752-811`) → `build_act` (`:814-822`) → `g1_model/act_memory.py` (`ACT_ORIG`,
-`ORIGINAL_OBS_WINDOW`, `:58-66`) → `tools/train_bc.py:138-148` (how `act_orig` is configured).
+**Read, in order:** `g1_model/policies/act.py` → `g1_model/act.py` module docstring (long form: `docs/DESIGN_NOTES.md#act-module`)
+→ reference constants (`:21-75`) → `ACTConfig` (`:261-333`) → `ACTPolicy` class docstring
+and `__init__` (`:337-414`) → `_reset_parameters` (`:420-427`) → `forward` (`:485-514`) →
+`encode` (`:430-455`) → `reparametrize` (`:107-113`) → `_decode` (`:464-483`) →
+`_EncoderLayer`, `_Encoder`, `_DecoderLayer`, `_Decoder` (`:118-257`) → `loss_terms`
+(`:518-525`) → `act_loss` (`:537-546`) → `kl_divergence` (`:529-534`) → `TemporalEnsembler`
+(`:550-590`) → `build_act` (`:593-601`) → `g1_model/act_memory.py` (`ACT_ORIG`,
+`ORIGINAL_OBS_WINDOW`, `:17-25`) → `tools/train_bc.py:138-148` (how `act_orig` is configured).
 
 **Forward pass — training** (`model(obs, actions=chunk, action_mask=mask)`, via `loss_terms`):
-1. Shape checks: `obs (B, 1, 48)`, the chunk is K = 100 (`:666-681`).
-2. `encode` (`:587-617`): embed `[CLS]`, the flattened state and the 100 actions to 512 each;
+1. Shape checks: `obs (B, 1, 48)`, the chunk is K = 100 (`:490-506`).
+2. `encode` (`:430-455`): embed `[CLS]`, the flattened state and the 100 actions to 512 each;
    concatenate to 102 tokens; add the fixed sinusoidal table; mask padded actions (CLS and the
    state are never masked); 4 encoder layers; take the CLS output; `latent_proj` → `mu`,
    `logvar`.
-3. `z = reparametrize(mu, logvar)` (`:189-197`).
-4. `_decode` (`:630-654`): `latent_out_proj(z)` and `input_proj_robot_state(state)` are the two
+3. `z = reparametrize(mu, logvar)` (`:107-113`).
+4. `_decode` (`:464-483`): `latent_out_proj(z)` and `input_proj_robot_state(state)` are the two
    tokens, with the learned 2-entry position embedding; 4 encoder layers; one decoder layer with
-   100 learned queries; read `hs[0]` (the reference reads index 0 too, `:139`).
+   100 learned queries; read `hs[0]` (the reference reads index 0 too, `:65`).
 5. `action_head` → `(B, 100, 22)`.
-6. Loss (`act_loss`, `:726-748`): `masked_l1(pred, chunk) + 10 * KL`, KL summed over the 32
+6. Loss (`act_loss`, `:537-546`): `masked_l1(pred, chunk) + 10 * KL`, KL summed over the 32
    latent dims and averaged over the batch.
 
 **Forward pass — inference** (`model(obs)`): steps 1, 4, 5 with **z = 0**; the CVAE encoder is
-never called (`:674-677`; `train._DeploymentGuard` verifies both at every scoring pass).
+never called (`:498-502`; `train._DeploymentGuard` verifies both at every scoring pass).
 
 **Training settings** (thesis runs `act_orig_n40_seed*`, `tools/train_memory_design_n40.ps1`):
 
@@ -266,7 +266,7 @@ never called (`:674-677`; `train._DeploymentGuard` verifies both at every scorin
 | overfit-10 gate | weight decay 0; dropout stays 0.1 (architecture) | `train_bc._model_config` |
 
 **Deployment.** Queried **every tick**. Each `(100, 22)` chunk enters a `TemporalEnsembler`
-(`act.py:752-811`, built in `deploy.py:174-178`): the action for tick t averages every buffered
+(`act.py:550-590`, built in `deploy.py:180-184`): the action for tick t averages every buffered
 chunk's prediction for t (at most 100), weighted `w_i = exp(-0.01 · i)` with `i = 0` the
 **oldest** prediction, normalized to sum 1 (the reference's own formula,
 `imitate_episodes.py:255-259`). The buffer is reset per episode. No memory otherwise.
@@ -306,14 +306,14 @@ ACT (section 4) plus one branch. Everything not drawn below is section 4's diagr
 ```
 
 **Read, in order:** `g1_model/policies/act_lstm.py` → `g1_model/act_memory.py` module
-docstring (`:1-46`) → `ACTFullHistoryConfig` (`:89-115`) → `ACTLSTMFullPolicy` (`:118-147`) →
-`_lstm_token` (`:150-155`) → `read_history` (`:157-188`) → `step` (`:191-204`) →
-`build_act_lstm_full` (`:207-220`) → `g1_model/act.py`: the LSTM block of `__init__`
-(`:553-561`) and the third token in `_decode` (`:644-647`) → `g1_model/history.py`:
-`HistoryObs` (`:75`), `CarriedObs` (`:120`), `collate_history` (`:149`),
-`HistoryChunkDataset` (`:169`; `score_batch_size = 32`) → `train._collate_for`
-(`train.py:173`) → `train_bc._load` (`:98-110`) → `deploy.CheckpointPolicy.reset`/`act`
-(`deploy.py:181-203`, the `self.recurrent` branch).
+docstring (long form: `docs/DESIGN_NOTES.md#act-memory-pair`) → `ACTFullHistoryConfig` (`:47-68`) → `ACTLSTMFullPolicy` (`:71-97`) →
+`_lstm_token` (`:100-105`) → `read_history` (`:107-124`) → `step` (`:127-138`) →
+`build_act_lstm_full` (`:141-154`) → `g1_model/act.py`: the LSTM block of `__init__`
+(`:405-414`) and the third token in `_decode` (`:473-476`) → `g1_model/history.py`:
+`HistoryObs` (`:41`), `CarriedObs` (`:76`), `collate_history` (`:96`),
+`HistoryChunkDataset` (`:113`; `score_batch_size = 32`) → `train._collate_for`
+(`train.py:106`) → `train_bc._load` (`:98-110`) → `deploy.CheckpointPolicy.reset`/`act`
+(`deploy.py:187-209`, the `self.recurrent` branch).
 
 **Forward pass — training and scoring** (`model(HistoryObs, actions, mask)`):
 1. The batch's `obs` is a `HistoryObs` (`collate_history`): `current (B, 1, 48)`,
@@ -326,9 +326,9 @@ docstring (`:1-46`) → `ACTFullHistoryConfig` (`:89-115`) → `ACTLSTMFullPolic
    index `length − 1` (causal: padding after it cannot reach it).
 4. Same CVAE, decoder, head and loss as ACT.
 
-A plain tensor is refused (`act_memory.py:140-147`): it has no history.
+A plain tensor is refused (`act_memory.py:90-97`): it has no history.
 
-**Forward pass — deployment** (`model.step(obs (B, 1, 48), (h, c) or None)`, `:191-204`):
+**Forward pass — deployment** (`model.step(obs (B, 1, 48), (h, c) or None)`, `:127-138`):
 1. Advance the LSTM **one tick** from the carried `(h, c)` (None at tick 0 = zeros).
 2. Wrap the current state and the new last-layer hidden state in a `CarriedObs`.
 3. Run the policy (z = 0) → `(B, 100, 22)`; return it with the new `(h, c)`.
@@ -365,10 +365,10 @@ python tools/eval_scripted.py --run-root runs/scripted_v3_memory_design --lock-r
 Section 4 with **one** change: the observation is the last 12 states, `(B, 12, 48)`, flattened
 to 576 numbers wherever ACT reads "the state" — `input_proj_robot_state` is `Linear(576, 512)`
 and the CVAE encoder's `encoder_joint_proj` is `Linear(576, 512)`. Early ticks of an episode
-see zeros in the window (training `loader.py:376-382`, deployment `deploy.py:181-192`).
+see zeros in the window (training `loader.py:244-250`, deployment `deploy.py:187-198`).
 
 **Read:** `g1_model/policies/act_12.py`, then section 4 with `obs_window = 12`
-(`ACTConfig.obs_window`, `act.py:363`; used at `:509-510` and `:528-529`).
+(`ACTConfig.obs_window`, `act.py:269`; used at `:365-366` and `:382-383`).
 
 **Settings:** as ACT; W_o = 12 (`--obs-window 12`). **Deployment:** as ACT, rolling 12-state
 window.
@@ -397,15 +397,15 @@ nothing is carried between calls in training or deployment:
 
 ```
   window (B, 12, 48) -> nn.LSTM(48, 256, 2 layers, dropout 0.3 between) from zero (h, c)
-     -> h_n[-1] (B, 256) -> lstm_proj Linear(256, 512) -> token 2   (act.py:620-628)
+     -> h_n[-1] (B, 256) -> lstm_proj Linear(256, 512) -> token 2   (act.py:458-462)
 ```
 
 It is the SAME class as ACT (`ACTPolicy`, `use_lstm=True`); the configs of ACT-12 and
 ACT-LSTM-12 differ in `use_lstm` alone.
 
-**Read:** `g1_model/policies/act_lstm_12.py` → `act.py` `ACTPolicy` class docstring
-(`:460-476`) → LSTM block of `__init__` (`:553-561`) → `_lstm_token` (`:620-628`) → `_decode`
-(`:644-647`).
+**Read:** `g1_model/policies/act_lstm_12.py` → `docs/DESIGN_NOTES.md#act-policy-lstm` (moved from the `ACTPolicy` class docstring) →
+`g1_model/act.py`: LSTM block of `__init__` (`:405-414`) → `_lstm_token` (`:458-462`) → `_decode`
+(`:473-476`).
 
 **Settings and deployment:** as ACT-12. `CARRIES_MEMORY` is not set, so deploy calls
 `model(window)` every tick.

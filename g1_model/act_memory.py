@@ -1,48 +1,7 @@
-"""The memory-design pair: act_orig and act_lstm_full. Opt-in, behind new model names.
+"""The memory-design pair: act_orig (ACT, W_o = 1) and act_lstm_full (+ whole-episode LSTM).
 
-    act_orig       ACT with the ORIGINAL PAPER'S INPUT: the current observation
-                   only, W_o = 1, no history (`reference/act/utils.py:37`,
-                   `detr_vae.py:80`). Not a new model: it is `ACTPolicy` from
-                   `ACTConfig(obs_window=1)`, which act.py has always accepted
-                   as "1 reproduces the reference's observation". Everything
-                   else is ACT's: K = 100, beta 10, lr 1e-5, batch 8, temporal
-                   ensembling at deployment. The NAME exists so a run states
-                   which design it is, in its metadata and its folder.
-
-    act_lstm_full  act_orig PLUS an LSTM reading the WHOLE episode so far, tick
-                   0 to the current tick, variable length. Its last-layer final
-                   hidden state becomes the third encoder token, exactly where
-                   ACT-LSTM puts its window summary: [latent, proprio, lstm]
-                   with `lstm_pos_embed`. Same LSTM (2 layers, hidden 256,
-                   dropout 0.3 between layers), same projection, same
-                   construction order.
-
-THE PAIR DIFFERS IN ONE THING, AS EVERY RUNG OF THE LADDER DOES
----------------------------------------------------------------
-`ACTLSTMFullPolicy` IS `ACTPolicy` with `use_lstm=True` at W_o = 1. Only the
-LSTM's INPUT is overridden (`_lstm_token`): ACT-LSTM reads its W_o window from
-zero memory, act_lstm_full reads the episode history from zero memory. The
-forward pass, the CVAE encoder (which sees the current state and never the
-token), the decoder, the loss and the guard declarations are ACT-LSTM's own
-code, not a copy. The LSTM is built after every ACT module, so act_lstm_full
-from a seed starts with every act_orig parameter bit-identical, and the two
-configs differ in `use_lstm` alone (test_act_memory).
-
-TRAINING AND DEPLOYMENT READ THE SAME HISTORY TWO WAYS
-------------------------------------------------------
-Training (and the gate, and validation) samples a random (episode, t) like every
-other model, and the LSTM re-reads states 0..t from zero memory: packed
-variable-length batches (`g1_model/history.py`). No state is carried, so the
-model is still a pure function of (weights, observation) and
-`train._DeploymentGuard` applies unchanged. Deployment cannot afford to re-read
-up to 900 ticks every tick, so `step` advances the LSTM ONE tick from the
-carried (h, c) and `tools/deploy.py` keeps that (h, c) - in the policy wrapper,
-never on the model - and resets it per episode. The two agree up to
-floating-point rounding (test_act_memory, on whole episodes).
-
-DISCLOSED: in deployment an episode may run to 900 ticks (`deploy.MAX_TICKS`),
-longer than any training episode (scripted_v3: 548-692). Past the longest
-training episode the LSTM reads a history length it never saw in training.
+Only the LSTM's input differs from ACT-LSTM; training re-reads 0..t, deployment carries (h, c).
+why: see DESIGN_NOTES.md#act-memory-pair
 """
 from __future__ import annotations
 
@@ -57,20 +16,19 @@ from g1_model.history import CarriedObs, HistoryObs
 
 #: The model names, as `tools/train_bc.py --model` takes them and as every run's
 #: metadata (`config.notes.model`) records them.
+# why: see DESIGN_NOTES.md#act-memory-models
 ACT_ORIG = "act_orig"
 ACT_LSTM_FULL = "act_lstm_full"
 MEMORY_DESIGN_MODELS = (ACT_ORIG, ACT_LSTM_FULL)
 
-#: The original paper's observation: ONE timestep (`reference/act/utils.py:37`,
-#: `detr_vae.py:80`; correspondence row 53). Both models are defined by it.
+# ACT ref: utils.py:37, detr/models/detr_vae.py:80: the original observation is ONE timestep.
 ORIGINAL_OBS_WINDOW: int = 1
 
 #: Written into act_lstm_full's `hparams` (and so into every checkpoint's
 #: `model_kwargs`), so a checkpoint states what its LSTM reads.
 LSTM_INPUT = "episode_history"
-#: Ticks per LSTM call when `read_history` re-reads an episode (2026-10-26).
-#: One fixed shape keeps the CUDA allocator from fragmenting; any value gives
-#: the same recurrence. 64 ticks = 2.56 s at 25 Hz.
+#: Ticks per LSTM call in `read_history`: one fixed shape keeps the CUDA allocator from fragmenting.
+# why: see DESIGN_NOTES.md#act-memory-read-history
 READ_SEGMENT = 64
 LSTM_INPUT_DESCRIPTION = (
     "the WHOLE episode so far: normalized states from tick 0 to the current tick, "
@@ -88,13 +46,8 @@ INPUT_DESCRIPTION = {
 
 @dataclass(frozen=True)
 class ACTFullHistoryConfig(ACTConfig):
-    """act_lstm_full's config: an `ACTConfig` with `use_lstm=True` at W_o = 1.
-
-    No field is added, so `asdict` has exactly ACTConfig's keys and an
-    act_orig config and an act_lstm_full config differ in `use_lstm` alone. The
-    TYPE is what selects the full-history LSTM input; `__post_init__` refuses
-    anything that is not W_o = 1 with the LSTM on.
-    """
+    """act_lstm_full's config: an `ACTConfig` with `use_lstm=True` at W_o = 1; adds no field."""
+    # why: see DESIGN_NOTES.md#act-memory-config
 
     use_lstm: bool = True
 
@@ -118,16 +71,13 @@ class ACTFullHistoryConfig(ACTConfig):
 class ACTLSTMFullPolicy(ACTPolicy):
     """ACT-LSTM at W_o = 1 whose LSTM reads the whole episode history.
 
-    Inputs:
-      `HistoryObs`  training and scoring: the current window plus the padded
-                    history 0..t and its lengths (`g1_model/history.py`)
-      `CarriedObs`  deployment, built by `step` from the carried LSTM state
-    A plain tensor is refused: it has no history, and reading its one step as
-    the whole episode would silently be ACT-LSTM at W_o = 1.
+    WARNING: a plain tensor is refused; it has no history.
+    why: see DESIGN_NOTES.md#act-memory-policy
     """
 
     #: Read by `tools/deploy.py`: carry the LSTM's (h, c) tick by tick through
     #: `step`, reset per episode. Every other model is a function of the window.
+    # why: see DESIGN_NOTES.md#act-memory-two-reads
     CARRIES_MEMORY = True
 
     def __init__(self, cfg: ACTFullHistoryConfig):
@@ -155,23 +105,9 @@ class ACTLSTMFullPolicy(ACTPolicy):
         return self.lstm_proj(self.read_history(obs.history, obs.lengths))
 
     def read_history(self, history: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
-        """(B, T, 48) padded histories, (B,) lengths -> (B, H) last-layer hidden
-        state after each sample's LAST REAL step, from zero memory.
-
-        SEGMENTED (2026-10-26): the padded batch is zero-padded on to a multiple
-        of `READ_SEGMENT` ticks and read in segments of exactly that length, (h, c)
-        carried from one segment to the next - the same recurrence as one call
-        and as deployment's tick-by-tick `step` (equal to float rounding,
-        tested) - stopping after the segment that holds the longest sample's last
-        real tick. Each sample's last-layer output at index length - 1 (its hidden
-        state after its last real tick) is taken from the segment holding it. An
-        LSTM is causal: padding after that tick cannot reach it or its gradient
-        (tested to the bit). Why segments: every LSTM call has ONE shape, (B, 64,
-        48), instead of one per padded batch length - the varying shapes
-        fragmented the 4 GB laptop GPU until training OOMed or cuDNN aborted
-        (seeds 0-2, 25k-124k steps, NOTES 2026-10-26) - and a scoring pass peaks
-        at 0.33 GB instead of 0.88 GB (LSTM, batch 256, 692 ticks).
-        History: packed until 2026-10-25, one unpacked call on 2026-10-25."""
+        """(B, T, 48) padded, (B,) lengths -> (B, H) hidden state after each last real step."""
+        # Reads READ_SEGMENT ticks at a time, carrying (h, c).
+        # why: see DESIGN_NOTES.md#act-memory-read-history
         B, T = history.shape[0], history.shape[1]
         idx = (torch.as_tensor(lengths, dtype=torch.int64) - 1).to(history.device)
         S = READ_SEGMENT
@@ -190,12 +126,10 @@ class ACTLSTMFullPolicy(ACTPolicy):
     # ---- deployment -------------------------------------------------------
     def step(self, obs: torch.Tensor,
              memory: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
-        """One deployed tick: ((B, 1, 48) current window, carried (h, c) or None
-        at tick 0) -> ((B, K, 22) chunk, (h, c) after this tick).
-
-        Advances the LSTM one step from `memory` and runs the policy on the new
-        last-layer hidden state. Pure: the caller keeps the returned state and
-        passes it back next tick; nothing is stored on the model."""
+        """One deployed tick: ((B, 1, 48), carried (h, c) or None) -> ((B, K, 22), new (h, c))."""
+        # Pure: the caller keeps the state. why: see DESIGN_NOTES.md#act-memory-step
+        # WARNING: deployment can outrun every training episode.
+        # why: see DESIGN_NOTES.md#act-memory-disclosed
         if obs.dim() != 3 or tuple(obs.shape[1:]) != (ORIGINAL_OBS_WINDOW,
                                                       self.cfg.state_dim):
             raise ValueError("step takes the (B, 1, %d) current window, got %s"
