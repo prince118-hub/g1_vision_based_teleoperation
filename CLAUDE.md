@@ -21,7 +21,7 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 ## 2. CURRENT BLOCKER
 
 **None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, merged, fake-tested): `docs/LIVE_RECORDING_CHECKLIST.md` steps 2–5 BLOCKED - no ZED available (2026-10-24). Operator a/d verdict, floor guide, `walk_test.py` practice: `docs/OPERATOR_GUIDE.md` (fake-tested, `NOTES.md` operator tools).
-scripted_v3 (rule v2) survey 14/300; **lock rule v3 is the default** (ACT 2→5, LSTM 3→5 /20). FREEZE 2026-10-23: no walk-in fix, no release gate, β 10 (`NOTES.md`). g1-spec-1.2.0 refuses 1.1.0. ONE heavy process at a time. **Exp 1/2 DONE** (final set, thesis names): `runs/scripted_v3/analysis_final/report.md` (`tools/make_final_report.py`); `NOTES.md` 2026-11-05. Videos: `tools/record_exp_videos.py`, not run. **Memory design** (`act_orig`, `act_lstm_full`, trained and evaluated; launcher `tools/train_memory_design_n40.ps1`): `NOTES.md` 2026-10-24f.
+scripted_v3 (rule v2) survey 14/300; **lock rule v3 is the default** (ACT 2→5, LSTM 3→5 /20). FREEZE 2026-10-23: no walk-in fix, no release gate, β 10 (`NOTES.md`). g1-spec-1.2.0 refuses 1.1.0. ONE heavy process at a time. **Exp 1/2 DONE** (final set, thesis names): `runs/scripted_v3/analysis_final/report.md` (`tools/make_final_report.py`); `NOTES.md` 2026-11-05. Videos DONE, 352/352 hashes match: `D:\thesis_videos\scripted_final\index.csv` (`tools/render_final_videos.py`). **Memory design** (`act_orig`, `act_lstm_full`, trained and evaluated; launcher `tools/train_memory_design_n40.ps1`): `NOTES.md` 2026-10-24f.
 
 ## 3. Full pipeline (end to end)
 
