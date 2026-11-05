@@ -7,10 +7,16 @@
 READ-ONLY on the evaluation. Input is the eval folder(s) eval_scripted.py writes,
 <eval>/<run>/exp1.jsonl and exp2.jsonl (one tools/deploy.py record per episode)
 plus <eval>/<run>/selection.json when present; run folders are named
-<model>_<size>_seed<k> (bc_160_seed0, act_lstm_n40_seed2, ...). Nothing is
+<model>_<size>_seed<k> (bc_160_seed0, act_lstm_full_n40_seed2, ...). Nothing is
 re-run, nothing in the eval folder is written. Needs numpy, scipy, pandas,
 matplotlib - NOT mujoco or torch (the box-spawn sampler is mirrored below and
 checked against g1_teleop/box_reset.py by the tests where mujoco exists).
+
+THESIS NAMES (CLAUDE.md section 7 D8). Every table, figure and report uses them:
+  act_orig = ACT, act_lstm_full = ACT-LSTM, act = ACT-12, act_lstm = ACT-LSTM-12, bc = BC.
+The code name `bc` covers two run sets, so for BC the run folder decides: D8's BC is batch 256
+(bc_b256_*); the batch-8 runs (bc_*) read "BC (batch 8)". tools/make_final_report.py builds the
+thesis's own report from these functions.
 
 OUTPUT: one folder (--out) with
   report.md                        everything below, labelled (model, data size,
@@ -43,10 +49,12 @@ STATISTICAL CHOICES (stated in the report too)
     the samples are independent); SE_seeds = SD of the per-seed gaps / sqrt(k)
     when k >= 2 seeds.
   * Fisher's exact test, two-sided, on the pooled 2x2 success table for each
-    model pair, within one experiment and one data size; Holm-adjusted over
-    the three pairs of that family.
-  * Kruskal-Wallis over the models, then pairwise two-sided Mann-Whitney U,
-    Holm-adjusted over the pairs, per experiment, data size and metric.
+    model pair (episodes treated as independent), within one experiment, one
+    data size and one family; Holm-adjusted over the pairs of that family.
+    Families: headline (BC, ACT, ACT-LSTM) and ablation (BC (batch 8), ACT-12,
+    ACT-LSTM-12).
+  * Kruskal-Wallis over a family's models, then pairwise two-sided Mann-Whitney U,
+    Holm-adjusted over the pairs, per family, experiment, data size and metric.
     Grasp proximity = palm_box_min_m (the FARTHER palm's closest approach to
     the box before the weld; the weld gate needs both within 0.16 m); final
     distance = final_box_goal_m (= success.py's placement error). Episodes
@@ -85,18 +93,25 @@ DEFAULT_EVAL = os.path.join(ROOT, "runs", "scripted_v3", "eval")
 DEFAULT_SPLITS = (("160", os.path.join(ROOT, "data", "processed", "splits_scripted_v3.json")),
                   ("n40", os.path.join(ROOT, "data", "processed", "splits_scripted_v3_n40.json")))
 
-MODELS = ("bc", "act", "act_lstm")
-#: CONTROL runs (review M3, 2026-10-25): BC at its OWN default batch 256 instead
-#: of the ladder's batch 8. Reported in the per-model tables and against its base
-#: model in `control_comparison`, but never inside the three-model pairwise tests,
-#: so those tests and their Holm families are exactly what they were.
-CONTROLS = {"bc_b256": "bc"}
-MODEL_LABEL = {"bc": "BC", "act": "ACT", "act_lstm": "ACT-LSTM", "bc_b256": "BC (b256)"}
+#: Thesis name of each code name (`tools/train_bc.py --model`), CLAUDE.md section 7 D8.
+THESIS_NAME = {"act_orig": "ACT", "act_lstm_full": "ACT-LSTM", "act": "ACT-12",
+               "act_lstm": "ACT-LSTM-12", "bc": "BC"}
+#: Thesis name of each run-folder prefix. Only BC differs from the code name: D8's BC is
+#: batch 256 (`bc_b256_*`), and the batch-8 runs (`bc_*`) must not share its name.
+RUN_NAME = dict(THESIS_NAME, bc_b256="BC", bc="BC (batch 8)")
+#: The two sets of models tested pairwise, each its own Holm family.
+HEADLINE = ("BC", "ACT", "ACT-LSTM")
+ABLATION = ("BC (batch 8)", "ACT-12", "ACT-LSTM-12")
+FAMILIES = (("headline", HEADLINE), ("ablation", ABLATION))
+MODELS = HEADLINE + ("ACT-12", "ACT-LSTM-12", "BC (batch 8)")
+#: BC at batch 256 against BC at batch 8 (review M3, 2026-10-25), in `control_comparison`:
+#: {compared model: its base}.
+CONTROLS = {"BC": "BC (batch 8)"}
 EXPS = ("exp1", "exp2")
 EXP_LABEL = {"exp1": "Exp 1 (in-distribution)", "exp2": "Exp 2 (held-out patch)"}
 STAGES = ("grasp", "lift", "transport", "place")
 FAIL_ORDER = ("WALK_IN", "GRASP", "LIFT", "TRANSPORT", "PLACE", "fell", "other")
-RUN_RE = re.compile(r"^(?P<model>act_lstm|act|bc_b256|bc)_(?P<size>n?\d+)_seed(?P<seed>\d+)$")
+RUN_RE = re.compile(r"^(?P<model>act_lstm_full|act_orig|act_lstm|act|bc_b256|bc)_(?P<size>n?\d+)_seed(?P<seed>\d+)$")
 GRASP_GATE_M = 0.16            # g1_teleop/grasp.py palm radius (deploy.py's docstring)
 THRESHOLDS_M = (0.05, 0.10)
 Z95 = 1.959963984540054
@@ -171,7 +186,7 @@ def parse_run(name: str) -> dict:
     if not m:
         return dict(model=None, size=None, train_seed=None)
     size = m.group("size")
-    return dict(model=m.group("model"), size=size, train_seed=int(m.group("seed")))
+    return dict(model=RUN_NAME[m.group("model")], size=size, train_seed=int(m.group("seed")))
 
 
 def size_n(size: Optional[str]) -> Optional[int]:
@@ -302,7 +317,8 @@ def load(roots: Sequence[str]):
         info = parse_run(name)
         sel_path = os.path.join(d, "selection.json")
         sel = json.load(open(sel_path, encoding="utf-8")) if os.path.exists(sel_path) else {}
-        run_row = dict(run=name, path=repo_relpath(d),
+        match = RUN_RE.match(name)
+        run_row = dict(run=name, path=repo_relpath(d), code_name=match.group("model") if match else None,
                        **info, size_n=size_n(info["size"]), chosen_ckpt=sel.get("chosen"),
                        selection_success=(sel.get("chosen_tally") or {}).get("success"),
                        selection_n=(sel.get("chosen_tally") or {}).get("n"))
@@ -315,7 +331,7 @@ def load(roots: Sequence[str]):
             run_row["%s_n" % exp] = len(rows)
             for r in rows:
                 h = r.get("header") or {}
-                model = info["model"] or h.get("kind")
+                model = info["model"] or THESIS_NAME.get(h.get("kind"), h.get("kind"))
                 ck = h.get("ckpt") or {}
                 box = r.get("box_xy") or [float("nan"), float("nan")]
                 eps.append(dict(
@@ -343,7 +359,7 @@ def load(roots: Sequence[str]):
             run_row.setdefault("train_lock_rule", hdr.get("training_data_lock_rule"))
             run_row.setdefault("ckpt", (hdr.get("ckpt") or {}).get("file"))
             if info["model"] is None:
-                run_row["model"] = hdr.get("kind")
+                run_row["model"] = THESIS_NAME.get(hdr.get("kind"), hdr.get("kind"))
         runs.append(run_row)
     cols = ["run", "model", "size", "size_n", "train_seed", "exp", "seed", "success", *STAGES,
             "fail_reason", "phase_reached", "box_x", "box_y", "heldout", "palm_box_min_m",
@@ -359,7 +375,7 @@ def load(roots: Sequence[str]):
 
 def _order(df, col="model"):
     import pandas as pd
-    key = {m: i for i, m in enumerate(MODELS + tuple(CONTROLS))}
+    key = {m: i for i, m in enumerate(MODELS)}
     df = df.copy()
     df["_o"] = df[col].map(lambda m: key.get(m, 99))
     sort = ["_o"] + [c for c in ("size_n", "train_seed", "exp") if c in df.columns]
@@ -368,7 +384,7 @@ def _order(df, col="model"):
 
 
 def label(model, size) -> str:
-    return "%s-%s" % (MODEL_LABEL.get(model, str(model)), size if size else "?")
+    return "%s (%s)" % (model, size if size else "?")
 
 
 # ─── tables ──────────────────────────────────────────────────────────────────
@@ -466,19 +482,20 @@ def fisher_table(E):
     import pandas as pd
     rows = []
     for (size, exp), g in E.groupby(["size", "exp"], dropna=False):
-        present = [m for m in MODELS if m in set(g.model)]
-        fam = []
-        for a, b in combinations(present, 2):
-            ga, gb = g[g.model == a], g[g.model == b]
-            k1, n1, k2, n2 = int(ga.success.sum()), len(ga), int(gb.success.sum()), len(gb)
-            orr, p = fisher(k1, n1, k2, n2)
-            fam.append(dict(size=size, exp=exp, model_a=a, model_b=b, a_successes=k1, a_n=n1,
-                            b_successes=k2, b_n=n2, a_rate=k1 / n1, b_rate=k2 / n2,
-                            odds_ratio=orr, p=p))
-        for r, adj in zip(fam, holm([r["p"] for r in fam])):
-            r["p_holm"] = adj
-        rows += fam
-    return pd.DataFrame(rows, columns=["size", "exp", "model_a", "model_b", "a_successes", "a_n",
+        for family, members in FAMILIES:
+            present = [m for m in members if m in set(g.model)]
+            fam = []
+            for a, b in combinations(present, 2):
+                ga, gb = g[g.model == a], g[g.model == b]
+                k1, n1, k2, n2 = int(ga.success.sum()), len(ga), int(gb.success.sum()), len(gb)
+                orr, p = fisher(k1, n1, k2, n2)
+                fam.append(dict(family=family, size=size, exp=exp, model_a=a, model_b=b, a_successes=k1, a_n=n1,
+                                b_successes=k2, b_n=n2, a_rate=k1 / n1, b_rate=k2 / n2,
+                                odds_ratio=orr, p=p))
+            for r, adj in zip(fam, holm([r["p"] for r in fam])):
+                r["p_holm"] = adj
+            rows += fam
+    return pd.DataFrame(rows, columns=["family", "size", "exp", "model_a", "model_b", "a_successes", "a_n",
                                        "b_successes", "b_n", "a_rate", "b_rate", "odds_ratio",
                                        "p", "p_holm"])
 
@@ -488,44 +505,45 @@ DIST_METRICS = (("palm_box_min_m", "grasp proximity (farther palm to box, before
 
 
 def distance_tests(E):
-    """Kruskal-Wallis over the models present, then pairwise Mann-Whitney U."""
+    """Per family: Kruskal-Wallis over the models present, then pairwise Mann-Whitney U."""
     import pandas as pd
     from scipy.stats import kruskal, mannwhitneyu
     rows = []
     for metric, what in DIST_METRICS:
         for (size, exp), g in E.groupby(["size", "exp"], dropna=False):
-            present = [m for m in MODELS if m in set(g.model)]
-            samples = {m: g.loc[g.model == m, metric].dropna().to_numpy(float) for m in present}
-            dropped = {m: int(g.loc[g.model == m, metric].isna().sum()) for m in present}
-            usable = [m for m in present if len(samples[m])]
-            base = dict(metric=metric, size=size, exp=exp)
-            if len(present) >= 2:
-                # Reported even when fewer than two models HAVE the field, so the
-                # dropped counts (older deploy records) are visible, with p blank.
-                H = pk = float("nan")
-                if len(usable) >= 2:
-                    try:
-                        H, pk = kruskal(*[samples[m] for m in usable])
-                    except ValueError:                # all values identical
-                        pass
-                rows.append(dict(base, test="kruskal-wallis", models=",".join(present),
-                                 stat=float(H), p=float(pk), p_holm=float("nan"),
-                                 n=",".join(str(len(samples[m])) for m in present),
-                                 dropped=",".join(str(dropped[m]) for m in present),
-                                 median=",".join("%.4f" % np.median(samples[m]) if len(samples[m])
-                                                 else "n/a" for m in present)))
-            pairs = []
-            for a, b in combinations(usable, 2):
-                U, pu = mannwhitneyu(samples[a], samples[b], alternative="two-sided")
-                pairs.append(dict(base, test="mann-whitney-u", models="%s,%s" % (a, b),
-                                  stat=float(U), p=float(pu),
-                                  n="%d,%d" % (len(samples[a]), len(samples[b])),
-                                  dropped="%d,%d" % (dropped[a], dropped[b]),
-                                  median="%.4f,%.4f" % (np.median(samples[a]), np.median(samples[b]))))
-            for r, adj in zip(pairs, holm([r["p"] for r in pairs])):
-                r["p_holm"] = adj
-            rows += pairs
-    return pd.DataFrame(rows, columns=["metric", "size", "exp", "test", "models", "stat", "p",
+            for family, members in FAMILIES:
+                present = [m for m in members if m in set(g.model)]
+                samples = {m: g.loc[g.model == m, metric].dropna().to_numpy(float) for m in present}
+                dropped = {m: int(g.loc[g.model == m, metric].isna().sum()) for m in present}
+                usable = [m for m in present if len(samples[m])]
+                base = dict(family=family, metric=metric, size=size, exp=exp)
+                if len(present) >= 2:
+                    # Reported even when fewer than two models HAVE the field, so the
+                    # dropped counts (older deploy records) are visible, with p blank.
+                    H = pk = float("nan")
+                    if len(usable) >= 2:
+                        try:
+                            H, pk = kruskal(*[samples[m] for m in usable])
+                        except ValueError:                # all values identical
+                            pass
+                    rows.append(dict(base, test="kruskal-wallis", models=",".join(present),
+                                     stat=float(H), p=float(pk), p_holm=float("nan"),
+                                     n=",".join(str(len(samples[m])) for m in present),
+                                     dropped=",".join(str(dropped[m]) for m in present),
+                                     median=",".join("%.4f" % np.median(samples[m]) if len(samples[m])
+                                                     else "n/a" for m in present)))
+                pairs = []
+                for a, b in combinations(usable, 2):
+                    U, pu = mannwhitneyu(samples[a], samples[b], alternative="two-sided")
+                    pairs.append(dict(base, test="mann-whitney-u", models="%s,%s" % (a, b),
+                                      stat=float(U), p=float(pu),
+                                      n="%d,%d" % (len(samples[a]), len(samples[b])),
+                                      dropped="%d,%d" % (dropped[a], dropped[b]),
+                                      median="%.4f,%.4f" % (np.median(samples[a]), np.median(samples[b]))))
+                for r, adj in zip(pairs, holm([r["p"] for r in pairs])):
+                    r["p_holm"] = adj
+                rows += pairs
+    return pd.DataFrame(rows, columns=["family", "metric", "size", "exp", "test", "models", "stat", "p",
                                        "p_holm", "n", "dropped", "median"])
 
 
@@ -570,8 +588,8 @@ def size_comparison(summary):
 
 
 def control_comparison(E):
-    """Each CONTROL against its base model (BC batch 256 vs the ladder's BC batch
-    8), per data size and experiment, pooled over training seeds: successes,
+    """Each CONTROLS entry against its base model (BC, batch 256, vs BC (batch 8)),
+    per data size and experiment, pooled over training seeds: successes,
     stage counts, Fisher's exact test on success (two-sided, no Holm - one test
     per cell, not a family)."""
     import pandas as pd
@@ -607,7 +625,8 @@ def coverage(splits=DEFAULT_SPLITS) -> dict:
 
 
 # ─── figures ─────────────────────────────────────────────────────────────────
-COLOURS = {"bc": "#8c8c8c", "act": "#1f77b4", "act_lstm": "#d62728"}
+COLOURS = {"BC": "#8c8c8c", "ACT": "#1f77b4", "ACT-LSTM": "#d62728", "ACT-12": "#6baed6",
+           "ACT-LSTM-12": "#f28e8e", "BC (batch 8)": "#c4c4c4"}
 EXP_HATCH = {"exp1": "", "exp2": "//"}
 
 
@@ -862,9 +881,10 @@ def fig_sizes(summary, out):
     plt = _plt()
     fig, axes = plt.subplots(1, len(EXPS), figsize=(10, 3.8), sharey=True)
     w = 0.8 / len(sizes)
+    present = [m for m in MODELS if m in set(summary.model)]
     for ax, exp in zip(axes, EXPS):
         for j, s in enumerate(sizes):
-            for i, m in enumerate(MODELS):
+            for i, m in enumerate(present):
                 r = summary[(summary.model == m) & (summary["size"] == s) & (summary.exp == exp)]
                 if not len(r):
                     continue
@@ -875,8 +895,8 @@ def fig_sizes(summary, out):
                 ax.errorbar(x, r.pooled_rate, yerr=[[r.pooled_rate - r.ci_lo], [r.ci_hi - r.pooled_rate]],
                             color="black", capsize=3, lw=1)
                 ax.text(x, -0.07, s, ha="center", fontsize=7)
-        ax.set_xticks(range(len(MODELS)))
-        ax.set_xticklabels([MODEL_LABEL[m] for m in MODELS])
+        ax.set_xticks(range(len(present)))
+        ax.set_xticklabels(present, fontsize=8)
         ax.tick_params(axis="x", pad=14)
         ax.set_title("%s: data size %s" % (EXP_LABEL[exp], " vs ".join(sizes)), fontsize=9)
         ax.set_ylim(-0.1, 1.05)
@@ -923,7 +943,7 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
     L.append("**Lock rule at evaluation:** %s. **Training-data lock rule:** %s. Episodes: %d."
              % (", ".join(rules) or "unknown", ", ".join(trules) or "unknown", len(E)))
     L += ["", "## Runs found", ""]
-    L.append(_md(R, [("run", "run"), ("model", lambda r: MODEL_LABEL.get(r.model, r.model)),
+    L.append(_md(R, [("run", "run"), ("model", "model"),
                      ("data size", "size"), ("train seed", "train_seed"),
                      ("checkpoint", lambda r: r.get("chosen_ckpt") or r.get("ckpt")),
                      ("selection", lambda r: "%s/%s" % (r.get("selection_success"), r.get("selection_n"))
@@ -932,21 +952,21 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
     for n in notes:
         L.append("- " + n)
     L += ["", "## 1. Task success", "", "### Per run (Wilson 95% CI)", ""]
-    L.append(_md(T["by_run"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+    L.append(_md(T["by_run"], [("model", "model"), ("size", "size"),
                                ("seed", "train_seed"), ("exp", "exp"),
                                ("success", lambda r: "%d/%d" % (r.successes, r.n)),
                                ("rate", lambda r: _pct(r.rate)),
                                ("95% CI", lambda r: "%s - %s" % (_pct(r.ci_lo), _pct(r.ci_hi)))]))
     L += ["### Over training seeds", "",
           "Mean +- SD over the per-seed rates; pooled = all seeds' episodes as one sample.", ""]
-    L.append(_md(T["summary"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+    L.append(_md(T["summary"], [("model", "model"), ("size", "size"),
                                 ("exp", "exp"), ("seeds", "seeds"),
                                 ("mean +- SD", lambda r: "%s +- %s" % (_pct(r.mean_rate), _pct(r.sd_rate) or "n/a")),
                                 ("pooled", lambda r: "%d/%d = %s" % (r.pooled_successes, r.pooled_n,
                                                                      _pct(r.pooled_rate))),
                                 ("95% CI", lambda r: "%s - %s" % (_pct(r.ci_lo), _pct(r.ci_hi)))]))
     L += ["### Generalization gap (Exp 1 - Exp 2)", ""]
-    L.append(_md(T["gap"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+    L.append(_md(T["gap"], [("model", "model"), ("size", "size"),
                             ("Exp 1", lambda r: _pct(r.get("exp1_rate"))),
                             ("Exp 2", lambda r: _pct(r.get("exp2_rate"))),
                             ("gap", lambda r: _pct(r.get("gap"))),
@@ -956,28 +976,29 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
                             ("SE (seeds)", lambda r: _pct(r.get("se_seeds")) or "n/a"),
                             ("note", lambda r: r.get("note") or "")]))
     L += ["## 2. Stage-wise rates", ""]
-    L.append(_md(T["stages"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+    L.append(_md(T["stages"], [("model", "model"), ("size", "size"),
                                ("exp", "exp"), ("n", "n")] +
                  [(s, (lambda s_: lambda r: "%s (%d)" % (_pct(r[s_]), r[s_ + "_k"]))(s))
                   for s in STAGES + ("success",)]))
     L += ["### Failure phase (counts)", ""]
-    L.append(_md(T["fail"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+    L.append(_md(T["fail"], [("model", "model"), ("size", "size"),
                              ("exp", "exp"), ("n", "n"), ("success", "success")] +
                  [(k, k) for k in FAIL_ORDER]))
-    L += ["## 3. Statistics", "", "### Fisher's exact test on success (pooled over seeds; Holm over the pairs)", ""]
-    L.append(_md(T["fisher"], [("size", "size"), ("exp", "exp"),
-                               ("pair", lambda r: "%s vs %s" % (MODEL_LABEL[r.model_a], MODEL_LABEL[r.model_b])),
+    L += ["## 3. Statistics", "", "### Fisher's exact test on success (pooled over seeds, episodes treated as "
+          "independent; Holm over the pairs of a family)", ""]
+    L.append(_md(T["fisher"], [("family", "family"), ("size", "size"), ("exp", "exp"),
+                               ("pair", lambda r: "%s vs %s" % (r.model_a, r.model_b)),
                                ("successes", lambda r: "%d/%d vs %d/%d" % (r.a_successes, r.a_n,
                                                                          r.b_successes, r.b_n)),
                                ("odds ratio", lambda r: "%.3g" % r.odds_ratio), ("p", lambda r: _p(r.p)),
                                ("p (Holm)", lambda r: _p(r.p_holm))]))
-    L += ["### Distances: Kruskal-Wallis, then Mann-Whitney U (Holm over the pairs)", ""]
-    L.append(_md(T["dist"], [("metric", "metric"), ("size", "size"), ("exp", "exp"), ("test", "test"),
+    L += ["### Distances: Kruskal-Wallis, then Mann-Whitney U (episodes treated as independent; Holm over the pairs)", ""]
+    L.append(_md(T["dist"], [("family", "family"), ("metric", "metric"), ("size", "size"), ("exp", "exp"), ("test", "test"),
                              ("models", "models"), ("n", "n"), ("dropped (no field)", "dropped"),
                              ("median (m)", "median"), ("stat", lambda r: "%.4g" % r.stat),
                              ("p", lambda r: _p(r.p)), ("p (Holm)", lambda r: _p(r.p_holm))]))
     L += ["### Threshold rates", ""]
-    L.append(_md(T["thr"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+    L.append(_md(T["thr"], [("model", "model"), ("size", "size"),
                             ("exp", "exp"), ("n", "n"),
                             ("final <= 5 cm", lambda r: _pct(r.get("final_box_goal_within_5cm"))),
                             ("final <= 10 cm", lambda r: _pct(r.get("final_box_goal_within_10cm"))),
@@ -987,7 +1008,7 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
     if len(T["sizes"]):
         L += ["### Data size", ""]
         cols = [c for c in T["sizes"].columns if c not in ("model", "exp")]
-        L.append(_md(T["sizes"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("exp", "exp")] +
+        L.append(_md(T["sizes"], [("model", "model"), ("exp", "exp")] +
                      [(c, (lambda c_: lambda r: _pct(r[c_]) if c_.startswith(("rate", "diff"))
                            else (_p(r[c_]) if c_ == "fisher_p" else r[c_]))(c)) for c in cols]))
     L += ["### D19 sensitivity (grasp needs the box within 50 mm of its spawn at the weld)", "",
@@ -996,7 +1017,7 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
           "of the D19 episodes, how many ended placed (final box-goal <= 0.10 m), resting, released, "
           "upright, and all four (every final-tick place condition: an UPPER BOUND on the successes "
           "D19 removed - lift/transport are not in the record). unknown = no grasp_detail for it.", ""]
-    L.append(_md(T["d19"], [("model", lambda r: MODEL_LABEL.get(r.model, r.model)), ("size", "size"),
+    L.append(_md(T["d19"], [("model", "model"), ("size", "size"),
                             ("exp", "exp"), ("n", "n"), ("welded", "welded"), ("grasp", "grasp"),
                             ("welded, no grasp", "welded_no_grasp"), ("D19", "d19"),
                             ("D19 only", "d19_only"), ("unknown", "detail_unknown"),
@@ -1004,17 +1025,16 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
                             ("released", "d19_released"), ("upright", "d19_upright"),
                             ("all four", "d19_all_place_conditions"), ("success", "success")]))
     if len(T["control"]):
-        L += ["### BC control: own default batch 256 vs the ladder's batch 8 (review M3)", "",
-              "Pooled over training seeds; Fisher's exact test on success, two-sided. The "
-              "control is not part of the three-model pairwise tests above.", ""]
+        L += ["### BC batch sizes: BC (batch 256, D8) vs BC (batch 8) (review M3)", "",
+              "Pooled over training seeds; Fisher's exact test on success, two-sided, one test per cell.", ""]
         L.append(_md(T["control"], [
             ("size", "size"), ("exp", "exp"),
-            ("BC b8", lambda r: "%d/%d (g %d l %d t %d p %d)" % (
+            ("BC (batch 8)", lambda r: "%d/%d (g %d l %d t %d p %d)" % (
                 r.base_success, r.base_n, r.base_grasp, r.base_lift, r.base_transport, r.base_place)),
-            ("BC b256", lambda r: "%d/%d (g %d l %d t %d p %d)" % (
+            ("BC", lambda r: "%d/%d (g %d l %d t %d p %d)" % (
                 r.control_success, r.control_n, r.control_grasp, r.control_lift,
                 r.control_transport, r.control_place)),
-            ("seeds b8/b256", lambda r: "%d/%d" % (r.base_seeds, r.control_seeds)),
+            ("seeds batch 8 / BC", lambda r: "%d/%d" % (r.base_seeds, r.control_seeds)),
             ("Fisher p", lambda r: _p(r.fisher_p))]))
     L += ["## 4. Figures", ""]
     for name, path in figs:
@@ -1025,8 +1045,8 @@ def write_report(out, roots, E, R, T, figs, notes) -> str:
           "sample (ignores between-seed variance; see the SD column).",
           "- Gap SE (binomial) = sqrt(p1(1-p1)/n1 + p2(1-p2)/n2) on the pooled rates (disjoint seed "
           "sets, independent samples); SE (seeds) = SD of per-seed gaps / sqrt(k), k >= 2.",
-          "- Fisher's exact test two-sided; Kruskal-Wallis then two-sided Mann-Whitney U; Holm-Bonferroni "
-          "over the pairs of one (data size, experiment[, metric]) family.",
+          "- Fisher's exact test two-sided; Kruskal-Wallis then two-sided Mann-Whitney U; both treat episodes as "
+          "independent; Holm-Bonferroni over the pairs of one (family, data size, experiment[, metric]).",
           "- Grasp proximity = `palm_box_min_m` (farther palm's closest approach before the weld; the gate "
           "is 0.16 m). Final distance = `final_box_goal_m` (= placement error). Failure phase = deploy.py "
           "`fail_reason` (the ScoredPhase charged, or `fell`).",
@@ -1075,7 +1095,7 @@ def analyze(roots: Sequence[str], out: str, splits=DEFAULT_SPLITS, figures: bool
             notes.append("%s: folder name is not <model>_<size>_seed<k>; model from the header" % r.run)
     for m in MODELS:
         if m not in set(E.model):
-            notes.append("%s: no runs found" % MODEL_LABEL[m])
+            notes.append("%s: no runs found" % m)
     by_run = success_by_run(E)
     T = dict(by_run=by_run, summary=success_summary(by_run), gap=generalization_gap(by_run),
              stages=stage_rates(E), fail=failure_phase(E), fisher=fisher_table(E),
