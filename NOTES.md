@@ -7949,3 +7949,23 @@ result** (O34 Option B). Only NEW files were added: three tools, a shared module
 - **Regression** `check_memory_design_regression.py --base 2d0a5f7` with `--real` act_lstm_n40_seed0:best.pt,
   act_n40_seed0:best.pt, act_orig_n40_seed0:ckpt_step0200000.pt, act_lstm_full_n40_seed0:ckpt_step0020000.pt, on
   `00786ae`: **ALL IDENTICAL**, 14/14 (7 model configs, 3 old-format checkpoints, 4 real checkpoints).
+
+## 2026-11-05 — Study docs and `tools/inspect_episode.py` (branch `study-docs`, NEW files only)
+
+- **Added:** `docs/SYSTEM_MAP.md` (core components: flowchart, one table per stage, one tick during teleop and deploy,
+  glossary, what to ignore), `docs/DATA_FLOW.md` (all 48 state and 22 action dims: name, unit, source, masked; the `.npz`
+  layout; normalization; windows and chunks; models; the way back to robot commands), `tools/inspect_episode.py`
+  (`dims`, `info`, `table`, `stats`, `csv`, `plot`), `tools/test_inspect_episode.py`. No existing code changed. Docs name
+  code by file and function, never by line number. `docs/DESIGN_NOTES.md`, linked from the map, is on branch `clean-model-comments`.
+- **Kept honest by tests:** the DATA_FLOW dim tables are compared with `spec.py`; every function in a SYSTEM_MAP table is
+  checked against the file it names (AST); every documented command must parse; neither doc may contain a `file:line`.
+- **Measured for the docs** (first 40 `scripted_v3` episodes unless stated): `g_L` == `g_R` and `a_gL` == `a_gR` on every
+  tick; dims 6, 13, 14, 15, 16 exactly 0; velocity exactly 0 on every locked tick; waist STATE reaches 0.027 / 0.040 / 0.072 rad
+  (yaw / roll / pitch), so CLAUDE.md §6 "waist 3 (constant 0, D10)" is true of the command, not of the state. In
+  `norm_stats_scripted_v3_n40.npz` the std floor binds on state dims 43-45, not on dim 9 as CLAUDE.md §8 2026-10-17
+  says of the earlier stats. Not changed in CLAUDE.md: this branch adds files only.
+- **Tool decisions:** teleop `phase_labels` are all UNKNOWN, so the tool derives phases with `phase_label.label_episode`
+  and every output says which kind you are reading. Older 47-D files (`recordings/episodes`, `scripted_v1`, `scripted_v2`,
+  `recordings/teleop_ep.npz`) open with a warning, though `load_episode` refuses them: this tool only reads, and its lock
+  column for them is the first lock only. CSV is UTF-8 with BOM and shortest exact decimals, no exponents, for Excel.
+  Colours are the validated `report_io.SERIES`; more than 3 dims in a group are faceted, never cycled.
