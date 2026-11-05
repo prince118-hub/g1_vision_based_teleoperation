@@ -4,6 +4,16 @@ Turns the output of `tools/eval_scripted.py` into one report folder: CSV tables,
 markdown report and PNG figures. It only **reads** the eval folder. It runs nothing and
 writes nothing there, and it needs no GPU, no MuJoCo and no torch.
 
+## Two tools
+
+- `tools/analyze_experiments.py`: tables, statistics and figures for any eval folders.
+- **`tools/make_final_report.py`: the thesis's own report**, from the same functions. It adds the comparisons below and is
+  described in "The final report".
+
+**Thesis names, in every table and figure** (CLAUDE.md §7 D8): `act_orig` = ACT, `act_lstm_full` = ACT-LSTM, `act` = ACT-12,
+`act_lstm` = ACT-LSTM-12, `bc` = BC. The code name `bc` covers two run sets, so for BC the folder decides: D8's BC is batch 256
+(`bc_b256_*`), and the batch-8 runs (`bc_*`) read "BC (batch 8)". `runs.csv` keeps each run's `code_name`.
+
 ## Setup
 
 ```
@@ -45,7 +55,7 @@ n40 splits. A box spawn is a pure function of its seed, so the map needs only th
 | `generalization_gap.csv` | Exp 1 − Exp 2 per model × size, SE (binomial), 95% CI, SE over seeds |
 | `stage_rates.csv` | grasp / lift / transport / place / success, with counts and CIs |
 | `failure_phase.csv` | deploy.py `fail_reason` counts: WALK_IN, GRASP, LIFT, TRANSPORT, PLACE, fell |
-| `fisher.csv` | pairwise Fisher exact test on success (BC / ACT / ACT-LSTM), pooled over seeds, per experiment and data size, raw and Holm-adjusted p |
+| `fisher.csv` | pairwise Fisher exact test on success within each family (headline: BC, ACT, ACT-LSTM; ablation: BC (batch 8), ACT-12, ACT-LSTM-12), pooled over seeds, per experiment and data size, raw and Holm-adjusted p |
 | `distance_tests.csv` | Kruskal–Wallis + pairwise Mann-Whitney U (Holm) on grasp proximity and final box-to-goal distance |
 | `thresholds.csv` | final / closest box-to-goal within 5 and 10 cm; palms within the 0.16 m weld gate |
 | `size_comparison.csv` | n40 vs 160 per model and experiment (when both exist), with Fisher p |
@@ -71,7 +81,7 @@ n40 splits. A box spawn is a pure function of its seed, so the map needs only th
 - **Gap SE (binomial)** = sqrt(p1(1−p1)/n1 + p2(1−p2)/n2). This holds because the Exp 1 and Exp 2 seed sets
   are disjoint, so the two samples are independent. **SE (seeds)** = SD of the per-seed gaps / sqrt(k), shown
   only when there are at least 2 seeds.
-- **Fisher's exact test** is two-sided. **Kruskal–Wallis** is followed by two-sided **Mann-Whitney U**.
+- **Fisher's exact test** is two-sided and treats episodes as independent. **Kruskal–Wallis** is followed by two-sided **Mann-Whitney U**.
   **Holm–Bonferroni** correction is applied over the model pairs within one (data size, experiment[, metric])
   family.
 - With 100 episodes per experiment and one seed, a rate near 50% has SE ≈ 5%, so differences under about
@@ -79,10 +89,34 @@ n40 splits. A box spawn is a pure function of its seed, so the map needs only th
 - **Disclose** when reading 40 vs 160: BC is epoch-budgeted, so BC-n40 ran about 4× fewer optimizer steps
   than BC-160. ACT and ACT-LSTM are step-budgeted (CLAUDE.md §8 2026-10-23).
 
+## The final report
+
+```
+python tools/make_final_report.py        # runs/scripted_v3/analysis_final/
+```
+
+It reads `runs/scripted_v3/eval` and `runs/scripted_v3_memory_design/eval`, and first checks that the input is exactly the final
+set: 22 runs, one seed set per experiment, and each run's model, chunk, window, batch and demos read back from its own
+`metadata.json` (`--no-strict` skips this). Tiers: main (BC, ACT, ACT-LSTM), ablation (ACT-12, ACT-LSTM-12), appendix
+(BC (batch 8)), extra (the 160-demo seed-0 runs).
+
+**Position-level paired test** (`position_tests.csv`, `position_counts.csv`). Every policy runs the same box positions. For each
+position, count a model's successes over its 3 training seeds (0 to 3), then compare ACT-LSTM vs ACT, ACT-LSTM vs ACT-LSTM-12 and
+ACT vs BC over the positions, per experiment: two-sided Wilcoxon signed-rank (normal approximation with tie and continuity
+corrections; ties dropped) and exact sign test, Holm over the three comparisons. Effect size: matched-pairs rank-biserial
+correlation, (W+ - W-) / (W+ + W-). The report gives how many positions favour each model and how many tie. The unit of inference
+is the box position, for these trained seeds: it does not speak to a new training seed.
+
+**Pooled tests** stay, labelled "episodes treated as independent": Fisher on success and Kruskal-Wallis / Mann-Whitney on distances.
+
+**Proximity** (`proximity_summary.csv`): closest palm to box before the weld (`palm_box_nearest_min_m`, either palm), farther palm
+to box (`palm_box_min_m`, what the 0.16 m weld gate reads) and final box to goal, with median and quartiles, boxplots and tests.
+
 ## Tests
 
 ```
 python tools/test_analyze_experiments.py        # or: pytest tools/test_analyze_experiments.py
+python -m pytest tools/test_make_final_report.py -q
 ```
 
 The tests build synthetic eval folders with known counts: Run B's measured counts plus a 3-seed n40 run.

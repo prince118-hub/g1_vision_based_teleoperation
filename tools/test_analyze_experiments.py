@@ -164,40 +164,40 @@ def test_fisher_matches_the_hypergeometric():
 # ═══ the tables on known counts ═══════════════════════════════════════════════
 def test_success_by_run_and_summary():
     T = _full()["tables"]
-    r = _get(T["by_run"], model="act_lstm", size="160", exp="exp2")
+    r = _get(T["by_run"], model="ACT-LSTM-12", size="160", exp="exp2")
     assert (r.successes, r.n) == (11, 100) and abs(r.rate - 0.11) < 1e-12
     lo, hi = AE.wilson(11, 100)
     assert abs(r.ci_lo - lo) < 1e-12 and abs(r.ci_hi - hi) < 1e-12
-    s = _get(T["summary"], model="act", size="n40", exp="exp1")
+    s = _get(T["summary"], model="ACT-12", size="n40", exp="exp1")
     assert s.n_seeds == 3 and s.seeds == "0,1,2"
     assert abs(s.mean_rate - 0.12) < 1e-12 and abs(s.sd_rate - 0.02) < 1e-12
     assert (s.pooled_successes, s.pooled_n) == (36, 300)
-    one = _get(T["summary"], model="act", size="160", exp="exp1")
+    one = _get(T["summary"], model="ACT-12", size="160", exp="exp1")
     assert one.n_seeds == 1 and math.isnan(one.sd_rate) and one.pooled_successes == 14
     assert len(T["by_run"]) == 2 * (3 + 9)
 
 
 def test_generalization_gap_and_its_standard_errors():
     T = _full()["tables"]
-    g = _get(T["gap"], model="act", size="n40")
+    g = _get(T["gap"], model="ACT-12", size="n40")
     assert abs(g.gap - (36 - 18) / 300) < 1e-12
     se = math.sqrt(0.12 * 0.88 / 300 + 0.06 * 0.94 / 300)
     assert abs(g.se_binomial - se) < 1e-12
     # per-seed gaps 0.05, 0.06, 0.07: mean 0.06, SD 0.01, SE 0.01/sqrt(3)
     assert abs(g.gap_seed_mean - 0.06) < 1e-12 and abs(g.se_seeds - 0.01 / math.sqrt(3)) < 1e-12
-    b = _get(T["gap"], model="act_lstm", size="160")
+    b = _get(T["gap"], model="ACT-LSTM-12", size="160")
     assert abs(b.gap - 0.06) < 1e-12 and math.isnan(b.se_seeds)
 
 
 def test_stage_rates_and_failure_phase():
     T = _full()["tables"]
-    st = _get(T["stages"], model="act", size="160", exp="exp1")
+    st = _get(T["stages"], model="ACT-12", size="160", exp="exp1")
     # 14 successes; failures cycle WALK_IN, GRASP, TRANSPORT, PLACE over i = 14..99
     fails = [FAILS[i % 4] for i in range(14, 100)]
     n_tp = sum(f in ("TRANSPORT", "PLACE") for f in fails)
     assert st.grasp_k == 14 + n_tp and st.lift_k == 14 + n_tp
     assert st.transport_k == 14 + fails.count("PLACE") and st.place_k == 14 and st.success_k == 14
-    f = _get(T["fail"], model="act", size="160", exp="exp1")
+    f = _get(T["fail"], model="ACT-12", size="160", exp="exp1")
     assert f.success == 14 and sum(f[k] for k in AE.FAIL_ORDER) == 86
     for k in FAILS:
         assert f[k] == fails.count(k), k
@@ -208,11 +208,11 @@ def test_fisher_table_pairs_and_holm():
     fe = T["fisher"]
     fam = fe[(fe["size"] == "160") & (fe.exp == "exp2")]
     assert len(fam) == 3
-    r = _get(fam, model_a="act", model_b="act_lstm")
+    r = _get(fam, model_a="ACT-12", model_b="ACT-LSTM-12")
     assert (r.a_successes, r.b_successes) == (1, 11)
     assert abs(r.p - _fisher_ref(1, 99, 11, 89)) < 1e-9
     assert np.allclose(fam.p_holm.to_numpy(), AE.holm(fam.p.tolist()))
-    pooled = _get(fe[(fe["size"] == "n40") & (fe.exp == "exp1")], model_a="bc", model_b="act_lstm")
+    pooled = _get(fe[(fe["size"] == "n40") & (fe.exp == "exp1")], model_a="BC (batch 8)", model_b="ACT-LSTM-12")
     assert (pooled.a_successes, pooled.a_n, pooled.b_successes, pooled.b_n) == (9, 300, 66, 300)
     assert math.isclose(pooled.p, _fisher_ref(9, 291, 66, 234), rel_tol=1e-6)
 
@@ -223,7 +223,7 @@ def test_distance_tests_kruskal_and_mann_whitney():
     T = _full()["tables"]
     d = T["dist"]
     kw = _get(d[d.metric == "palm_box_min_m"], size="160", exp="exp1", test="kruskal-wallis")
-    groups = [(PALM_BASE[m] + 0.0005 * np.arange(N)).round(4) for m in AE.MODELS]
+    groups = [(PALM_BASE[m] + 0.0005 * np.arange(N)).round(4) for m in ("bc", "act", "act_lstm")]
     assert abs(kw.stat - _kw_ref(*groups)) < 1e-6 and kw.p < 1e-40
     mw = d[(d.metric == "palm_box_min_m") & (d["size"] == "160") & (d.exp == "exp1")
            & (d.test == "mann-whitney-u")]
@@ -236,18 +236,18 @@ def test_distance_tests_kruskal_and_mann_whitney():
 
 def test_threshold_rates():
     T = _full()["tables"]
-    t = _get(T["thr"], model="act_lstm", size="160", exp="exp1")
+    t = _get(T["thr"], model="ACT-LSTM-12", size="160", exp="exp1")
     assert abs(t.final_box_goal_within_5cm - 0.17) < 1e-12           # successes at 0.04 m
     assert abs(t.final_box_goal_within_10cm - 0.17) < 1e-12
     assert abs(t.closest_box_goal_within_5cm - 0.17) < 1e-12
     assert abs(t.closest_box_goal_within_10cm - 1.0) < 1e-12         # failures at 0.08 m
     assert t.palm_within_grasp_gate == 1.0                           # 0.10-0.15 m <= 0.16
-    assert _get(T["thr"], model="act", size="160", exp="exp1").palm_within_grasp_gate == 0.0
+    assert _get(T["thr"], model="ACT-12", size="160", exp="exp1").palm_within_grasp_gate == 0.0
 
 
 def test_size_comparison_when_both_sizes_exist():
     T = _full()["tables"]
-    sc = _get(T["sizes"], model="act", exp="exp1")
+    sc = _get(T["sizes"], model="ACT-12", exp="exp1")
     assert abs(sc.rate_160 - 0.14) < 1e-12 and abs(sc.rate_n40 - 0.12) < 1e-12
     assert abs(sc["diff"] - 0.02) < 1e-12
     assert abs(sc.fisher_p - _fisher_ref(14, 86, 36, 264)) < 1e-9
@@ -284,7 +284,7 @@ def test_works_with_runs_missing():
     T = res["tables"]
     assert any("bc_160_seed0: no exp2" in n for n in res["notes"])
     assert any("ACT-LSTM: no runs found" in n for n in res["notes"])
-    g = _get(T["gap"], model="bc", size="160")
+    g = _get(T["gap"], model="BC (batch 8)", size="160")
     assert "needs both" in g.note and math.isnan(g.get("gap", float("nan")))
     assert len(T["sizes"]) == 0 and res["figures"]["n40 vs 160"] is None
     kw = T["dist"][(T["dist"].metric == "palm_box_min_m") & (T["dist"].test == "kruskal-wallis")]
@@ -361,7 +361,7 @@ def test_d19_sensitivity_counts_and_the_bit_identity_filter():
             fh.writelines(json.dumps(x) + "\n" for x in rows)
     res = AE.analyze([root], os.path.join(_tmp(), "d19", "report"), figures=False)
     assert any("5 used, 1 rejected" in n for n in res["notes"]), res["notes"]
-    t = _get(res["tables"]["d19"], model="act", size="n40", exp="exp1")
+    t = _get(res["tables"]["d19"], model="ACT-12", size="n40", exp="exp1")
     assert (t.n, t.welded, t.grasp, t.welded_no_grasp, t.detail_unknown) == (10, 8, 2, 6, 1), t
     assert (t.d19, t.d19_only, t.not_on_platform_only) == (4, 3, 1), t
     assert (t.d19_placed, t.d19_resting, t.d19_released, t.d19_upright) == (2, 3, 3, 4), t
@@ -373,13 +373,13 @@ def test_d19_sensitivity_counts_and_the_bit_identity_filter():
     with open(os.path.join(root, run, "exp1.jsonl"), "w", encoding="utf-8") as fh:
         fh.writelines(json.dumps(x) + "\n" for x in ev)
     t = _get(AE.analyze([root], os.path.join(_tmp(), "d19", "report2"), figures=False,
-                        d19_roots=[d19])["tables"]["d19"], model="act", size="n40", exp="exp1")
+                        d19_roots=[d19])["tables"]["d19"], model="ACT-12", size="n40", exp="exp1")
     assert t.detail_unknown == 0 and t.d19 == 5, t
 
 
-def test_bc_control_is_compared_to_bc_and_kept_out_of_the_pairwise_tests():
-    """Review M3: bc_b256_<size>_seed<k> folders parse as the control model, get
-    their own table against BC, and do not enter the three-model Fisher pairs."""
+def test_bc_batch_sizes_are_compared_and_stay_in_separate_families():
+    """Review M3: bc_b256_<size>_seed<k> folders are D8's BC, get their own table against
+    BC (batch 8), and enter only the headline family, never the ablation pairs."""
     root = os.path.join(_tmp(), "control", "eval")
     write_run(root, "bc", "n40", 0, (0, 0))
     write_run(root, "bc", "n40", 1, (0, 0))
@@ -388,16 +388,56 @@ def test_bc_control_is_compared_to_bc_and_kept_out_of_the_pairwise_tests():
     write_run(root, "bc_b256", "n40", 1, (6, 1), palm=False)
     res = AE.analyze([root], os.path.join(_tmp(), "control", "report"), figures=False)
     T = res["tables"]
-    assert AE.parse_run("bc_b256_n40_seed1") == dict(model="bc_b256", size="n40", train_seed=1)
+    assert AE.parse_run("bc_b256_n40_seed1") == dict(model="BC", size="n40", train_seed=1)
     c = _get(T["control"], size="n40", exp="exp1")
     assert (c.base_success, c.base_n, c.control_success, c.control_n) == (0, 200, 15, 200), c
     assert (c.base_seeds, c.control_seeds) == (2, 2)
     assert abs(c.fisher_p - AE.fisher(15, 200, 0, 200)[1]) < 1e-12
-    assert "bc_b256" not in set(T["fisher"].model_a) | set(T["fisher"].model_b)
-    assert len(T["fisher"][T["fisher"].exp == "exp1"]) == 1          # bc vs act only
-    s = _get(T["summary"], model="bc_b256", size="n40", exp="exp1")
+    assert "BC" not in set(T["fisher"].model_a) | set(T["fisher"].model_b)       # no ACT or ACT-LSTM here
+    assert len(T["fisher"][T["fisher"].exp == "exp1"]) == 1          # BC (batch 8) vs ACT-12 only
+    s = _get(T["summary"], model="BC", size="n40", exp="exp1")
     assert s.pooled_successes == 15
-    assert "BC control" in open(res["report"], encoding="utf-8").read()
+    assert "BC batch sizes" in open(res["report"], encoding="utf-8").read()
+
+
+def test_code_names_become_thesis_names():
+    want = dict(act_orig="ACT", act_lstm_full="ACT-LSTM", act="ACT-12", act_lstm="ACT-LSTM-12", bc="BC")
+    assert AE.THESIS_NAME == want
+    for prefix, name in (("act_orig", "ACT"), ("act_lstm_full", "ACT-LSTM"), ("act", "ACT-12"),
+                         ("act_lstm", "ACT-LSTM-12"), ("bc_b256", "BC"), ("bc", "BC (batch 8)")):
+        assert AE.parse_run("%s_n40_seed2" % prefix) == dict(model=name, size="n40", train_seed=2), prefix
+    assert AE.parse_run("act_lstm_160_seed0")["model"] == "ACT-LSTM-12"     # not a prefix accident
+    assert AE.parse_run("act_lstm_full_160_seed0")["model"] == "ACT-LSTM"
+    assert AE.parse_run("something_else")["model"] is None
+
+
+def test_all_six_models_keep_two_families_and_only_thesis_names():
+    """Every table reads thesis names, and each family's Holm covers its own three pairs."""
+    root = os.path.join(_tmp(), "six", "eval")
+    for code, counts in (("act_orig", (30, 10)), ("act_lstm_full", (40, 40)), ("bc_b256", (0, 0)),
+                         ("act", (35, 12)), ("act_lstm", (36, 4)), ("bc", (1, 0))):
+        PALM_BASE.setdefault(code, 0.2)
+        write_run(root, code, "n40", 0, counts)
+    res = AE.analyze([root], os.path.join(_tmp(), "six", "report"))
+    T = res["tables"]
+    assert set(T["summary"].model) == set(AE.MODELS)
+    assert list(T["summary"].model.drop_duplicates()) == list(AE.MODELS)
+    assert not res["notes"] or not any("no runs found" in n for n in res["notes"])
+    fe = T["fisher"][T["fisher"].exp == "exp2"]
+    for family, members in AE.FAMILIES:
+        fam = fe[fe.family == family]
+        assert len(fam) == 3 and set(fam.model_a) | set(fam.model_b) == set(members), family
+        assert np.allclose(fam.p_holm, AE.holm(fam.p.tolist()))
+    r = _get(fe, model_a="ACT", model_b="ACT-LSTM")
+    assert (r.a_successes, r.b_successes, r.family) == (10, 40, "headline")
+    assert _get(T["control"], exp="exp1").control == "BC"
+    md = open(res["report"], encoding="utf-8").read()
+    assert "episodes treated as independent" in md
+    for code in ("act_orig", "act_lstm_full", "bc_b256"):
+        for line in md.splitlines():
+            assert code not in line or line.startswith(("| %s_" % code, "- ")), line      # only the run folder's own name
+    runs = res["runs"]
+    assert dict(zip(runs.run, runs.code_name))["act_orig_n40_seed0"] == "act_orig"
 
 
 def test_zzz_cleanup():

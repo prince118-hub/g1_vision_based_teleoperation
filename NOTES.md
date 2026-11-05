@@ -7990,3 +7990,28 @@ result** (O34 Option B). Only NEW files were added: three tools, a shared module
 - **Still stale, deliberately not touched:** `tools/deploy.py`'s module docstring cites `loader.py:371-379` (out of scope,
   and already wrong before this work). `docs/ACT_AUDIT_REPORT.md` and older NOTES entries cite old line numbers; they are
   records, read against their own commits.
+
+## 2026-11-05 — Final scripted analysis: thesis names, `tools/make_final_report.py`, position-level test (branch `final-report`)
+
+- **`tools/analyze_experiments.py` now uses thesis names** in every table and figure: `act_orig` = ACT, `act_lstm_full` = ACT-LSTM,
+  `act` = ACT-12, `act_lstm` = ACT-LSTM-12, `bc` = BC. Before this it did not recognise `act_orig` or `act_lstm_full` at all, and it
+  called `act` "ACT". **Judgement call:** the code name `bc` covers two run sets, so the folder decides: D8's BC is `bc_b256_*`, and
+  `bc_*` reads "BC (batch 8)". Pairwise tests now run per family: headline (BC, ACT, ACT-LSTM) and ablation (BC (batch 8), ACT-12,
+  ACT-LSTM-12). Existing test numbers are unchanged; only the names moved.
+- **`tools/make_final_report.py`** is the report's generator (`runs/scripted_v3/analysis_final/`; docs/ANALYSIS.md). No training, no new
+  evaluation runs. Its strict mode refuses anything but the final set: 22 runs, 4,400 episodes, one seed set per experiment, and each
+  run's config read back from `metadata.json`.
+- **New: position-level paired test.** Per box position, successes over 3 seeds (0-3); Wilcoxon signed-rank and sign test, Holm over 3
+  comparisons, rank-biserial r. Favouring A / B / tie, of 100 positions:
+  - ACT-LSTM vs ACT: Exp 1 23 / 15 / 62, Wilcoxon p 0.100, r +0.29. Exp 2 30 / 0 / 70, p 5e-7, r +1.00.
+  - ACT-LSTM vs ACT-LSTM-12: Exp 1 19 / 23 / 58, p 0.93, r -0.02. Exp 2 32 / 1 / 67, p 6e-7, r +0.96.
+  - ACT vs BC: Exp 1 30 / 0 / 70, p 3e-7, r +1.00. Exp 2 11 / 0 / 89, p 0.0011, r +1.00.
+  Checked independently from the raw JSONL with plain Python. A sign-flip permutation test on the ranks agrees with Wilcoxon's normal
+  approximation (Exp 1 ACT-LSTM vs ACT 0.105 vs 0.100; Exp 2 ACT vs BC 0.00093 vs 0.00109).
+- **What it can and cannot claim:** it fixes the pooled tests' independence assumption for positions, but the counts still come from 3
+  seeds, so it speaks to new box positions for these trained models, not to a new training seed. ACT's Exp 2 successes are all from one
+  seed (11, 0, 0 per cent), and ACT-LSTM's per-seed gaps are +17, -6, -11. The pooled Fisher results stay, labelled "episodes treated
+  as independent".
+- **Proximity correction:** the earlier final report showed only `palm_box_min_m`, the FARTHER palm. "Closest palm to box" is
+  `palm_box_nearest_min_m`, now reported beside it. Lower is not better by itself: ACT on the patch has the smallest closest-palm median
+  (0.074 m) but a larger farther-palm median (0.150 m) than ACT-LSTM (0.084, 0.138), because the weld needs both palms.

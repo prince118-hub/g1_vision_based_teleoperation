@@ -3,7 +3,7 @@
 A study map of the core components only. Code is named by file and function. For the numbers inside the
 pipeline see [DATA_FLOW.md](DATA_FLOW.md); for the models see [MODELS_GUIDE.md](MODELS_GUIDE.md); for how our ACT
 compares with the original see [ACT_FAITHFULNESS.md](ACT_FAITHFULNESS.md); for the reasons behind the code see
-[DESIGN_NOTES.md](DESIGN_NOTES.md) (it may arrive from another branch).
+[DESIGN_NOTES.md](DESIGN_NOTES.md).
 
 ## Overview
 
@@ -118,7 +118,8 @@ flowchart TD
 
 | file | role | key functions | input → output |
 |---|---|---|---|
-| `tools/analyze_experiments.py` | tables, statistics, figures. Read-only | `analyze`, `wilson`, `fisher`, `generalization_gap` | eval folders → `report.md`, CSVs, figures |
+| `tools/analyze_experiments.py` | tables, statistics, figures, under thesis names. Read-only | `analyze`, `wilson`, `fisher`, `generalization_gap` | eval folders → `report.md`, CSVs, figures |
+| `tools/make_final_report.py` | the thesis's own report, with the position-level paired test. Read-only | `build`, `position_counts`, `paired_test`, `position_tests` | eval folders → `runs/scripted_v3/analysis_final/` |
 
 ## Follow one tick
 
