@@ -7883,3 +7883,47 @@ unchanged (scripted cap 900, every default code path; proof at the end); no chan
 - **Not done / for Charles:** the 1.3 factor and "accepted = top level + ledger" are as requested, not derived; whether
   Exp 1/2 on teleop data use the rule is a method decision (deploy needs `--max-ticks-from`). CLAUDE.md not updated
   (400-line cap, as 2026-10-25b).
+
+## 2026-11-05 — Video tools: side-by-side, highlight reel, episode picker (branch `video-tools`), NOT run on results
+
+Linux CPU container, no GPU, no MuJoCo GL (EGL and OSMesa both missing), no checkpoint. **Nothing here is a
+result** (O34 Option B). Only NEW files were added: three tools, a shared module, three test suites and
+`docs/VIDEOS.md` (the exact commands). No existing code, test, default or run folder changed.
+
+- **`tools/video_side_by_side.py`**: one seed, several runs, one MP4.
+  - Each panel is a `tools/deploy.py` re-run through `eval_scripted.deploy`. It uses the checkpoint AND every
+    deploy option the evaluation used: lock rule, mismatch flag, max ticks, ensemble on/off and horizon, walk-in.
+    All are read from the stored record's header, not from defaults.
+  - `trajectory_sha256` is checked against the eval record. A mismatch gets a red frame, is written to the index,
+    and makes the exit code 1.
+  - Panel header: model, demo count and training seed, then SUCCESS or FAIL: <fail_reason>. Per frame: time,
+    offline phase (`phase_boundaries`), and weld and lock as the STATE shows them (weld on for engage < t <= release).
+  - Ended panels freeze darkened. Restart-safe through a per-panel cache. `--reuse` takes panels from
+    `record_exp_videos.py` output; `--plan` runs nothing.
+- **`tools/pick_video_episodes.py`**: reads the eval JSONLs only. Categories:
+  - `contrast` (BETTER succeeds and WORSE fails, round-robin over WORSE's buckets), always alongside
+    `contrast_reverse`, with both counts in `why`. Default pairs: act_lstm vs act and act_lstm_full vs act_orig,
+    same size and training seed.
+  - `typical_failure`: `record_exp_videos`' nearest-median rule applied to every bucket (tested equal on 20
+    random trials).
+  - `heldout_spread` (farthest-point sampling over Exp 2 spawns), `heldout_success`, `all_succeed`.
+- **`tools/video_highlight_reel.py`**: plans the montage from `record_exp_videos`' `index.csv` and
+  `side_by_side_index.csv`.
+  - Sequence: title card; per model a card, its best success (lowest placement error) and its commonest-bucket
+    typical failure; side-by-sides; an end card with the Exp 1/2 counts from the eval JSONLs.
+  - Clips play whole, sped up to fit `--target-s` (90 s), at 1x-4x in 0.25x steps. Every caption states the speed.
+  - Hash-mismatched clips are left out unless `--allow-mismatch` (then they are captioned). The plan can be
+    saved, edited and rendered with `--manifest`.
+- **Run labels** carry the window, so the two ACT pairs cannot be confused whatever D8 settles on:
+  `ACT (W_o 12)` / `ACT-LSTM (W_o 12)` = act / act_lstm; `ACT (W_o 1)` / `ACT-LSTM (episode)` = act_orig /
+  act_lstm_full; `BC`, `BC (b256)`. `--runs NAME=LABEL` overrides. Teleop-trained results work unchanged: a
+  results folder is eval_scripted's `--run-root`.
+- **Tests** use synthetic frames and a fake deploy: 31/31 passed under pytest with MuJoCo 3.6.0 (no GL), and 27
+  passed + 4 skipped with numpy + OpenCV only. The existing `test_record_exp_videos` still passes (3/3). What is covered: one clock; frozen and darkened ended panels; badge and
+  mismatch colours; speed; restart cache; `--reuse`; refusal of unevaluated seeds; the picks driving the
+  side-by-side jobs; reel timing, fades and caption band; H.264 transcode; the constants against
+  `episode_view.py`; the `--plan` command against `eval_scripted.deploy`'s argv.
+- **Not verified here: a real render.** The first laptop run is the test of the camera framing at panel scale, of
+  frame count == ticks (checked per panel, `frames_match_ticks`), and of the hash match. Found while writing the
+  docs: `record_exp_videos.py` cannot share one `--video-root` between two run roots. Its index rebuild looks every
+  folder up in its own eval root. `docs/VIDEOS.md` therefore uses one video root per results folder.
