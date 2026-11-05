@@ -95,8 +95,13 @@ measures and record the change in `NOTES.md`.
 
 ## 5. Session length and breaks
 
-- Each attempt is capped at 900 ticks (36 s) plus reset and verdict; budget **~1–1.5 min per
-  attempt (starting value)**. Holding the arms up is tiring and fatigue shows as tremor.
+- Each attempt is capped at `--max-ticks` (default 900 ticks = 36 s; up to 3000 = 120 s is
+  tested) plus reset and verdict; budget **~1–1.5 min per attempt at 900 (starting value)**,
+  proportionally more at a longer cap. Holding the arms up is tiring and fatigue shows as
+  tremor. Keep ONE cap for a whole collection (recommended; every session's cap is in the
+  ledger): the evaluation cap is computed from the longest accepted demonstration
+  (`python tools/eval_cap.py <folder>`, ceil(1.3 x longest)), so a cap that cuts slow
+  demonstrations off also lowers it.
 - **Blocks of 10 attempts, then a 5-minute break; at most 3 blocks (~45–60 min) per session
   (starting values).** Stop early when two attempts in a row fail for a reason that is the
   operator's (overshoot, re-grasp, dropped box) rather than the seed's.

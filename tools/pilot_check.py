@@ -38,6 +38,12 @@ ONE COMMAND, SIX CHECKS, ONE VERDICT
                Thresholds: --min-tick-rate 24 Hz (LIVE_RECORDING_CHECKLIST
                step 2); --max-dropout 0.05 and --max-overrun-frac 0.02 (the
                operator guide's PROVISIONAL recommend-discard limits).
+               Also the DEMO LENGTHS (min / median / max ticks and seconds of
+               the accepted episodes), the recording cap(s) in force and how
+               many accepted episodes the CAP ended (end_reason time_limit):
+               each one is a WARN - acceptable (the task was completed), but
+               the cap was tight - and the evaluation cap the rule would give
+               (g1_data/eval_cap.py, ceil(1.3 x longest)).
 
 Steps 4-5 run only when the guards pass (build_dataset would refuse with the
 same reason). Verdict: PASS (exit 0) - no FAIL and nothing skipped; FAIL (1);
@@ -398,6 +404,21 @@ def bc_smoke(ep_dir: str, paths, scratch: str, steps: int, window: int, batch: i
 
 
 # ─── 6. timing and dropout ───────────────────────────────────────────────────
+TICK_S = 1.0 / spec.CONTROL_HZ                      # 0.04 s
+
+
+def _eval_cap_of(rows) -> Optional[dict]:
+    """The evaluation cap the rule gives for these episodes (g1_data/eval_cap.py),
+    from their own lengths - reported, not applied."""
+    from g1_data import eval_cap as EC
+    n = [int(r["n_ticks"]) for r in rows if r.get("n_ticks")]
+    if not n:
+        return None
+    cap = EC.cap_for_length(max(n))
+    return dict(rule=EC.RULE, longest_ticks=max(n), max_ticks=cap,
+                max_s=round(cap * TICK_S, 2))
+
+
 def _stats(v):
     v = [float(x) for x in v if x is not None and math.isfinite(float(x))]
     if not v:
@@ -413,6 +434,8 @@ def timing_summary(metas: List[dict], min_tick_rate: float, max_dropout: float,
         t = m.get("timing") or {}
         n = int(m.get("n_ticks") or 0)
         rows.append(dict(seed=m.get("seed"), n_ticks=n, paced=bool(t.get("paced")),
+                         time_limit=m.get("end_reason") == "time_limit",
+                         max_ticks=(m.get("termination") or {}).get("max_ticks"),
                          tick_rate_hz=t.get("tick_rate_hz"),
                          overrun_ticks=t.get("overrun_ticks"),
                          overrun_frac=(t.get("overrun_ticks") or 0) / n if n else None,
@@ -433,6 +456,12 @@ def timing_summary(metas: List[dict], min_tick_rate: float, max_dropout: float,
                         note="tick rate: LIVE_RECORDING_CHECKLIST step 2; dropout and "
                              "overruns: the operator guide's PROVISIONAL limits"),
         n_ticks=_stats([r["n_ticks"] for r in rows]),
+        demo_length_s=_stats([r["n_ticks"] * TICK_S for r in rows]),
+        time_limit_endings=sum(r["time_limit"] for r in rows),
+        time_limit_seeds=[r["seed"] for r in rows if r["time_limit"]],
+        recording_max_ticks=sorted({int(r["max_ticks"]) for r in rows
+                                    if r["max_ticks"] is not None}),
+        eval_cap_rule=_eval_cap_of(rows),
         dropout_rate=_stats([r["dropout_rate"] for r in rows]),
         tick_rate_hz=_stats([r["tick_rate_hz"] for r in paced]),
         overrun_frac=_stats([r["overrun_frac"] for r in paced]),
@@ -446,6 +475,9 @@ def timing_summary(metas: List[dict], min_tick_rate: float, max_dropout: float,
     for r in rows:
         if r["dropout_rate"] is not None and r["dropout_rate"] > max_dropout:
             warns.append("seed %s: dropout %.3f" % (r["seed"], r["dropout_rate"]))
+        if r["time_limit"]:
+            warns.append("seed %s: ended by the TIME LIMIT (%s ticks) - accepted, but the "
+                         "recording cap was tight" % (r["seed"], r["max_ticks"]))
     if paced:
         tr, ov = details["tick_rate_hz"], details["overrun_frac"]
         if tr and tr["median"] < min_tick_rate:
@@ -461,11 +493,17 @@ def timing_summary(metas: List[dict], min_tick_rate: float, max_dropout: float,
     elif rows:
         details["tick_rate_note"] = ("not measured: every episode is headless (paced false), "
                                      "a fake-source dry run")
+    nt = details["n_ticks"]
+    line = ("demo length min %d / median %.1f / max %d ticks (%.1f / %.1f / %.1f s); "
+            "time-limit endings %d of %d" % (nt["min"], nt["median"], nt["max"],
+                                             nt["min"] * TICK_S, nt["median"] * TICK_S,
+                                             nt["max"] * TICK_S, details["time_limit_endings"],
+                                             nt["n"])) if nt else ""
     if reasons:
-        return Check("timing + dropout", FAIL, reasons + warns, details)
+        return Check("timing + dropout", FAIL, reasons + warns, details, line)
     if warns:
-        return Check("timing + dropout", WARN, warns, details)
-    return Check("timing + dropout", PASS if paced or not rows else NA, [], details)
+        return Check("timing + dropout", WARN, warns, details, line)
+    return Check("timing + dropout", PASS if paced or not rows else NA, [], details, line)
 
 
 # ─── the run ─────────────────────────────────────────────────────────────────
@@ -567,6 +605,14 @@ def run(a) -> int:
         if s:
             head.append("%-13s median %.3f%s (min %.3f, max %.3f, n %d)"
                         % (k, s["median"], unit, s["min"], s["max"], s["n"]))
+    s = tm.get("demo_length_s")
+    if s:
+        cap = tm.get("eval_cap_rule") or {}
+        head.append("demo length   min %.1f / median %.1f / max %.1f s; ended by the time "
+                    "limit %d of %d (recording cap %s ticks); evaluation cap by rule %s ticks"
+                    % (s["min"], s["median"], s["max"], tm["time_limit_endings"], s["n"],
+                       "/".join(str(c) for c in tm["recording_max_ticks"]) or "n/a",
+                       cap.get("max_ticks", "n/a")))
     head.append("=" * 72)
     lines = render(checks, head)
     lines += ["", "PILOT CHECK: %s" % v]

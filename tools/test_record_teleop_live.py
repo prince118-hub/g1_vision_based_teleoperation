@@ -459,6 +459,184 @@ def test_cli_refusals():
     _raises(NamespaceMismatch, RT.main, _argv(NS_COLLECTION, "1.0:e"))
 
 
+# ─── long episodes: the 3000-tick cap and time-limit endings (2026-11-05) ────
+LONG_TICKS = 3000                      # 120 s at 25 Hz: the longest cap tested
+
+
+def _long_episode():
+    """ONE 3000-tick episode (~100 s on a CPU): grasp on the take's schedule, no
+    stop key, so the cap ends it. The take runs out at ~17.5 s; the arms then
+    hold (tracking lost, O28) and the task is never completed."""
+    if "long" not in _CACHE:
+        out = os.path.join(_tmp(), "long")
+        g = _take()[1]["grasp_on_s"]
+        assert RT.main(_argv(out, "%.3f:g" % (g + 0.1),
+                             extra=["--max-ticks", str(LONG_TICKS)])) == 0
+        files = glob.glob(os.path.join(out, "failed", "*.npz"))
+        assert len(files) == 1, files
+        arrays, meta = load_episode(files[0])
+        _CACHE["long"] = (out, files[0], arrays, meta)
+    return _CACHE["long"]
+
+
+def test_long_cap_runs_3000_ticks_and_stores_the_cap():
+    from g1_data import recorder as REC
+    _, path, arrays, meta = _long_episode()
+    n = REC.assert_tick_lengths(arrays, meta)
+    assert n == meta["n_ticks"] == LONG_TICKS
+    for k in ("states", "actions", "qvel", "frame_seq", "tick_wall_ns", "tracking_ok"):
+        assert arrays[k].shape[0] == LONG_TICKS, k
+    assert meta["end_reason"] == "time_limit" and meta["failed"] is True
+    t = meta["termination"]
+    assert (t["max_ticks"], t["max_s"], t["time_limit_reached"]) == (LONG_TICKS, 120.0, True)
+    assert meta["timing"]["sim_seconds"] == LONG_TICKS * RT.TICK_S
+    spec.assert_velocity_within_clip(np.asarray(arrays["actions"][:, spec.VEL_A], np.float64))
+    # the raw keypoints are still written (the take ran out: grab_failed rows after it)
+    from g1_teleop.synthetic_source import load_recording
+    assert len(load_recording(_abs(meta["keypoints_file"]))) > 0
+
+
+def test_long_cap_time_limit_is_the_first_reason_and_is_in_the_ledger():
+    out, path, arrays, meta = _long_episode()
+    rows = EpisodeLedger(os.path.join(out, "ledger.jsonl")).rows()
+    assert [r["event"] for r in rows] == ["session", "issue", "discard"], rows
+    s, d = rows[0], rows[2]
+    assert s["max_ticks"] == LONG_TICKS
+    assert d["time_limit"] is True and d["max_ticks"] == LONG_TICKS
+    assert d["end_reason"] == "time_limit" and d["ticks"] == LONG_TICKS
+    assert d["reason"].startswith("failed") and d["operator_choice"] == "discard"
+    rec = d["recommendation"]
+    assert rec["recommend"] == "discard"
+    assert rec["reasons"][0].startswith("TIME LIMIT REACHED (120 s)"), rec["reasons"]
+    # the verdict screen's lines, rebuilt from the saved episode
+    verdict = RT.SU.evaluate(dict(states=arrays["states"], qvel=arrays["qvel"]),
+                             dict(box_spawn_xy=meta["box_spawn_xy"]))
+    rep = RT.episode_report(verdict, meta)
+    lines = [L for L, _ in RT.report_lines(rep)]
+    assert lines[1] == "TIME LIMIT REACHED (120 s) - task not completed: discard", lines[:3]
+    assert rep["time_limit"] and rep["max_ticks"] == LONG_TICKS and not rep["can_accept"]
+    img = RT.verdict_image(rep)                      # every line fits the panel
+    assert img.shape[:2] == (RT.RIC.PANEL_H, RT.RIC.ZED_PANEL_W)
+    assert all(len("  - " + L) <= 96 for L in lines if "TIME LIMIT" in L)   # not truncated
+
+
+def test_long_cap_counts_in_teleop_metrics_and_pilot_check():
+    import pilot_check as PC
+    import teleop_metrics as TM
+    out, _, _, meta = _long_episode()
+    r = TM.analyze(out, out=os.path.join(_tmp(), "metrics_long"))
+    row = r["operators"][0]
+    assert row["time_limit_endings"] == 1 and row["time_limit_accepted"] == 0
+    assert row["max_ticks"] == str(LONG_TICKS) and row["demo_ticks_max"] is None
+    assert r["attempts"][0]["time_limit"] is True
+    c = PC.timing_summary([meta], 24.0, 0.05, 0.02)
+    assert c.details["time_limit_endings"] == 1 and c.details["recording_max_ticks"] == [LONG_TICKS]
+    assert c.details["n_ticks"]["max"] == LONG_TICKS and "120.0 s" in c.summary
+
+
+def test_time_limit_on_a_completed_task_stays_acceptable():
+    """The cap ends an episode whose task IS complete (forced, as the accept test
+    does; the fixture never releases, so early success cannot end it first): the
+    verdict states the time limit, recommends ACCEPT, and the ACCEPT row says
+    time_limit."""
+    out = os.path.join(_tmp(), "time_limit_ok")
+    real = RT.SU.evaluate
+
+    def forced(arrays, meta, cfg=None, geo=None):
+        r = real(arrays, meta, cfg, geo)
+        r.update(episode_success=True, place=True, attributed_to="")
+        return r
+    RT.SU.evaluate = forced
+    try:
+        assert RT.main(_argv(out, "0.5:r", extra=["--max-ticks", "250"])) == 0
+    finally:
+        RT.SU.evaluate = real
+    files = glob.glob(os.path.join(out, "*.npz"))
+    assert len(files) == 1, _npz_under(out)
+    _, meta = load_episode(files[0])
+    assert meta["n_ticks"] == 250 and meta["end_reason"] == "time_limit"
+    assert meta["termination"]["time_limit_reached"] is True and meta["accepted"] is True
+    r = EpisodeLedger(os.path.join(out, "ledger.jsonl")).rows()[-1]
+    assert r["event"] == "accept" and r["time_limit"] is True and r["max_ticks"] == 250
+    assert r["recommendation"]["recommend"] == "accept", r["recommendation"]
+    rep = dict(seed=0, n_ticks=250, end_reason="time_limit", rows=[], failing_phase="",
+               success=True, can_accept=True, recommend="accept", reasons=[],
+               time_limit=True, max_ticks=250)
+    assert RT.report_lines(rep)[1] == ("TIME LIMIT REACHED (10 s) - task completed: acceptable",
+                                       None)
+
+
+def test_no_time_limit_line_when_something_else_ended_it():
+    out, path, arrays, meta = _episode()
+    assert meta["end_reason"] == "operator_stop"
+    assert meta["termination"]["time_limit_reached"] is False
+    assert meta["termination"]["max_s"] == 36.0
+    verdict = RT.SU.evaluate(dict(states=arrays["states"], qvel=arrays["qvel"]),
+                             dict(box_spawn_xy=meta["box_spawn_xy"]))
+    rep = RT.episode_report(verdict, meta)
+    assert not rep["time_limit"]
+    assert not any("TIME LIMIT" in L for L, _ in RT.report_lines(rep))
+    d = EpisodeLedger(os.path.join(out, "ledger.jsonl")).rows()[-1]
+    assert d["time_limit"] is False and d["max_ticks"] == RT.MAX_TICKS == 900
+    assert RT.time_limit_text(900) == "TIME LIMIT REACHED (36 s)"
+    assert RT.time_limit_text(2999) == "TIME LIMIT REACHED (119.96 s)"
+
+
+def test_max_ticks_must_be_positive():
+    _raises(SystemExit, RT.main, _argv(os.path.join(_tmp(), "zero"), "1.0:e",
+                                       extra=["--max-ticks", "0"]))
+
+
+def test_audit_tap_keeps_no_camera_image():
+    """2026-11-05: the tap held every BodyFrame - with ZEDSource, a 1280x720x3
+    image each (2.76 MB; ~6.6 GB over a 120 s episode at 20 Hz). It now keeps
+    keypoints and confidences only, and writes the same keypoint file."""
+    import gc
+    import weakref
+    from g1_teleop.zed_source import BodyFrame
+    rng = np.random.default_rng(0)
+    frames = []
+    for i in range(12):
+        if i == 4:
+            frames.append(None)                                   # a failed grab
+        elif i == 7:
+            frames.append(BodyFrame([], [None] * 38, [0.0] * 38,
+                                    np.zeros((72, 128, 3), np.uint8)))   # no body
+        else:
+            frames.append(BodyFrame(list(rng.standard_normal((38, 3))), [None] * 38,
+                                    list(rng.uniform(0, 100, 38)),
+                                    np.zeros((72, 128, 3), np.uint8)))
+
+    class Src:
+        def __init__(self):
+            self.i = 0
+
+        def grab(self):
+            f = frames[self.i]
+            self.i += 1
+            return f
+
+        def close(self):
+            pass
+    tap = RT.AuditTap(Src())
+    tap.arm(0)
+    for _ in range(len(frames)):
+        tap.grab()
+    images = [weakref.ref(f.image) for f in frames if f is not None]
+    rows = tap.disarm()
+    # the recording equals the one built from the full frames (the old rows)
+    old_rows = [(t, f) for (t, _), f in zip(rows, frames)]
+    a = RT.AuditTap.to_recording(rows, {})
+    b = RT.AuditTap.to_recording(old_rows, {})
+    for k in ("keypoints", "confidence", "status", "ts_host_ns"):
+        assert np.array_equal(getattr(a, k), getattr(b, k), equal_nan=True), k
+    # and the rows hold no image: drop the frames, every image is freed
+    del frames[:], old_rows, b
+    gc.collect()
+    assert all(r() is None for r in images), "the tap still holds a camera image"
+    assert all(f is None or not hasattr(f, "image") for _, f in rows)
+
+
 def test_zzz_cleanup():
     """Last (sorted): remove the temp tree."""
     if "tmp" in _CACHE:

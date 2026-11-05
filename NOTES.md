@@ -7788,3 +7788,98 @@ two docs to §11.
   five full-size runs trained 2 steps by `train_bc.py` on the fixture (bc, act, act_lstm, act_orig, act_lstm_full):
   **ALL IDENTICAL**, 15/15 (7 runner configs, 3 old-format checkpoints, 5 trained checkpoints -> 60 deployed ticks).
   `python -m g1_model.test_ladder_golden` passes with weights checked.
+
+## 2026-11-05 — Long episodes (human demos 40-120 s): 3000-tick recording, time-limit endings, evaluation-cap rule, act_lstm_full at 3000 ticks (branch `long-episodes`)
+
+Linux CPU container (Intel Xeon 2.1 GHz, 4 threads; Python 3.13, torch 2.15.0+cu132 run on CPU, mujoco 3.6.0, numpy
+2.5.3), no GPU, no camera. **Nothing here is a result** (O34 Option B): no training, fake camera only. Defaults are
+unchanged (scripted cap 900, every default code path; proof at the end); no change to model maths, the data format
+(arrays), lock/success rules or any existing result. No HUD change.
+
+- **1. Recording to 3000 ticks (120 s).** `record_teleop_live --max-ticks 3000`, headless fake take, no stop key:
+  3000 ticks, `end_reason` time_limit, every per-tick array 3000 rows, `load_episode` passes; 98 s wall on this CPU.
+  The cap was already stored (`termination.max_ticks`); added `termination.max_s` and `time_limit_reached`, the
+  session ledger row's `max_ticks`, `--max-ticks < 1` refused, a terminal NOTE above 3000 (the longest tested).
+  - **FOUND AND FIXED: the audit tap held every camera IMAGE.** `AuditTap` kept each grabbed `BodyFrame` whole, and
+    `ZEDSource.grab` copies a 1280x720x3 image into every frame (2.76 MB). Measured with main's class on HD720-sized
+    frames: **2.77 MB held per grab** (branch: 0.006 MB). At the measured ~20 Hz (O29) that is ~2 GB over a 36 s
+    episode and ~6.6 GB over 120 s (~10 GB at 30 Hz), held until the episode is saved - a laptop-killer at human
+    demo lengths, invisible in every fake-source test (8x8 images). The tap now keeps keypoints + confidences only
+    (`_TapFrame`); the keypoint file is identical (tested, incl. failed grabs and no-body frames).
+  - Early-success check (`success.evaluate` on the whole buffer every tick after the release): 1.06 ms at 3000 ticks
+    (0.67 ms at 900) against a 40 ms tick. No change.
+- **2. Time-limit endings.** The verdict's second line reads `TIME LIMIT REACHED (N s)` (N = cap in seconds: 36, 120,
+  119.96). Task not completed: "- task not completed: discard", and it is the FIRST reason of the discard
+  recommendation (the success rule still refuses `a`). Task completed (final tick passes the success rule; the 2.5 s
+  hold did not finish inside the cap): "- task completed: acceptable", recommendation unaffected. Every decision row
+  gets `time_limit` and `max_ticks`. `teleop_metrics`: per-attempt `time_limit` (old rows: from `end_reason`),
+  `max_ticks` (decision row, else session), per operator `demo_ticks_min/median/max`, `demo_s_median`,
+  `time_limit_endings`, `time_limit_accepted`. `pilot_check` step 6: demo lengths (ticks and s), recording cap(s),
+  time-limit endings (each accepted one a WARN: the cap was tight) and the rule's evaluation cap, in the header too.
+- **3. Evaluation-cap rule** (`g1_data/eval_cap.py`, CLI `tools/eval_cap.py <folder> [--ticks] [--json]`):
+  `max_ticks = ceil(1.3 x longest ACCEPTED demo)` in integers (ceil(13 L / 10)). Accepted = the folder's top-level
+  episodes (failed/ and discarded/ never count); with a ledger, it must agree exactly with them or the cap is
+  REFUSED. `deploy.py --max-ticks-from <folder>` applies it (with `--max-ticks` too they must agree) and writes
+  `header.max_ticks_rule` (rule, longest demo, seed, file, n, lengths, folder); `header.max_ticks` was already there.
+  `eval_scripted.py --max-ticks N | --max-ticks-from <folder>`: computed ONCE, passed to every deploy (which
+  recomputes and must agree), written into selection.json (`max_ticks`, `max_ticks_rule`); one eval folder holds one
+  cap - an existing selection.json / JSONL under another cap refuses (files from before read as 900). At the default
+  nothing is passed: deploy's command line is exactly as before. **Scripted keeps 900**; the rule gives 900 for
+  scripted_v3's longest recorded episode (692 ticks, 13 x 692 = 8996 -> 900) - consistent, not verified on data here
+  (no episodes in this clone).
+- **4. act_lstm_full at 3000 ticks** (`g1_model/test_long_history.py`, real LSTM 2 x 256, test-width transformer):
+  the 64-tick segmented read equals one LSTM call on 3000-tick histories (lengths 1, 64, 1500, 2999, 3000);
+  3000-tick samples (t = 0..2999) batch, train (finite loss, LSTM gradients) and are scored by `score_deployment`
+  with its guard (reproducible); `step`'s carried (h, c) equals re-reading 0..t at ticks across 3000 (segment
+  boundaries included), no drift; `deploy.CheckpointPolicy` the same over 3000 ticks of real states; a 3000-tick
+  closed-loop `deploy_episode` runs to its cap. Measured on this CPU: segmented vs one call max |diff| 0.0
+  (hidden scale 0.10); carried vs re-read 0.0 at ticks 63, 999, 2047, 2999 and for the final (h, c); through the
+  wrapper (denormalized action) 4.8e-7. Tests assert 1e-5 / 1e-4 (other machines round differently).
+  - **Disclose:** an untrained (default-init) LSTM's gradient reaches only ~230 ticks (~9 s) back over a 3000-tick
+    history (oldest nonzero tick 2770-2772 of 2999, two seeds; 1e-7 of the newest at 30 ticks back, exactly 0 in
+    float32 from ~230). Whole-episode memory must be LEARNED; nothing guarantees it is at 120 s.
+  - Disclosure 3 of 2026-10-25b extends: under the rule, act_lstm_full is deployed up to 1.3x its longest training
+    episode.
+- **Cost vs length** (`tools/bench_long_episodes.py`; timing through `bench_memory_design.measure`, K 100, batch 8,
+  synthetic episodes of exactly T ticks; memory = bytes autograd saves for a batch of 8 T-tick histories):
+
+  | T ticks (s) | CPU step s (x600) | CPU score s/ep (x600) | saved act. GiB | CPU run h | **GPU run h (train + val)** | GPU, CPU-scaled | GPU peak GiB |
+  |---|---|---|---|---|---|---|---|
+  | 600 (24) | 1.259 (1.00) | 3.3 (1.00) | 0.46 | 77 | **8.1** (6.6 + 1.5) = anchor | 8.1 | 1.13 |
+  | 1200 (48) | 1.485 (1.18) | 7.9 (2.40) | 0.62 | 100 | **13.3** (9.5 + 3.8) | 11.4 | 1.28 |
+  | 2000 (80) | 1.777 (1.41) | 16.6 (5.06) | 0.85 | 136 | **21.4** (13.3 + 8.2) | 16.9 | 1.51 |
+  | 3000 (120) | 1.987 (1.58) | 31.8 (9.70) | 1.11 | 181 | **33.6** (18.0 + 15.7) | 24.6 | 1.77 |
+
+  Run = 200k steps + 200 validation passes x 40 episodes (the memory-design launcher). GPU hours are a PROJECTION
+  anchored on the laptop (real window 146.6 s at ~600-692 ticks; cuda bench step 0.131 s, act_orig 0.071 s, read
+  ~10% high): LSTM time taken as proportional to the LSTM timesteps actually run (training: padded longest of 8
+  random histories; validation: padded longest per consecutive 32-sample batch, i.e. O(T^2) per episode; a
+  forward-only timestep = 1/3 of forward+backward), the non-LSTM part of a step constant and of validation linear.
+  "CPU-scaled" scales each part by this CPU's growth instead - lower, because the CPU LSTM's forward+backward grows
+  far slower than its timesteps (0.85 s at 576 vs 1.43 s at 3008, batch 8; oneDNN overhead), which cuDNN does not
+  share. Memory: the laptop's 1,171 MiB peak plus the saved-activation growth from a 704- to a T-tick batch
+  (~0.29 MB per padded tick at batch 8): **3000 ticks fits the 4 GB card (~1.8 GiB)**. Fixed part: 41.2 M params ->
+  0.61 GiB with grads and AdamW moments. Uniform lengths: a dataset with MEAN T and spread costs more (the longest
+  episodes set the padding and the O(T^2) scoring).
+  - **For Charles - validation dominates growth:** at 3000 ticks it is ~47% of the run (1.5 h -> 15.7 h). Options,
+    NOT implemented (each changes what selection measures or its rounding): validate every k-th window; score a
+    fixed subsample of ticks; score each episode in ONE carried pass (O(T), equal to the re-read up to float
+    rounding - but best.pt could then flip on a 1e-7 tie). Re-measure on the laptop first:
+    `python tools/bench_memory_design.py --device cuda --ticks 1200 --models act_orig,act_lstm_full` (and 2000).
+- **5. pilot_check / teleop_metrics**: above (2).
+- **Docs:** OPERATOR_GUIDE section 3 (cap, TIME LIMIT line), RECORDING_PROTOCOL section 5 (cap; RECOMMENDED: one cap per
+  collection - the evaluation cap follows the longest accepted demo, so a cap that cuts slow demos off lowers it).
+- **Regression proof.** Suite `pytest g1_data g1_teleop g1_model tools` (scipy installed): branch **479 passed, 1
+  skipped, 1 failed**; clean main worktree 448 / 1 / the SAME 1 (`test_d19_sensitivity_counts...`, fails on main,
+  as 2026-10-24f records) - +31 new tests (test_eval_cap 12, test_long_history 6, test_bench_long_episodes 3,
+  record_teleop_live +7, teleop_metrics +2, pilot_check +1).
+  `check_memory_design_regression.py --base main`: **ALL IDENTICAL** (every model config, tensor, output and
+  old-format checkpoint). Defaults, main worktree vs branch, same inputs
+  (scratch script): a default fake recording - every array byte-identical except `tick_wall_ns` (host clock),
+  metadata identical except the two added `termination` fields, ledger rows identical plus `max_ticks` /
+  `time_limit`; default `deploy.py` (no cap argument), small untrained act_lstm_full, seeds 700-701 (900 ticks each):
+  every result field and header field identical (`norm` compared as the same file; timing fields excluded) - ALL
+  IDENTICAL. No existing test was changed.
+- **Not done / for Charles:** the 1.3 factor and "accepted = top level + ledger" are as requested, not derived; whether
+  Exp 1/2 on teleop data use the rule is a method decision (deploy needs `--max-ticks-from`). CLAUDE.md not updated
+  (400-line cap, as 2026-10-25b).
