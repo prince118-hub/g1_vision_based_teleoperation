@@ -7969,3 +7969,24 @@ result** (O34 Option B). Only NEW files were added: three tools, a shared module
   `recordings/teleop_ep.npz`) open with a warning, though `load_episode` refuses them: this tool only reads, and its lock
   column for them is the first lock only. CSV is UTF-8 with BOM and shortest exact decimals, no exponents, for Excel.
   Colours are the validated `report_io.SERIES`; more than 3 dims in a group are faceted, never cycled.
+
+## 2026-11-05 — Model comment cleanup merged (`778a9da`, branch `clean-model-comments`)
+
+- **What changed:** comments and docstrings only, in `g1_model/{act,act_memory,history,models,loader,train}.py` and
+  `g1_model/policies/*.py` (12 files, 3,926 -> 2,854 lines). Each spot keeps a short comment, `ACT ref:` / `DIFFERS` citations
+  (58 checked against `reference/act@742c753c`), safety warnings and `why: see DESIGN_NOTES.md#<anchor>` pointers. The
+  removed explanations are verbatim in `docs/DESIGN_NOTES.md`, by file with 86 anchors; its line numbers mean `6632f71`.
+- **Proof on the branch:** `tools/check_comments_only.py` ALL IDENTICAL (AST without docstrings, code lines with indentation)
+  for all 12 files, no reverts; the tool rejected 7 of 7 deliberately bad edits. Suite 520 passed, 2 skipped, the same as
+  before. `check_memory_design_regression.py --base main` with `--real` `ckpt_step0200000.pt` of act_n40_seed0,
+  act_lstm_n40_seed0, act_orig_n40_seed0, act_lstm_full_n40_seed0: ALL IDENTICAL, 14/14, max diff 0.0 over 60 ticks.
+- **To re-prove it after this merge, use `--base 6632f71`, the last commit before the cleanup.** Both tools default to
+  a base that now already holds the cleanup (`main`, `origin/main`), and comparing that with itself passes vacuously.
+- **Tests that read comment text, so that text stayed:** `test_train.py::test_k_is_required_and_marked_provisional` needs
+  "NOT SWEPT" and "SETTLE IT" in `models.py`; `test_policies.py::test_docstrings_name_thesis_name_code_name_and_real_class`
+  needs the names in each entry module's docstring.
+- **Other files:** `docs/MODELS_GUIDE.md` and `docs/ACT_FAITHFULNESS.md` line numbers re-based, including `tools/deploy.py`
+  and `tools/eval_scripted.py` refs that earlier PRs had already left stale. `CLAUDE.md` §11 points at the moved attack table.
+- **Still stale, deliberately not touched:** `tools/deploy.py`'s module docstring cites `loader.py:371-379` (out of scope,
+  and already wrong before this work). `docs/ACT_AUDIT_REPORT.md` and older NOTES entries cite old line numbers; they are
+  records, read against their own commits.
