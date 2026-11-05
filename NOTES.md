@@ -7745,3 +7745,46 @@ the evaluation rules are untouched.
 - **`train_memory_design_n40.ps1 -Plan finish`:** (a) eval act_orig_n40_seed1/2, (b) train act_lstm_full_n40_seed0,
   1, 2 (crashed folders and their evals moved to `_failed\`), (c) eval them. Dry run in that order: 3 x 200 steps
   at peak GPU 1,171-1,177 MiB, 3 deploys ok.
+
+## 2026-11-05 — model-finalization: study layout, models guide, ACT faithfulness, train_policy.py (ADDITIONS ONLY)
+
+Branch `model-finalization`, CPU-only Linux container, no training. **No existing file was edited** (this entry is an
+append), no name, default, data format or state_dict key changed: `git diff --stat origin/main` lists only new files.
+CLAUDE.md was NOT updated (the brief allowed only this append); a later session may add `g1_model/policies/` and the
+two docs to §11.
+- **Added.** `g1_model/policies/` - one entry per thesis model: `bc.py` (BC = `bc`), `act.py` (ACT = `act_orig`),
+  `act_lstm.py` (ACT-LSTM = `act_lstm_full`), ablations `act_12.py` (= `act`) and `act_lstm_12.py` (= `act_lstm`).
+  Each is a docstring, aliases `Config`/`Policy`/`build` of the real objects, and the thesis runs' settings as data
+  (`CONFIG_KWARGS`, `TRAIN_ARGS`); nothing imports them. `docs/MODELS_GUIDE.md` (diagrams, reading order with
+  file:line, forward pass, settings, deployment, commands). `docs/ACT_FAITHFULNESS.md` (ours vs paper and
+  tonyzhaozh/act@742c753c, file:line both sides). `tools/train_policy.py`: calls `train_bc.main()` in-process with
+  the same arguments; `train_bc.py` keeps its name (launchers and notes use it).
+- **Caveat, train_policy.py:** the one-heavy-process guards (`eval_scripted.HEAVY`, every `train_*.ps1`) match
+  `train_bc.py` in the command line, so a run started as `train_policy.py` is invisible to them. Launchers are
+  unchanged and still call train_bc.py; documented in the wrapper and the guide.
+- **Unrecorded ACT differences found (all rounding-level):** U1 normalization std is population (ddof 0,
+  `g1_data/dataset.py:607`) vs the reference's unbiased `torch.std` (`utils.py:96,101`): 1/(2N), 2.6e-5 at 19k ticks.
+  U2 the temporal ensemble sums in float32, the reference in float64: measured 8.4e-8 against a verbatim transcription
+  of `imitate_episodes.py:219,250-259` (300 ticks, K = 100) - formula, m = 0.01 and direction (w_0 = oldest) are the
+  reference's. U3 m is per tick, so at 25 Hz the weights decay half as fast per second as at 50 Hz (recorded for K as
+  audit R7, not for m). Stale records (not edited): ACT_CORRESPONDENCE rows 41, 42 ("decision required"), 48
+  ("DROPPED"), 52 ("UNRESOLVED"), 53 (W_o = 12 for every model), 54 (`nn.LSTM(47, ...)`, now 48); `act.py:7-8`.
+- **Tests.** New `g1_model/test_policies.py` (6: aliases are the real objects; code names = train_bc's `--model`
+  choices; documented settings == `train_bc._model_config`, and at the gate == weight decay 0; each entry builds the
+  trainer's full-size model to the bit, outputs included, act_lstm_full through history AND `step`; checkpoints load
+  through `entry.build` as through `_factory_for`). New `tools/test_train_policy.py` (4: argv passed through; all five
+  models, test width, in-process runs through both entry points - every checkpoint, state.pt, metadata, result,
+  metrics and console identical except wall-clock fields; full-size BC as two separate programs, identical; refusal,
+  argparse error and --help identical up to the program name). Its fixture records one scripted episode when
+  data/synthetic is empty, so it never skips. Negative controls caught: wrapper adding `--seed 1` or changing
+  `--batch`; an entry documenting lr 1e-4 or W_o 1; `build` aliased to the wrong factory; an entry built from seed 1.
+- **Suite** `pytest g1_data g1_teleop g1_model tools`: **459 passed, 1 skipped** (the torch-less report_extras path),
+  0 failed - with torch 2.14.1+cu130 (PyPI; the golden test's pinned build, so weights and outputs WERE checked),
+  mujoco 3.6.0, numpy 2.5.3, scipy 1.18.1, matplotlib 3.11.2, psutil 7.2.2, pandas 2.3.3. Without scipy/matplotlib/
+  psutil 22 tests fail on import. With pandas 3.0.5, `test_d19_sensitivity_counts_and_the_bit_identity_filter` fails
+  on clean main 2d0a5f7 too (as 2026-10-24f found) and passes with pandas 2.3.3: a pandas-3 incompatibility, not this
+  branch.
+- **Regression** `tools/check_memory_design_regression.py --base origin/main` (2d0a5f7 vs 2bb5d43) with `--real` for
+  five full-size runs trained 2 steps by `train_bc.py` on the fixture (bc, act, act_lstm, act_orig, act_lstm_full):
+  **ALL IDENTICAL**, 15/15 (7 runner configs, 3 old-format checkpoints, 5 trained checkpoints -> 60 deployed ticks).
+  `python -m g1_model.test_ladder_golden` passes with weights checked.
