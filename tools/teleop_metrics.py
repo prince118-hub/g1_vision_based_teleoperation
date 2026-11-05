@@ -30,6 +30,15 @@ wall_s           decision-row time minus issue-row time. Ledger times have 1 s
                  resolution; the interval includes scoring and saving (~ s) but
                  not the idle screen before ENTER (the issue is written on ENTER).
 sim_s            recorded ticks / 25 Hz, from the decision row's `ticks`.
+time_limit       the episode was ended by the CAP (--max-ticks): the decision
+                 row's `time_limit`, or `end_reason == "time_limit"` for rows
+                 written before that field existed. `max_ticks` is the cap in
+                 force (decision row, else the session row; n/a for old rows).
+demo length      ticks of the ACCEPTED attempts (the demonstrations): min /
+                 median / max per operator. `time_limit_endings` counts every
+                 attempt the cap ended, `time_limit_accepted` the accepted ones
+                 among them (a completed task the cap ended before its 2.5 s
+                 success hold - acceptable, but a sign the cap is tight).
 time per accepted demo   total wall_s of ALL the operator's attempts / accepted:
                  what one usable demonstration costs, failures included.
 dropout %        degraded ticks / ticks (`tracking_ok`, O28), tick-weighted over
@@ -103,7 +112,8 @@ def attempts_from_rows(rows: List[dict]) -> List[dict]:
             a = dict(seed=seed, operator=str(session.get("operator") or "n/a"),
                      source=session.get("source") or session.get("label"),
                      t_issue=r.get("t"), outcome="unfinished", wall_s=None, ticks=None,
-                     end_reason=None, file=None, reason=None)
+                     end_reason=None, file=None, reason=None, time_limit=None,
+                     max_ticks=session.get("max_ticks"))
             open_[seed] = a
             out.append(a)
         elif ev in DECISIONS and seed in open_:
@@ -114,6 +124,10 @@ def attempts_from_rows(rows: List[dict]) -> List[dict]:
             a["ticks"] = r.get("ticks")
             a["end_reason"] = r.get("end_reason")
             a["reason"] = r.get("reason")
+            a["time_limit"] = bool(r["time_limit"]) if "time_limit" in r else \
+                a["end_reason"] == "time_limit"
+            if r.get("max_ticks") is not None:
+                a["max_ticks"] = r.get("max_ticks")
             a["file"] = _base(r.get("path") or r.get("saved"))
     for a in out:
         a["sim_s"] = None if a["ticks"] is None else float(a["ticks"]) * IO.TICK_S
@@ -172,6 +186,7 @@ def summarize(attempts: List[dict], name: str) -> dict:
     over = [int(a["overrun_ticks"]) for a in attempts if a.get("overrun_ticks") is not None]
     count = {o: sum(a["outcome"] == o for a in attempts)
              for o in ("accept", "failed", "discard", "error", "unfinished")}
+    demo = [int(a["ticks"]) for a in attempts if a["success"] and a["ticks"] is not None]
     return dict(
         operator=name, sources=IO.joined(a["source"] for a in attempts), attempts=n,
         accepted=count["accept"], failed=count["failed"], discarded=count["discard"],
@@ -185,17 +200,27 @@ def summarize(attempts: List[dict], name: str) -> dict:
         saved_episodes_measured=len(saved),
         tick_rate_hz_mean=float(np.mean(rates)) if rates else None,
         overrun_ticks_total=sum(over) if over else None,
-        paced=IO.joined(a.get("paced") for a in attempts))
+        paced=IO.joined(a.get("paced") for a in attempts),
+        demo_ticks_min=min(demo) if demo else None,
+        demo_ticks_median=float(np.median(demo)) if demo else None,
+        demo_ticks_max=max(demo) if demo else None,
+        demo_s_median=float(np.median(demo)) * IO.TICK_S if demo else None,
+        time_limit_endings=sum(bool(a.get("time_limit")) for a in attempts),
+        time_limit_accepted=sum(bool(a.get("time_limit")) and bool(a["success"])
+                                for a in attempts),
+        max_ticks=IO.joined(a.get("max_ticks") for a in attempts))
 
 
 ATTEMPT_COLS = ["operator", "k", "seed", "outcome", "success", "cum_success_rate",
-                "rolling_success_rate", "wall_s", "sim_s", "ticks", "end_reason",
-                "dropout_pct", "tick_rate_hz", "overrun_ticks", "paced", "source", "t_issue",
-                "file", "reason"]
+                "rolling_success_rate", "wall_s", "sim_s", "ticks", "end_reason", "time_limit",
+                "dropout_pct", "tick_rate_hz", "overrun_ticks", "paced", "max_ticks", "source",
+                "t_issue", "file", "reason"]
 OP_COLS = ["operator", "sources", "attempts", "accepted", "failed", "discarded", "errors",
            "unfinished", "success_rate", "wall_s_per_attempt", "sim_s_per_attempt",
            "wall_s_per_accepted_attempt", "wall_s_per_accepted_demo", "dropout_pct",
-           "saved_episodes_measured", "tick_rate_hz_mean", "overrun_ticks_total", "paced"]
+           "saved_episodes_measured", "tick_rate_hz_mean", "overrun_ticks_total", "paced",
+           "demo_ticks_min", "demo_ticks_median", "demo_ticks_max", "demo_s_median",
+           "time_limit_endings", "time_limit_accepted", "max_ticks"]
 
 
 def plot_learning_curve(attempts: List[dict], path: str) -> Optional[str]:
@@ -262,7 +287,7 @@ def analyze(folder: str, out: Optional[str] = None, window: int = 5,
           "Source(s): %s. Definitions: tools/teleop_metrics.py docstring." %
           IO.joined(a["source"] for a in attempts), "",
           "## Per operator", "", IO.md_table(table, OP_COLS), "",
-          "## Attempts", "", IO.md_table(attempts, ATTEMPT_COLS[:15]), ""]
+          "## Attempts", "", IO.md_table(attempts, ATTEMPT_COLS[:17]), ""]
     if png:
         md += ["![learning curve](learning_curve.png)", ""]
     with open(os.path.join(out, "teleop_metrics.md"), "w", encoding="utf-8") as fh:
@@ -285,6 +310,11 @@ def main(argv=None) -> int:
                                 IO.fmt(row["success_rate"], 2), IO.fmt(row["wall_s_per_attempt"], 1),
                                 IO.fmt(row["wall_s_per_accepted_demo"], 1),
                                 IO.fmt(row["dropout_pct"], 2)))
+        print("%-10s demo length min %s / median %s / max %s ticks; time-limit endings %d "
+              "(%d accepted); cap %s" % ("", IO.fmt(row["demo_ticks_min"]),
+                                         IO.fmt(row["demo_ticks_median"], 1),
+                                         IO.fmt(row["demo_ticks_max"]), row["time_limit_endings"],
+                                         row["time_limit_accepted"], row["max_ticks"]))
     print("-> %s" % r["out"])
     return 0
 

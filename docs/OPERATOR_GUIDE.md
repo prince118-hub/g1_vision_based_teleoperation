@@ -82,7 +82,11 @@ Per seed: the **idle screen** (physics paused, camera live, the floor guide on t
 scene) — `ENTER` start, `n` skip the seed, `q` quit. While recording: every teleop key,
 plus `e` stop and save, `x` discard (nothing written), `q` quit (saves). `b` is blocked and
 logged. The episode also ends by itself on a fall, on success held for 2.5 s after the
-release, or at 900 ticks.
+release, or at the cap: `--max-ticks`, default 900 ticks (36 s). Human demonstrations are
+slower - `--max-ticks 3000` (120 s) is tested. When the cap ends it, the verdict's second
+line says **TIME LIMIT REACHED (N s)**: task not completed -> discard (it is the first
+reason given); task completed -> still acceptable. The ledger marks every time-limit
+ending (`time_limit`), and `tools/teleop_metrics.py` / `tools/pilot_check.py` count them.
 
 ## 4. Accept or discard — the rules
 

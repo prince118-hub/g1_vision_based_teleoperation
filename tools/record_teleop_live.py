@@ -42,8 +42,19 @@ the deploy/scripted start (0.60, 0.00) - or `--start-standoff` head-on, a fixtur
 
 TERMINATION = deploy.py's: a fall (pelvis z < 0.35 m, checked every physics
 step) ends at once; success ends it early only once the weld has engaged AND
-released and `success.evaluate` keeps passing for 2.5 s; 900 ticks is the cap.
-`e` (or q) ends it where it is.
+released and `success.evaluate` keeps passing for 2.5 s; the cap is --max-ticks
+(default 900 = 36 s, deploy's; human demonstrations are slower - tested to 3000
+= 120 s, tools/test_record_teleop_live.py). The cap is stored per episode
+(`termination.max_ticks`, `max_s`, `time_limit_reached`) and per session in the
+ledger. `e` (or q) ends it where it is.
+
+TIME LIMIT: when the cap ends an episode the verdict says "TIME LIMIT REACHED
+(N s)" (N = the cap in seconds). Not completed -> it is the first reason to
+discard (the success rule then refuses `a` anyway); completed (the final tick
+passes the success rule, the 2.5 s hold just did not finish inside the cap) ->
+still acceptable, the line is information. Every decision row in the ledger
+carries `time_limit` (true/false) and `max_ticks`; tools/teleop_metrics.py and
+tools/pilot_check.py count them.
 
 ACCEPT / DISCARD - THE OPERATOR DECIDES, THE SUCCESS RULE BOUNDS IT
 -------------------------------------------------------------------
@@ -109,6 +120,8 @@ from g1_teleop import synthetic_source as SS                        # noqa: E402
 MAX_TICKS = D.MAX_TICKS                    # 900
 FALL_Z = D.FALL_Z                          # 0.35 m
 SUCCESS_HOLD_TICKS = D.SUCCESS_HOLD_TICKS  # 63 ticks = 2.5 s
+#: The longest --max-ticks the tests run (120 s at 25 Hz); above it a note is printed.
+MAX_TICKS_TESTED = 3000
 START_XY = OC.START_XY                     # (0.60, 0.00) = deploy's (tested)
 TICK = spec.PHYSICS_STEPS_PER_TICK
 TICK_S = TICK * RIC.SIM_DT                 # 0.04 s
@@ -161,8 +174,23 @@ class ReplaySource:
         pass
 
 
+class _TapFrame:
+    """What `AuditTap.to_recording` reads of a frame: its keypoints and
+    confidences, and nothing else - never the camera IMAGE (2026-11-05). The
+    tap used to keep the whole `BodyFrame`, and ZEDSource copies a 1280x720x3
+    image into every one (2.76 MB): ~2 GB over a 36 s episode at the measured
+    ~20 Hz, ~6.6 GB (~10 GB at 30 Hz) over a 120 s one, all held until the
+    episode is saved. The keypoint file written is the same."""
+
+    __slots__ = ("keypoints_3d", "confidences")
+
+    def __init__(self, f):
+        self.keypoints_3d, self.confidences = f.keypoints_3d, f.confidences
+
+
 class AuditTap:
-    """Wraps the source; while armed, keeps every `grab()` it passes on.
+    """Wraps the source; while armed, keeps what `to_recording` needs of every
+    `grab()` it passes on (`_TapFrame`: keypoints and confidences, no image).
 
     Rows are in the tools/record_keypoints.py format so the episode's own camera
     stream can be replayed with `--source fake`. ZEDSource.grab collapses
@@ -181,7 +209,7 @@ class AuditTap:
         t = time.monotonic_ns()
         with self._lock:
             if self._rows is not None:
-                self._rows.append((t, f))
+                self._rows.append((t, None if f is None else _TapFrame(f)))
         return f
 
     def arm(self, seq_now: int) -> None:
@@ -497,7 +525,9 @@ def episode_meta(S, a, seed, hooks, rec, info, verdict, kp_path) -> dict:
                      fell=bool(hooks.fell), fall_tick=int(hooks.fall_tick),
                      success_tick=int(hooks.success_tick)),
         termination=dict(rule="deploy.py", max_ticks=int(a.max_ticks), fall_z=FALL_Z,
-                         success_hold_ticks=SUCCESS_HOLD_TICKS),
+                         success_hold_ticks=SUCCESS_HOLD_TICKS,
+                         max_s=round(int(a.max_ticks) * TICK_S, 2),
+                         time_limit_reached=hooks.end_reason == "time_limit"),
         degraded_ticks=int((~tracking).sum()),
         dropout_rate=float((~tracking).mean()) if len(tracking) else 0.0,
         timing=dict(_timing(rec.tick_wall_ns, paced=not a.headless),
@@ -583,7 +613,14 @@ def episode_report(verdict, meta) -> dict:
         rows.append(("tick overruns", None, "n/a: not paced to wall clock (headless)"))
     success = bool(verdict["episode_success"])
     phase = verdict["attributed_to"] or ""
+    term = meta.get("termination") or {}
+    time_limit = meta["end_reason"] == "time_limit"
+    cap = int(term.get("max_ticks") or n)
     reasons = []
+    if time_limit and not success:
+        # The cap ended it with the task not done: THE reason, stated first.
+        reasons.append("%s: the episode ran out of time before the task was completed"
+                       % time_limit_text(cap))
     if not success:
         failed = [r for r in rows[:5] if r[1] is False]
         reasons.append("success rule FAILED at %s: %s" % (
@@ -598,13 +635,28 @@ def episode_report(verdict, meta) -> dict:
                 placement_error=float(pd_["placement_error_m"]), dropout=dropout,
                 overrun_ticks=overruns, n_ticks=n, end_reason=meta["end_reason"],
                 seed=int(meta["seed"]), recommend="discard" if reasons else "accept",
-                reasons=reasons)
+                reasons=reasons, time_limit=time_limit, max_ticks=cap)
+
+
+def _secs(s: float) -> str:
+    """120.0 -> '120', 36.0 -> '36', 119.96 -> '119.96'."""
+    return ("%.2f" % s).rstrip("0").rstrip(".")
+
+
+def time_limit_text(max_ticks: int) -> str:
+    """'TIME LIMIT REACHED (N s)', N = the cap in seconds."""
+    return "TIME LIMIT REACHED (%s s)" % _secs(int(max_ticks) * TICK_S)
 
 
 def report_lines(rep) -> list:
     """[(text, ok)] - the verdict as lines; ok None = neutral."""
     out = [("VERDICT  seed %d   %d ticks (%.1f s)   end: %s"
             % (rep["seed"], rep["n_ticks"], rep["n_ticks"] * TICK_S, rep["end_reason"]), None)]
+    if rep.get("time_limit"):
+        out.append(((time_limit_text(rep["max_ticks"]) + " - task not completed: discard")
+                    if not rep["success"] else
+                    (time_limit_text(rep["max_ticks"]) + " - task completed: acceptable"),
+                    None if rep["success"] else False))
     for name, ok, txt in rep["rows"]:
         out.append(("%-17s %-4s %s" % (name, "--" if ok is None else ("PASS" if ok else "FAIL"),
                                          txt), ok))
@@ -712,6 +764,7 @@ def finish_episode(S, a, ledger, out_dir, seed, label, hooks, rec, info) -> str:
         why = "operator discard" if n else "no ticks recorded"
         ledger.append("discard", seed=seed, reason=why, label=label, saved=None,
                       end_reason=hooks.end_reason, ticks=n,
+                      time_limit=hooks.end_reason == "time_limit", max_ticks=int(a.max_ticks),
                       operator_choice="discard" if n else None,
                       decided_by="operator (x during the episode)" if n else None,
                       recommendation=None)
@@ -741,6 +794,7 @@ def finish_episode(S, a, ledger, out_dir, seed, label, hooks, rec, info) -> str:
     checks = checks_of(verdict, meta)
     common = dict(label=label, keypoints=repo_relpath(kp_path), checks=checks,
                   end_reason=hooks.end_reason, ticks=n,
+                  time_limit=hooks.end_reason == "time_limit", max_ticks=int(a.max_ticks),
                   placement_error=meta["outcome"]["placement_error"],
                   operator_choice=choice, decided_by=by, recommendation=recommendation)
     if choice == "accept":
@@ -855,11 +909,13 @@ def cmd_record(a) -> int:
     ledger.append("session", label=label, source=src_name, operator=a.operator,
                   seeds=pending[:a.count], spec_version=spec.SPEC_VERSION,
                   lock_rule=rule.version, out_dir=repo_relpath(out_dir),
+                  max_ticks=int(a.max_ticks),
                   camera=dict((k, S.camera_meta.get(k)) for k in
                               ("fake", "sdk_version", "serial_number", "camera_model")))
-    print("session %r (operator %s, lock rule %s): %d seed(s) pending, %d episode(s) "
-          "this session -> %s" % (label, a.operator, rule.version, len(pending), a.count,
-                                  repo_relpath(out_dir)))
+    print("session %r (operator %s, lock rule %s, cap %d ticks = %s s): %d seed(s) pending, "
+          "%d episode(s) this session -> %s"
+          % (label, a.operator, rule.version, a.max_ticks, _secs(a.max_ticks * TICK_S),
+             len(pending), a.count, repo_relpath(out_dir)))
     tally = dict(accept=0, failed=0, discard=0)
     queue, attempts, last = list(pending), 0, ""
     try:
@@ -1003,7 +1059,10 @@ def build_parser():
     ap.add_argument("--lock-rule", choices=sorted(LOCK_RULES), default=LockConfig().version,
                     help="lock rule (g1_data.phases.LOCK_RULES; default: LockConfig's, "
                          "currently %s). Stored per episode." % LockConfig().version)
-    ap.add_argument("--max-ticks", type=int, default=MAX_TICKS)
+    ap.add_argument("--max-ticks", type=int, default=MAX_TICKS,
+                    help="episode cap in ticks (default %d = 36 s, deploy's; tested to "
+                         "%d = 120 s). Stored per episode and per session"
+                         % (MAX_TICKS, MAX_TICKS_TESTED))
     ap.add_argument("--auto", choices=("off", "pass"), default=None,
                     help="after each episode: off = the operator answers a/d (default "
                          "interactive); pass = take the recommendation (default with "
@@ -1047,6 +1106,11 @@ def main(argv=None) -> int:
         if a.auto == "pass":
             ap.error("--auto pass is for --source fake: a real demonstration is accepted "
                      "or discarded by its operator")
+    if a.max_ticks < 1:
+        ap.error("--max-ticks must be >= 1, got %d" % a.max_ticks)
+    if a.max_ticks > MAX_TICKS_TESTED:
+        print("NOTE: --max-ticks %d is above %d (120 s), the longest cap tested "
+              "(tools/test_record_teleop_live.py)" % (a.max_ticks, MAX_TICKS_TESTED))
     if a.auto is None:
         a.auto = "pass" if a.headless else "off"
     a.operator = a.operator or "fake"

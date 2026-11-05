@@ -29,6 +29,15 @@ ScoredPhase the failure is charged to, phase_reached, lock/weld ticks, header).
 Lock rule: --lock-rule (default v3, CLAUDE.md section 8 2026-10-24) for every
 deploy, selection included.
 
+Episode cap: 900 ticks (deploy.py's default, scripted evaluation's) unless
+--max-ticks N or --max-ticks-from <demonstration folder> (the evaluation-cap
+rule, ceil(1.3 x longest accepted demo), g1_data/eval_cap.py) says otherwise;
+the cap is computed ONCE here and passed to every deploy, which recomputes and
+must agree. It is recorded in every JSONL header (`max_ticks`, and
+`max_ticks_rule` from a folder) and in selection.json. An eval folder holds ONE
+cap: an existing selection.json or JSONL under another cap refuses (a file from
+before this option reads as 900, the only cap it could have used).
+
 RESTART-SAFE: a JSONL is written as <name>.jsonl.part and renamed only when it
 holds one parseable line per seed; a finished JSONL is never re-run, a stale
 .part is deleted and re-run. selection.json, once written, fixes the choice.
@@ -71,6 +80,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from g1_data import dataset as DS                                   # noqa: E402
+from g1_data import eval_cap as EC                                  # noqa: E402
 from g1_data.paths import repo_relpath                              # noqa: E402
 
 EXP = (("exp1", os.path.join(ROOT, "data", "eval", "exp1_seeds.json")),
@@ -80,6 +90,9 @@ STAGES = ("place", "transport", "lift", "grasp")        # last stage first
 SELECTION_RULE = ("max (successes, place, transport, lift, grasp, -mean placement_error_m) "
                   "over the 20 selection seeds; tie -> least training: optimizer steps for a "
                   "step-budgeted run, epochs for an epoch-budgeted one (BC)")
+#: deploy.py's MAX_TICKS (tools/test_eval_scripted.py checks they agree): the cap
+#: of every evaluation that does not state another one.
+DEFAULT_MAX_TICKS = 900
 HEAVY = re.compile(r"train_bc\.py|deploy\.py|train_scripted_v3_n40\.ps1|eval_scripted\.py"
                    r"|train_memory_design_n40\.ps1")
 
@@ -191,11 +204,70 @@ def _lines(path: str):
     return rows
 
 
+class Cap:
+    """The episode cap of one evaluation: `max_ticks`, and the eval_cap record
+    when it came from a demonstration folder. Default: 900, no rule - and then
+    deploy.py is called exactly as before (no cap argument at all)."""
+
+    def __init__(self, max_ticks: int = DEFAULT_MAX_TICKS, rule=None, folder=None):
+        self.max_ticks, self.rule, self.folder = int(max_ticks), rule, folder
+
+    def is_default(self) -> bool:
+        return self.rule is None and self.max_ticks == DEFAULT_MAX_TICKS
+
+    def kw(self) -> dict:
+        """`deploy(...)` keyword for this cap: none at the default, so every
+        default call (and any stand-in for `deploy`) is exactly as before."""
+        return {} if self.is_default() else dict(cap=self)
+
+    def deploy_args(self):
+        if self.rule is not None:
+            return ["--max-ticks", str(self.max_ticks), "--max-ticks-from", self.folder]
+        if self.max_ticks != DEFAULT_MAX_TICKS:
+            return ["--max-ticks", str(self.max_ticks)]
+        return []
+
+    def record(self) -> dict:
+        d = dict(max_ticks=self.max_ticks)
+        if self.rule is not None:
+            d["max_ticks_rule"] = self.rule
+        return d
+
+    def check(self, max_ticks_found, what: str) -> None:
+        have = DEFAULT_MAX_TICKS if max_ticks_found is None else int(max_ticks_found)
+        if have != self.max_ticks:
+            raise SystemExit("%s was evaluated with max_ticks %d; this evaluation asks for %d. "
+                             "One eval folder holds one cap - use another --eval-root"
+                             % (what, have, self.max_ticks))
+
+
+def resolve_cap(max_ticks=None, cap_from=None) -> Cap:
+    """--max-ticks / --max-ticks-from -> a Cap (deploy.resolve_max_ticks's rules)."""
+    rule = None
+    if cap_from:
+        try:
+            rule = EC.eval_cap(cap_from)
+        except EC.CapError as e:
+            raise SystemExit("--max-ticks-from: %s" % e)
+        if max_ticks is not None and int(max_ticks) != rule["max_ticks"]:
+            raise SystemExit("--max-ticks %d disagrees with --max-ticks-from %s (%d = %s)"
+                             % (int(max_ticks), rule["folder"], rule["max_ticks"], rule["rule"]))
+        max_ticks = rule["max_ticks"]
+    elif max_ticks is None:
+        max_ticks = DEFAULT_MAX_TICKS
+    if int(max_ticks) < 1:
+        raise SystemExit("--max-ticks must be >= 1, got %r" % (max_ticks,))
+    return Cap(int(max_ticks), rule, os.path.abspath(cap_from) if cap_from else None)
+
+
 def deploy(run_dir: str, ckpt: str, seed_args, n_seeds: int, out: str, lock_rule: str,
-           logdir: str, allow_mismatch: bool = False):
+           logdir: str, allow_mismatch: bool = False, cap: Cap = None):
     """Run tools/deploy.py into `out` (via .part); return its rows."""
+    cap = cap or Cap()
     if os.path.exists(out):
         rows = _lines(out)
+        for r in rows[:1]:
+            cap.check((r.get("header") or {}).get("max_ticks"), os.path.basename(out))
         if len(rows) == n_seeds:
             return rows
         raise SystemExit("%s exists with %d rows, expected %d - inspect it by hand"
@@ -208,7 +280,7 @@ def deploy(run_dir: str, ckpt: str, seed_args, n_seeds: int, out: str, lock_rule
     lg = os.path.join(logdir, os.path.basename(out).replace(".jsonl", ".log"))
     cmd = [sys.executable, "-u", os.path.join(ROOT, "tools", "deploy.py"), "--run", run_dir,
            "--ckpt", ckpt, "--lock-rule", lock_rule, "--out", part] + list(seed_args) + (
-               ["--allow-lock-rule-mismatch"] if allow_mismatch else [])
+               ["--allow-lock-rule-mismatch"] if allow_mismatch else []) + cap.deploy_args()
     t0 = time.time()
     # ONE automatic retry (2026-10-26): a deploy that writes fewer rows than seeds
     # is run once more from scratch. The case that motivated it: an act_orig Exp 1
@@ -267,10 +339,13 @@ def _progress(rows, by_epoch: bool) -> float:
     return float(v)
 
 
-def select(run_dir: str, ev: str, lock_rule: str, allow_mismatch: bool = False) -> dict:
+def select(run_dir: str, ev: str, lock_rule: str, allow_mismatch: bool = False,
+           cap: Cap = None) -> dict:
+    cap = cap or Cap()
     path = os.path.join(ev, "selection.json")
     if os.path.exists(path):
         sel = json.load(open(path, encoding="utf-8"))
+        cap.check(sel.get("max_ticks"), path)
         log("  selection.json exists: %s" % sel["chosen"])
         return sel
     n_sel = len(DS.load_seed_file(DS.SELECT_SEEDS))
@@ -283,7 +358,7 @@ def select(run_dir: str, ev: str, lock_rule: str, allow_mismatch: bool = False) 
             continue
         rows = deploy(run_dir, f, ["--selection"], n_sel,
                       os.path.join(ev, "select", f.replace(".pt", ".jsonl")),
-                      lock_rule, os.path.join(ev, "logs"), allow_mismatch)
+                      lock_rule, os.path.join(ev, "logs"), allow_mismatch, **cap.kw())
         cands.append(dict(ckpt=f, alias_of=None, progress=_progress(rows, by_epoch),
                           progress_unit="epoch" if by_epoch else "step",
                           ckpt_info=rows[0]["header"]["ckpt"], **tally(rows)))
@@ -299,22 +374,24 @@ def select(run_dir: str, ev: str, lock_rule: str, allow_mismatch: bool = False) 
                                                    "place", "mean_placement_error_m")},
                rule=SELECTION_RULE, lock_rule=lock_rule,
                seed_set=repo_relpath(DS.SELECT_SEEDS), candidates=cands,
-               written=now())
+               written=now(), **cap.record())
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(sel, fh, indent=1)
     log("  SELECTED %s (%d/%d success)" % (best["ckpt"], best["success"], best["n"]))
     return sel
 
 
-def evaluate(run_dir: str, eval_root: str, lock_rule: str, allow_mismatch: bool = False) -> dict:
+def evaluate(run_dir: str, eval_root: str, lock_rule: str, allow_mismatch: bool = False,
+             cap: Cap = None) -> dict:
     name = os.path.basename(os.path.normpath(run_dir))
     ev = os.path.join(eval_root, name)
-    sel = select(run_dir, ev, lock_rule, allow_mismatch)
+    cap = cap or Cap()
+    sel = select(run_dir, ev, lock_rule, allow_mismatch, **cap.kw())
     res = dict(run=name, chosen=sel["chosen"], select=sel["chosen_tally"])
     for tag, seeds in EXP:
         rows = deploy(run_dir, sel["chosen"], ["--seeds", seeds], len(DS.load_seed_file(seeds)),
                       os.path.join(ev, "%s.jsonl" % tag), lock_rule, os.path.join(ev, "logs"),
-                      allow_mismatch)
+                      allow_mismatch, **cap.kw())
         res[tag] = tally(rows)
     return res
 
@@ -339,11 +416,18 @@ def main(argv=None):
                     help="passed to deploy.py: evaluate under --lock-rule although the "
                          "training data used another (scripted_v3 data is v2; the "
                          "experiments run v3 by decision, CLAUDE.md section 8 2026-10-24)")
+    ap.add_argument("--max-ticks", type=int, default=None,
+                    help="episode cap for every deploy (default %d, scripted evaluation's)"
+                         % DEFAULT_MAX_TICKS)
+    ap.add_argument("--max-ticks-from", default=None, metavar="FOLDER",
+                    help="the cap from a demonstration folder: ceil(1.3 x longest accepted "
+                         "demo) (g1_data/eval_cap.py); recorded in every result")
     ap.add_argument("--wait-for-training", action="store_true")
     ap.add_argument("--training-summary", default=None,
                     help="default <run-root>/summary_n40.txt")
     ap.add_argument("--poll", type=int, default=300)
     a = ap.parse_args(argv)
+    cap = resolve_cap(a.max_ticks, a.max_ticks_from)
     eval_root = a.eval_root or os.path.join(a.run_root, "eval")
     run_dirs = [os.path.join(a.run_root, r) for r in a.runs]
     if a.wait_for_training:
@@ -357,7 +441,11 @@ def main(argv=None):
     os.makedirs(eval_root, exist_ok=True)
     summary = os.path.join(eval_root, "summary.txt")
     with open(summary, "a", encoding="utf-8") as fh:
-        fh.write("eval started %s  lock rule %s  runs %s\n" % (now(), a.lock_rule, " ".join(a.runs)))
+        fh.write("eval started %s  lock rule %s  runs %s%s\n"
+                 % (now(), a.lock_rule, " ".join(a.runs),
+                    "" if not cap.deploy_args() else "  max ticks %d%s" % (
+                        cap.max_ticks, " (rule: %s, longest %d)" % (
+                            cap.rule["folder"], cap.rule["longest_ticks"]) if cap.rule else "")))
     results, skipped = [], []
     for d in run_dirs:
         st = run_status(d)
@@ -368,7 +456,7 @@ def main(argv=None):
                 fh.write("%-22s SKIPPED: training status %s\n" % (os.path.basename(d), st))
             continue
         log("=== %s" % os.path.basename(d))
-        r = evaluate(d, eval_root, a.lock_rule, a.allow_lock_rule_mismatch)
+        r = evaluate(d, eval_root, a.lock_rule, a.allow_lock_rule_mismatch, **cap.kw())
         results.append(r)
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(line(r) + "\n")

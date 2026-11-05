@@ -250,6 +250,30 @@ def test_timing_summary_fails_on_the_median_and_warns_per_episode():
                              *th).status == PC.NA
 
 
+def test_timing_summary_reports_demo_lengths_and_time_limit_endings():
+    """2026-11-05: demo lengths (ticks and seconds), the recording cap(s), the
+    episodes the cap ended (each a WARN: accepted, but the cap was tight) and
+    the evaluation cap the rule gives."""
+    th = (24.0, 0.05, 0.02)
+    metas = [_meta(0, n=1500), _meta(1, n=3000), _meta(2, n=2000)]
+    metas[1]["end_reason"] = "time_limit"
+    for m in metas:
+        m["termination"] = dict(max_ticks=3000)
+    c = PC.timing_summary(metas, *th)
+    d = c.details
+    assert c.status == PC.WARN and len(c.reasons) == 1 and "TIME LIMIT" in c.reasons[0]
+    assert (d["n_ticks"]["min"], d["n_ticks"]["median"], d["n_ticks"]["max"]) == (1500, 2000.0, 3000)
+    assert (d["demo_length_s"]["min"], d["demo_length_s"]["max"]) == (60.0, 120.0)
+    assert d["time_limit_endings"] == 1 and d["time_limit_seeds"] == [1]
+    assert d["recording_max_ticks"] == [3000]
+    assert d["eval_cap_rule"]["max_ticks"] == 3900 and d["eval_cap_rule"]["longest_ticks"] == 3000
+    assert "time-limit endings 1 of 3" in c.summary and "120.0 s" in c.summary
+    # episodes from before the cap was stored: no cap listed, nothing ended by it
+    c = PC.timing_summary([_meta(s) for s in range(3)], *th)
+    assert c.status == PC.PASS and c.details["time_limit_endings"] == 0
+    assert c.details["recording_max_ticks"] == [] and c.details["eval_cap_rule"]["max_ticks"] == 780
+
+
 def test_verdict_and_refusals():
     C = PC.Check
     assert PC.verdict([C("a", PC.PASS), C("b", PC.WARN), C("c", PC.NA)]) == "PASS"

@@ -42,8 +42,13 @@ queried); the LOGGED action carries zeros there, as build_action does (D17).
 EPISODE END: a fall (pelvis z < 0.35 m, DemoConfig.fall_z, checked every physics
 step) ends it at once. Success ends it early ONLY when the weld has engaged and
 released AND success.evaluate passes AND keeps passing for 2.5 s (63 ticks) - so
-a box still held over the goal never counts. Otherwise it runs to 900 ticks and
-the FINAL tick is scored (success.evaluate scores the final tick).
+a box still held over the goal never counts. Otherwise it runs to the cap -
+900 ticks (36 s) by default, scripted evaluation's - and the FINAL tick is scored
+(success.evaluate scores the final tick); end_reason "time_limit". For human
+demonstrations, `--max-ticks-from <folder>` sets the cap by the evaluation-cap
+rule, ceil(1.3 x the longest accepted demonstration) (g1_data/eval_cap.py,
+tools/eval_cap.py), and records the rule and its inputs in the header
+(`max_ticks_rule`); the header's `max_ticks` is the cap in force either way.
 
 The base starts at (0.60, 0.00), exactly as the demonstrator places it
 (record_episodes.py:173, scripted_demo.py:716-725); reset_episode does not.
@@ -68,6 +73,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from g1_data import dataset as DS                                   # noqa: E402
+from g1_data import eval_cap as EC                                  # noqa: E402
 from g1_data.paths import repo_relpath                              # noqa: E402
 from g1_data import phase_label as PL                               # noqa: E402
 from g1_data import spec                                            # noqa: E402
@@ -675,6 +681,31 @@ def training_lock_rule(meta_json: dict):
     return LOCK_RULES[next(iter(rules))]
 
 
+def resolve_max_ticks(max_ticks: Optional[int], cap_from: Optional[str] = None):
+    """(the episode cap, the cap record or None). Default MAX_TICKS (900, the
+    scripted cap). `cap_from` applies the evaluation-cap rule to that folder
+    (g1_data/eval_cap.py); an explicit `max_ticks` must then equal it, so a
+    folder that changed since the caller computed its cap is refused."""
+    rule = None
+    if cap_from:
+        try:
+            rule = EC.eval_cap(cap_from)
+        except EC.CapError as e:
+            raise SystemExit("--max-ticks-from: %s" % e)
+        if max_ticks is not None and int(max_ticks) != rule["max_ticks"]:
+            raise SystemExit("--max-ticks %d disagrees with --max-ticks-from %s (%d = %s; "
+                             "longest accepted demo %d ticks) - the folder changed, or the "
+                             "number came from somewhere else"
+                             % (int(max_ticks), rule["folder"], rule["max_ticks"], rule["rule"],
+                                rule["longest_ticks"]))
+        max_ticks = rule["max_ticks"]
+    elif max_ticks is None:
+        max_ticks = MAX_TICKS
+    if int(max_ticks) < 1:
+        raise SystemExit("--max-ticks must be >= 1, got %r" % (max_ticks,))
+    return int(max_ticks), rule
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -687,7 +718,13 @@ def main(argv=None):
                    help="CHECKPOINT SELECTION: the seeds in data/eval/select_seeds.json "
                         "(disjoint from train, exp1 and exp2; open item 38)")
     ap.add_argument("--out", required=True, help="JSONL, one line per episode (refused if it exists)")
-    ap.add_argument("--max-ticks", type=int, default=MAX_TICKS)
+    ap.add_argument("--max-ticks", type=int, default=None,
+                    help="episode cap in ticks (default %d = scripted evaluation's)" % MAX_TICKS)
+    ap.add_argument("--max-ticks-from", default=None, metavar="FOLDER",
+                    help="the cap from a demonstration folder's evaluation-cap rule, "
+                         "ceil(1.3 x longest accepted demo) (g1_data/eval_cap.py); "
+                         "recorded in the header as max_ticks_rule. With --max-ticks "
+                         "too, the two must agree")
     ap.add_argument("--ensemble-horizon", type=int, default=None, metavar="N",
                     help="chunked policies: ensemble only the first N steps of each "
                          "chunk (1..K; default K = the reference behaviour)")
@@ -714,6 +751,7 @@ def main(argv=None):
         a.seeds = DS.SELECT_SEEDS
     if os.path.exists(a.out):
         raise SystemExit("--out %s exists - refusing to append to another evaluation" % a.out)
+    a.max_ticks, cap_rule = resolve_max_ticks(a.max_ticks, a.max_ticks_from)
 
     seeds = _seeds(a)
     rule = LOCK_RULES[a.lock_rule]
@@ -760,6 +798,8 @@ def main(argv=None):
                   success_hold_ticks=SUCCESS_HOLD_TICKS, fall_z=FALL_Z,
                   git_commit=__import__("g1_data.recorder", fromlist=["_git_commit"])._git_commit(),
                   determinism=det.get("notes") if isinstance(det, dict) else None)
+    if cap_rule is not None:                            # --max-ticks-from only
+        header["max_ticks_rule"] = cap_rule
     if policy.recurrent:                                # act_lstm_full only
         header["lstm_memory"] = ("(h, c) carried tick by tick from a zero state, reset "
                                  "per episode (g1_model/act_memory.py)")

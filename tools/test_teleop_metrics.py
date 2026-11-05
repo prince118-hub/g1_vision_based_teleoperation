@@ -140,3 +140,67 @@ def test_operator_filter(tmp_path):
 def test_missing_ledger_refused(tmp_path):
     with pytest.raises(SystemExit):
         TM.analyze(str(tmp_path), out=str(tmp_path / "o"))
+
+
+# ─── long episodes: demo lengths and time-limit endings (2026-11-05) ────────
+def _long_rows(folder):
+    """carol records at a 3000-tick cap: one accepted demo the cap ended (task
+    completed), one failure the cap ended (new `time_limit` field), one failure
+    ended by the cap in a ledger written BEFORE the field existed (end_reason
+    only), and two normal accepted demos."""
+    def at(hms):
+        return "2026-11-05T%s" % hms
+    rows = [
+        dict(event="session", t=at("09:00:00"), source=SRC, operator="carol", seeds=[0, 1, 2, 3],
+             lock_rule="v3", max_ticks=3000),
+        dict(event="issue", t=at("09:01:00"), seed=0),
+        dict(event="accept", t=at("09:03:10"), seed=0, path="ep_seed0000_a.npz", ticks=3000,
+             end_reason="time_limit", time_limit=True, max_ticks=3000, heldout=False),
+        dict(event="issue", t=at("09:04:00"), seed=1),
+        dict(event="discard", t=at("09:06:10"), seed=1, reason="failed: PLACE (time_limit)",
+             saved="failed/ep_seed0001_b.npz", ticks=3000, end_reason="time_limit",
+             time_limit=True, max_ticks=3000),
+        dict(event="issue", t=at("09:07:00"), seed=1),
+        dict(event="discard", t=at("09:09:10"), seed=1, reason="failed: GRASP (time_limit)",
+             saved="failed/ep_seed0001_c.npz", ticks=3000, end_reason="time_limit"),
+        dict(event="issue", t=at("09:10:00"), seed=2),
+        dict(event="accept", t=at("09:11:00"), seed=2, path="ep_seed0002_d.npz", ticks=1500,
+             end_reason="success", time_limit=False, max_ticks=3000, heldout=False),
+        dict(event="issue", t=at("09:12:00"), seed=3),
+        dict(event="accept", t=at("09:13:30"), seed=3, path="ep_seed0003_e.npz", ticks=2000,
+             end_reason="success", time_limit=False, max_ticks=3000, heldout=False),
+    ]
+    with open(os.path.join(folder, "ledger.jsonl"), "w", encoding="utf-8") as fh:
+        fh.writelines(json.dumps(r) + "\n" for r in rows)
+    for name, n in (("ep_seed0000_a", 3000), ("failed/ep_seed0001_b", 3000),
+                    ("failed/ep_seed0001_c", 3000), ("ep_seed0002_d", 1500),
+                    ("ep_seed0003_e", 2000)):
+        _episode(os.path.join(folder, name + ".npz"), n, 0, 25.0, 0, "carol")
+
+
+def test_demo_lengths_and_time_limit_endings(tmp_path):
+    folder = tmp_path / "long"
+    folder.mkdir()
+    _long_rows(str(folder))
+    r = TM.analyze(str(folder), out=str(tmp_path / "out"))
+    at = r["attempts"]
+    assert [a["time_limit"] for a in at] == [True, True, True, False, False]
+    assert [a["max_ticks"] for a in at] == [3000] * 5          # the old row: the session's cap
+    row = r["operators"][0]
+    assert (row["demo_ticks_min"], row["demo_ticks_median"], row["demo_ticks_max"]) == \
+        (1500, 2000.0, 3000)
+    assert row["demo_s_median"] == pytest.approx(80.0)
+    assert (row["time_limit_endings"], row["time_limit_accepted"]) == (3, 1)
+    assert row["max_ticks"] == "3000"
+    md = open(os.path.join(r["out"], "teleop_metrics.md"), encoding="utf-8").read()
+    assert "time_limit_endings" in md and "demo_ticks_median" in md
+
+
+def test_old_ledgers_without_the_cap_still_report(result):
+    """The first fixture predates `time_limit` / `max_ticks`: none hit the cap,
+    the cap is n/a, demo lengths come from the accept rows' ticks."""
+    ops = {r["operator"]: r for r in result["operators"]}
+    a = ops["alice"]
+    assert (a["demo_ticks_min"], a["demo_ticks_median"], a["demo_ticks_max"]) == (400, 450.0, 500)
+    assert a["time_limit_endings"] == 0 and a["max_ticks"] == "n/a"
+    assert ops["ALL"]["demo_ticks_max"] == 600
