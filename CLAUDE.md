@@ -20,7 +20,7 @@ record the divergence and ask Charles. A drift from an OBJECTIVE, not a method, 
 
 ## 2. CURRENT BLOCKER
 
-**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, merged, fake-tested): `docs/LIVE_RECORDING_CHECKLIST.md` steps 2–5 BLOCKED - no ZED available (2026-10-24). Operator a/d verdict, floor guide, `walk_test.py` practice: `docs/OPERATOR_GUIDE.md` (fake-tested, `NOTES.md` operator tools).
+**None. P1–P4 CLOSED** (PLAN.md). **SCRIPTED data only** (`data/raw/` empty; O31, O32 open; D8 awaits the adviser). **Live recorder** (PR #2, merged, fake-tested): `docs/LIVE_RECORDING_CHECKLIST.md` ZED connected 2026-11-12; the live loop was 16.8 Hz and is now 25.0 Hz with 0.3–1.6% late ticks in 6 of 7 runs, 4.6% in one (§8 2026-11-12); steps 2–5 NOT yet signed off. Operator a/d verdict, floor guide, `walk_test.py` practice: `docs/OPERATOR_GUIDE.md` (fake-tested, `NOTES.md` operator tools).
 scripted_v3 (rule v2) survey 14/300; **lock rule v3 is the default** (ACT 2→5, LSTM 3→5 /20). FREEZE 2026-10-23: no walk-in fix, no release gate, β 10 (`NOTES.md`). g1-spec-1.2.0 refuses 1.1.0. ONE heavy process at a time. **Exp 1/2 DONE** (final set, thesis names): `runs/scripted_v3/analysis_final/report.md` (`tools/make_final_report.py`); `NOTES.md` 2026-11-05. Videos DONE, 352/352 hashes match: `D:\thesis_videos\scripted_final\index.csv` (`tools/render_final_videos.py`). **Memory design** (`act_orig`, `act_lstm_full`, trained and evaluated; launcher `tools/train_memory_design_n40.ps1`): `NOTES.md` 2026-10-24f.
 
 ## 3. Full pipeline (end to end)
@@ -96,6 +96,7 @@ D6, D7, **D12** and **D18** touch **objectives**, not just methods. D6/D7 are re
 
 Older entries are one line; detail is in `NOTES.md` under the same date. Retired entries (§14) keep a one-line pointer.
 
+- 2026-11-12 — **LIVE LOOP RATE FIXED: 16.8 → 25.0 Hz, late ticks 68% → 0.3–1.6% in 6 of 7 runs (4.6% in one), real ZED, body in view, default ZED settings.** Causes: NumPy's 12-thread OpenBLAS pool beside the ZED SDK (arm IK 28.5 → 8.7 ms/frame; now 1 thread, `--source zed` only, `g1_teleop/compute_threads.py`), and display work stacked on the IK after the pacing sleep. `run_loop` (paced runs only): sleep AFTER the period's work, display deferred one control period off an IK solve and skipped when behind (keys still polled), `pollKey`, 1 ms timer, render at 760x570. `tick_wall_ns` is now `perf_counter_ns` (the old clock stepped 15.6 ms). `--zed-depth-mode`, `--zed-body-model`, `--bench`; ZEDSource checks `open()`. IK untouched; `--invariance` CONFIRMED. `NOTES.md` 2026-11-12.
 - 2026-10-23 — **SCRIPTED EXP 1/2 PROCEDURE** (Charles): lock rule v3; checkpoint selection over EVERY saved checkpoint (weight-identical aliases dropped) on the 20 selection seeds, lexicographic (success, place, transport, lift, grasp, −mean placement error), tie → fewest steps; Exp 1/2 on the chosen one (`tools/eval_scripted.py`). `train_bc.py --seed` added (default 0 = all earlier runs, tested). **Run B (160, seed 0)**, successes /100 Exp 1 | Exp 2: BC 0 | 0 (all checkpoints 0/20 at selection, picked by stage tie-break), ACT 14 | 1, ACT-LSTM 17 | 11. Run A = n40: BC seeds 0–2, ACT/ACT-LSTM seeds 0–2. **Disclose:** BC is epoch-budgeted, so BC-n40 takes ~4× fewer steps than BC-160. Not yet analysed.
 - 2026-10-24 — **LOCK RULE v3 = DEFAULT** (`LockConfig()`; deploy `--lock-rule` default v3; new scripted recordings): the carry release (welded box > 0.055 m up) applies at the PICKUP lock only — at the goal it dropped the lock and the base walked off (ACT-160 2→5/20, ACT-LSTM-160 3→5/20, none lost). 4/200 scripted_v3 demos differ under v3 (seeds 6, 14, 146, 206). v1/v2 selectable; stored rules without the field read as v1/v2. Teleop on v3 too since PR #2 merged (2026-10-24). `NOTES.md` 2026-10-24b.
 - 2026-10-18 — **g1-spec-1.2.0: `base_locked` state dim 47, REVERSING 2026-09-11 (c)** (Charles): demonstrator and operator condition on the
@@ -103,7 +104,6 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   (v2) opened its arms 39–53 ticks before the lock, 1 mm from a training spawn — timing, not coverage. One builder: recorder and `deploy.observe`.
   **D22** gripper label = next weld bit (`grip_cmd` kept; `tools/convert_grip_label.py` copies). **Place needs the release** (v2 survey 5 → 3/180).
   **`select_seeds.json` 679–701**, train stream 300 (`train[:200]`, exp1, exp2 unchanged). 1.1.0 refused, never converted. `NOTES.md` 2026-10-18.
-
 - 2026-10-17 — **LOCK RULE v2: stance band only (stillness rule dropped), real pelvis lock, pickup AND goal** (Charles). `phases.LockConfig` is
   versioned (`LOCK_RULE_V1/V2`); new episodes store `lock_rule`; replay, the phase labeller and deploy apply the EPISODE's rule (no field = v1, so
   all of scripted_v1, which replays bit-identically); split/norm refuse mixed rules; teleop uses v2. Why: policies reached before stillness held, and
@@ -199,8 +199,7 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
   free-based. **D12 may therefore bind only the SCRIPTED demonstrator.** Unmeasured: standoff spread at grasp without the lock, and whether a
   learned policy can fight the attractor as a human does. Worth resolving before collection — it removes a major limitation AND gives
   Objective 4 natural standoff variation.
-- 2026-09-15 — IK throughput: `mj_kinematics` + `mj_comPos` in the solver, 37.4% → 128.2% of real time. Archived: `NOTES.md` "2026-09-22 — CLAUDE.md §8 ARCHIVE".
-- 2026-09-15 — D18 adopted as `<contact><exclude>` pairs. Archived: `NOTES.md` "2026-09-22 — CLAUDE.md §8 ARCHIVE".
+- 2026-09-15 — IK throughput: `mj_kinematics` + `mj_comPos` in the solver, 37.4% → 128.2% of real time; D18 adopted as `<contact><exclude>` pairs. Both archived: `NOTES.md` "2026-09-22 — CLAUDE.md §8 ARCHIVE".
 - 2026-09-11 — **Schema frozen** at `g1-spec-1.1.0`. Four decisions: (a) box position stored WORLD frame, base-relative derived in the loader;
   (b) **gait phase EXCLUDED** from the state, logged as per-timestep metadata — it is a clock, and giving every policy a clock hands BC the
   temporal capability ACT-LSTM is meant to supply, collapsing the RQ2/RQ3 gap; (c) [REVERSED 2026-10-18] the base lock is neither a state nor an action dim —
@@ -304,6 +303,7 @@ Older entries are one line; detail is in `NOTES.md` under the same date. Retired
 - **TR32.** Verifying a port against itself. The one-decoder-layer test compared the implementer's 1-layer decoder with the implementer's
   7-layer decoder, so an error in the shared port passes both. The claim HELD when re-measured against the reference's own
   `transformer.py`; the test could not have shown otherwise. An equivalence claim runs the REFERENCE's code on one side.
+- **TR33.** Changing the ZED depth mode or body model to raise the live tick rate. Not the bottleneck: HUMAN_BODY_MEDIUM delivers MORE frames and the loop got SLOWER (13.8 Hz against 16.8), NEURAL_LIGHT gained 2.7 Hz; after the 2026-11-12 fix all four settings hold 25 Hz. Also: always skipping the display on an IK tick (late ticks 13–18%). `NOTES.md` 2026-11-12.
 
 ## 10. Known open issues
 

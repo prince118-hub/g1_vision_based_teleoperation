@@ -637,6 +637,136 @@ def test_audit_tap_keeps_no_camera_image():
     assert all(f is None or not hasattr(f, "image") for _, f in rows)
 
 
+def _fake_sl(open_status="SUCCESS", body_status="SUCCESS"):
+    """A stand-in for `pyzed.sl` with just what ZEDSource.__init__ touches."""
+    import types
+
+    def enum(*names):
+        return types.SimpleNamespace(**{n: n for n in names})
+    made = {}
+
+    class Camera:
+        def __init__(self):
+            made["camera"] = self
+            self.closed = False
+
+        def open(self, init):
+            self.init = init
+            return open_status
+
+        def enable_body_tracking(self, params):
+            self.body_params = params
+            return body_status
+
+        def close(self):
+            self.closed = True
+    ns = lambda: types.SimpleNamespace()                              # noqa: E731
+    sl = types.SimpleNamespace(
+        Camera=Camera, InitParameters=ns, BodyTrackingParameters=ns,
+        BodyTrackingRuntimeParameters=ns, Bodies=ns, Mat=ns,
+        RESOLUTION=enum("HD720", "HD1080"),
+        DEPTH_MODE=enum("NEURAL", "NEURAL_LIGHT", "NEURAL_PLUS", "LAST"),
+        BODY_TRACKING_MODEL=enum("HUMAN_BODY_ACCURATE", "HUMAN_BODY_MEDIUM", "HUMAN_BODY_FAST"),
+        BODY_FORMAT=enum("BODY_38"), UNIT=enum("METER"), ERROR_CODE=enum("SUCCESS"))
+    return sl, made
+
+
+def _with_fake_pyzed(sl, fn):
+    import types
+    saved = {k: sys.modules.get(k) for k in ("pyzed", "pyzed.sl")}
+    pkg = types.ModuleType("pyzed")
+    pkg.sl = sl
+    sys.modules["pyzed"], sys.modules["pyzed.sl"] = pkg, sl
+    try:
+        return fn()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
+def test_zed_source_checks_open_and_applies_the_config():
+    """2026-11-12: the result of camera.open() (and of enable_body_tracking) is
+    checked and reported; depth mode AND body model come from ZEDConfig (the
+    body model was hardcoded); a name the SDK does not have is refused with the
+    names it does have."""
+    import dataclasses
+    from g1_teleop.config import ZEDConfig
+    from g1_teleop.zed_source import ZEDOpenError, ZEDSource
+    sl, made = _fake_sl()
+    cfg = dataclasses.replace(ZEDConfig(), depth_mode="NEURAL_LIGHT",
+                              body_model="HUMAN_BODY_MEDIUM")
+    _with_fake_pyzed(sl, lambda: ZEDSource(cfg))
+    cam = made["camera"]
+    assert cam.init.depth_mode == "NEURAL_LIGHT"
+    assert cam.body_params.detection_model == "HUMAN_BODY_MEDIUM"
+    assert cam.body_params.body_format == "BODY_38" and cam.body_params.enable_body_fitting is True
+    # the defaults are what ran before the flags existed
+    _with_fake_pyzed(sl, lambda: ZEDSource(ZEDConfig()))
+    assert made["camera"].init.depth_mode == "NEURAL"
+    assert made["camera"].body_params.detection_model == "HUMAN_BODY_ACCURATE"
+    # open() failed
+    sl2, _ = _fake_sl(open_status="CAMERA NOT DETECTED")
+    e = _raises(ZEDOpenError, _with_fake_pyzed, sl2, lambda: ZEDSource(ZEDConfig()))
+    assert "did not open" in str(e) and "CAMERA NOT DETECTED" in str(e)
+    # body tracking failed: reported, and the camera is closed again
+    sl3, made3 = _fake_sl(body_status="MODULE NOT COMPATIBLE")
+    e = _raises(ZEDOpenError, _with_fake_pyzed, sl3, lambda: ZEDSource(ZEDConfig()))
+    assert "body tracking did not start" in str(e) and made3["camera"].closed
+    # a name this SDK does not have
+    bad = dataclasses.replace(ZEDConfig(), depth_mode="NEURAL_EXTRA")
+    e = _raises(ZEDOpenError, _with_fake_pyzed, sl, lambda: ZEDSource(bad))
+    assert "NEURAL_LIGHT" in str(e) and "LAST" not in str(e)
+
+
+def test_zed_flags_reach_the_config_and_are_refused_for_the_fake_source():
+    a = RT.build_parser().parse_args(["--source", "zed", "--zed-depth-mode", "NEURAL_LIGHT",
+                                      "--zed-body-model", "HUMAN_BODY_MEDIUM"])
+    assert (a.zed_depth_mode, a.zed_body_model) == ("NEURAL_LIGHT", "HUMAN_BODY_MEDIUM")
+    d = RT.build_parser().parse_args(["--source", "zed"])
+    assert d.zed_depth_mode is None and d.zed_body_model is None and d.bench is None
+    take, _ = _take()
+    _raises(SystemExit, RT.main, ["--source", "fake", "--replay", take, "--headless",
+                                  "--zed-depth-mode", "NEURAL_LIGHT"])
+    _raises(SystemExit, RT.main, ["--source", "fake", "--replay", take, "--headless",
+                                  "--bench", "1"])
+
+
+def test_window_buffer_panel_equals_the_allocated_panel():
+    """2026-11-12: the loop draws its two panels into one window buffer
+    (`fit_to_box(out=...)`). Same pixels as the freshly allocated panel, also on
+    a buffer that held something else, and for an image already at panel size."""
+    RIC = RT.RIC
+    rng = np.random.default_rng(1)
+    for shape in ((720, 1280, 3), (RIC.MUJOCO_H, RIC.MUJOCO_W, 3), (300, 200, 3)):
+        img = rng.integers(0, 255, shape, dtype=np.uint8)
+        want = RIC.fit_to_box(img, RIC.MJ_PANEL_W, RIC.PANEL_H)
+        window = np.full((RIC.PANEL_H, RIC.ZED_PANEL_W + RIC.MJ_PANEL_W, 3), 77, np.uint8)
+        got = RIC.fit_to_box(img, RIC.MJ_PANEL_W, RIC.PANEL_H, out=window[:, RIC.ZED_PANEL_W:])
+        assert np.array_equal(got, want), shape
+        assert np.array_equal(window[:, RIC.ZED_PANEL_W:], want)
+        assert (window[:, :RIC.ZED_PANEL_W] == 77).all(), "the other panel was touched"
+    # the render size IS the size the view is shown at: no resize on the way
+    assert RIC.fit_to_box(np.zeros((RIC.MUJOCO_H, RIC.MUJOCO_W, 3), np.uint8),
+                          RIC.MJ_PANEL_W, RIC.PANEL_H).shape == (RIC.PANEL_H, RIC.MJ_PANEL_W, 3)
+    assert RIC.MUJOCO_W == RIC.MJ_PANEL_W and RIC.MUJOCO_H <= RIC.PANEL_H
+
+
+def test_bench_wall_limit_ends_the_loop_and_is_off_by_default():
+    import types
+    h = RT.EpisodeHooks(None, types.SimpleNamespace(buf=None, weld_release_tick=-1), 0, "x", 900)
+    assert h.wall_limit_s is None
+    S = types.SimpleNamespace(data=types.SimpleNamespace(qpos=np.array([0, 0, 0.78])),
+                              ix=types.SimpleNamespace(base_qpos=slice(0, 3)), weld=None)
+    b = RT.EpisodeHooks(None, types.SimpleNamespace(buf=None, weld_release_tick=-1), 0, "x", 900,
+                        early_success=False, wall_limit_s=0.0)
+    assert b.should_end(S, RT.TICK) is False            # starts the clock
+    assert b.should_end(S, RT.TICK + 1) is False        # not on a tick boundary
+    assert b.should_end(S, 2 * RT.TICK) is True and b.end_reason == "bench_limit"
+
+
 def test_zzz_cleanup():
     """Last (sorted): remove the temp tree."""
     if "tmp" in _CACHE:

@@ -97,7 +97,12 @@ POLICY_PATH, SCENE_PATH = OC.POLICY_PATH, OC.SCENE_PATH
 PANEL_H = 620
 ZED_PANEL_W = 760
 MJ_PANEL_W = 760
-MUJOCO_W, MUJOCO_H = 960, 720      # offscreen render size (<= scene.xml offwidth)
+# Offscreen render size (<= scene.xml offwidth). 2026-11-12: 960x720 -> 760x570,
+# the size the 4:3 view is DISPLAYED at inside the MJ_PANEL_W x PANEL_H panel. It
+# was rendered at 960x720 and scaled down every tick; rendering at the display
+# size reads back fewer pixels from a GPU the ZED is also using and skips the
+# resize. Same view, same panel layout; nothing recorded depends on it.
+MUJOCO_W, MUJOCO_H = 760, 570
 WINDOW = "Vision locomotion evaluation — ZED | MuJoCo"
 
 CAM_LOOKAT = [1.2, 0.0, 0.8]
@@ -202,18 +207,28 @@ def world_to_body(v, yaw):
     return np.array([c * v[0] - s * v[1], s * v[0] + c * v[1]])
 
 
-def fit_to_box(img, w, h):
+def fit_to_box(img, w, h, out=None):
+    """`img` scaled to fit a w x h box, centred on black. `out` (an h x w x 3
+    array, e.g. one half of the window buffer) is cleared and drawn into instead
+    of allocating a new panel."""
     ih, iw = img.shape[:2]
     scale = min(w / iw, h / ih)
     nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
-    canvas = np.zeros((h, w, 3), dtype=img.dtype)
+    if out is None:
+        canvas = np.zeros((h, w, 3), dtype=img.dtype)
+    else:
+        canvas = out
+        canvas[:] = 0
     y0, x0 = (h - nh) // 2, (w - nw) // 2
-    canvas[y0:y0 + nh, x0:x0 + nw] = cv2.resize(img, (nw, nh))
+    canvas[y0:y0 + nh, x0:x0 + nw] = img if (nw, nh) == (iw, ih) else cv2.resize(img, (nw, nh))
     return canvas
 
 
 def text(img, s, org, scale=0.55, color=(255, 255, 255)):
-    cv2.putText(img, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
+    # The black outline is NOT anti-aliased (2026-11-12): a 3 px LINE_AA string
+    # costs 0.58 ms against 0.10 ms, and the HUD draws 10-14 of them per display
+    # tick. The coloured text on top still is.
+    cv2.putText(img, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_8)
     cv2.putText(img, s, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
 
@@ -247,6 +262,9 @@ def mark(ok):
 # Must be a multiple of CONTROL_DECIMATION, because the render check is only
 # reached on control ticks. 20 steps x 0.002 s = 40 ms => 25 Hz display.
 RENDER_DECIMATION = 20
+#: A display tick is skipped (not drawn) when, before drawing, the loop is already
+#: this far past the wall-clock time of the next physics step; see run_loop.
+DISPLAY_SKIP_BEHIND_S = 0.0
 
 
 def lock_geometry_ok(t, c):
@@ -444,6 +462,25 @@ def draw_operator_panel(img, x, y, st):
     text(img, "B-PRIME %s  (b)" % ("ON" if st["bprime"] else "OFF"), (x, y), 0.55,
          GREEN if st["bprime"] else AMBER)
     return y + dy
+
+
+def set_timer_resolution_1ms(on: bool) -> bool:
+    """Windows only: ask for (or give back) the 1 ms system timer while a PACED
+    loop runs. Measured 2026-11-12 at the default timer, in a bare Python 3.10
+    process: `time.sleep(0.001)` takes 6.8 ms and `time.time()` moves in ~6 ms
+    steps. The loop sleeps for its remaining slack at the start of every 20 ms
+    control period, so an overshoot of that size is lateness of the next tick.
+    (Not measured in isolation: it was added together with the other 2026-11-12
+    pacing changes, NOTES.md.) Returns whether the request was made. No effect on
+    the simulation."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        fn = ctypes.windll.winmm.timeBeginPeriod if on else ctypes.windll.winmm.timeEndPeriod
+        return fn(1) == 0
+    except Exception:                                           # noqa: BLE001
+        return False
 
 
 class SimClockGrabber:
@@ -755,6 +792,8 @@ def open_session(args, source=None, sim_clock=None):
     # the session (it is not written to disk, so a restart is MINIMAL again).
     S.overlay_full = False
     S.window_open = False
+    # Paced (windowed) sessions only: an accurate pacing sleep.
+    S.timer_1ms = set_timer_resolution_1ms(True) if not (headless or profile) else False
     S.wall_start = time.time()
     S.counter = 0
     S.events, S.pred, S.n_abort = [], None, 0
@@ -841,6 +880,12 @@ def run_loop(S, hooks=None):
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WINDOW, ZED_PANEL_W + MJ_PANEL_W, PANEL_H)
         S.window_open = True
+    # The window image, allocated once: the two panels are drawn into its halves
+    # (it was two fresh panels plus an hstack copy on every display tick).
+    window_img = np.zeros((PANEL_H, ZED_PANEL_W + MJ_PANEL_W, 3), np.uint8)
+    display_skipped = False
+    display_due = display_deferred = False
+    S.display_skips = 0                # display ticks not drawn this run
     events = []                        # (sim s, what) - printed at exit
     tracking_ok = False
     # O28: sim time of the last controller.step that actually applied a pose.
@@ -923,6 +968,67 @@ def run_loop(S, hooks=None):
             print("stopped and anchored")
         return None
 
+    def poll_keys():
+        """Drain the window's key queue and act on it. Returns "quit" for q.
+        Called on EVERY display tick, drawn or skipped."""
+        # DRAIN the key queue rather than taking one event per poll.
+        #
+        # Holding a key triggers keyboard auto-repeat at roughly 30 events
+        # per second. OpenCV queues them. Consuming one per render tick
+        # (~25 Hz) means the queue grows while a key is held, so input is
+        # processed seconds after it happened and keeps arriving after
+        # release. Tapping never builds a backlog, which is why tapping
+        # felt responsive and holding did not.
+        #
+        # Draining to empty each tick keeps latency bounded: we always act
+        # on the freshest input and the queue can never accumulate.
+        # pollKey reports the same extended codes as waitKeyEx, so arrow keys
+        # survive (plain waitKey masks them off), and it does not WAIT:
+        # waitKeyEx(1) blocked 2.5-7 ms on every display tick (measured
+        # 2026-11-12; codes and drain order compared key by key, identical).
+        drained = []
+        while True:
+            k = cv2.pollKey()
+            if k == -1:
+                break
+            drained.append(k)
+            if len(drained) > 64:      # pathological flood guard
+                break
+
+        # Arrow key codes differ by platform; accept the common ones plus
+        # i/j/k/l as a guaranteed fallback.
+        ARROW_UP = {2490368, 65362, 82}
+        ARROW_DOWN = {2621440, 65364, 84}
+        ARROW_LEFT = {2424832, 65361, 81}
+        ARROW_RIGHT = {2555904, 65363, 83}
+
+        # Feed EVERY drained event to the walking handler, not just the
+        # last one, so pressing forward and turn together registers both.
+        if isinstance(loco, KeyboardCommand):
+            for ev in drained:
+                low = ev & 0xFF
+                if ev in ARROW_UP or low == ord("i"):
+                    loco.on_key(265)
+                elif ev in ARROW_DOWN or low == ord("k"):
+                    loco.on_key(264)
+                elif ev in ARROW_LEFT or low == ord("j"):
+                    loco.on_key(263)
+                elif ev in ARROW_RIGHT or low == ord("l"):
+                    loco.on_key(262)
+                # Strafe. n/m are free in this loop's single-shot keys below,
+                # and their low bytes (n/N 0x6E/0x4E, m/M 0x6D/0x4D) collide
+                # with no arrow code (low bytes 0x00 and 0x51-0x54 'Q'-'T').
+                elif low in (ord("n"), ord("N")):
+                    loco.on_key(KEYCODE_STRAFE_LEFT)
+                elif low in (ord("m"), ord("M")):
+                    loco.on_key(KEYCODE_STRAFE_RIGHT)
+
+        # Single-shot keys act on the most recent event only.
+        raw = drained[-1] if drained else -1
+        key = raw & 0xFF if raw != -1 else 255
+
+        return handle_key(key)
+
     print(f"=== Vision locomotion evaluation ===")
     print(f"locomotion command source: {loco_name}")
     print("Click the window. a/d rotate, w/s tilt, +/- zoom, space stop, q quit.\n")
@@ -950,6 +1056,21 @@ def run_loop(S, hooks=None):
         if hooks is not None and hooks.should_end(S, counter):
             reason = "hook"
             break
+
+        # Pace the simulation to wall time. Without the blocking camera call
+        # physics would free-run and the robot would move faster than real
+        # time, which is unusable for teleoperation.
+        # 2026-11-12: the wait is HERE, at the start of each control period and
+        # AFTER the previous period's work (policy, arm IK, display, keys). It
+        # used to sit before that work, so every millisecond of IK and drawing
+        # arrived as lateness of the next 25 Hz tick while the loop slept
+        # elsewhere: 8% of ticks > 60 ms on a loop that was idle 16% of the time.
+        # Work first, then wait for the period, and the slack absorbs it. Paced
+        # runs only - headless and --profile never sleep, as before.
+        if not headless and not profile and counter % CONTROL_DECIMATION == 0:
+            ahead_s = counter * SIM_DT - (time.time() - wall_start)
+            if ahead_s > 0:
+                time.sleep(ahead_s)
 
         # ── Base lock (D12): the demonstrator's predicate, at 25 Hz on the
         # 47-D state from the STEPPED model (sync=False, as scripted_demo:
@@ -1019,13 +1140,8 @@ def run_loop(S, hooks=None):
         if counter % CONTROL_DECIMATION:
             continue
 
-        # Pace the simulation to wall time. Without the blocking camera call
-        # physics would free-run and the robot would move faster than real
-        # time, which is unusable for teleoperation.
-        sim_elapsed = counter * SIM_DT
-        wall_elapsed = time.time() - wall_start
-        if sim_elapsed > wall_elapsed and not headless and not profile:
-            time.sleep(sim_elapsed - wall_elapsed)
+        # (The pacing sleep used to be here, BEFORE this control tick's work; it
+        # is now at the top of the loop, after it - see "Pace the simulation".)
 
         # ── Velocity command: hold station when nothing is commanded ────
         # While LOCKED (D12) none of this runs and the policy is not queried:
@@ -1080,6 +1196,7 @@ def run_loop(S, hooks=None):
         # its sequence number changes, so the physics loop never waits on
         # the camera.
         new_frame, seq = grabber.latest()
+        ik_this_period = False
         if new_frame is not None and seq != last_seq:
             last_seq = seq
             frame = new_frame
@@ -1087,6 +1204,7 @@ def run_loop(S, hooks=None):
                 prof["frames"] += 1
                 _t = time.perf_counter() if profile else 0.0
                 outcome = controller.step(frame)
+                ik_this_period = True
                 if profile:
                     prof["ctrl"] += time.perf_counter() - _t
                 tracking_ok = bool(outcome.applied)
@@ -1150,11 +1268,38 @@ def run_loop(S, hooks=None):
             continue
 
         # ── Render and input on their own cadence ───────────────────────
-        if counter % RENDER_DECIMATION or frame is None:
+        if counter % RENDER_DECIMATION == 0:
+            display_due = True
+        if not display_due or frame is None:
             continue
+        # The arm IK (8-15 ms) and the display (~15 ms) do not share one 20 ms
+        # control period when it can be avoided (2026-11-12): if this period
+        # solved the IK, the display waits for the next one, once. Together they
+        # overran the period and were 16 of 20 ticks > 60 ms. Paced runs only.
+        if ik_this_period and not display_deferred and not profile:
+            display_deferred = True
+            continue
+        display_due = display_deferred = False
+        # Behind the wall clock: do not draw this display tick (2026-11-12). The
+        # display path - render, HUD, window paint - is about half of a 40 ms tick
+        # beside the ZED, and it is the only part that is not physics, control or
+        # recording. Never two in a row (the view stays >= 12.5 Hz) and the keys
+        # are still polled, so input is handled on every tick as before. Not under
+        # --profile, whose numbers include every frame. (Tried and dropped: always
+        # skipping a tick that also solved the arm IK - it left the forced draw
+        # on the NEXT tick, usually an IK tick too, and late ticks rose to 13-18%.)
+        if (not profile and not display_skipped
+                and (time.time() - wall_start) - counter * SIM_DT > DISPLAY_SKIP_BEHIND_S):
+            display_skipped = True
+            S.display_skips += 1
+            if poll_keys() == "quit":
+                reason = "quit"
+                break
+            continue
+        display_skipped = False
 
         # ── Left panel: camera ──────────────────────────────────────────
-        left = fit_to_box(frame.image, ZED_PANEL_W, PANEL_H)
+        left = fit_to_box(frame.image, ZED_PANEL_W, PANEL_H, out=window_img[:, :ZED_PANEL_W])
         if S.overlay_full:
             text(left, f"Status: {status_text}", (10, 28), 0.6, status_color)
             y = 56
@@ -1173,7 +1318,7 @@ def run_loop(S, hooks=None):
             # the model, so no mass, no contact, nothing recorded.
             S.guide.draw(renderer.scene, lock_terms, pred.cfg, data, ix, base_lock.locked(data))
         right = fit_to_box(cv2.cvtColor(renderer.render(), cv2.COLOR_RGB2BGR),
-                           MJ_PANEL_W, PANEL_H)
+                           MJ_PANEL_W, PANEL_H, out=window_img[:, ZED_PANEL_W:])
         if profile:
             prof["render"] += time.perf_counter() - _t
         _t = time.perf_counter() if profile else 0.0
@@ -1232,63 +1377,9 @@ def run_loop(S, hooks=None):
         if profile:
             prof["overlay"] += time.perf_counter() - _t
             continue                      # no window, no keys: this is a measurement
-        cv2.imshow(WINDOW, np.hstack([left, right]))
+        cv2.imshow(WINDOW, window_img)
 
-        # DRAIN the key queue rather than taking one event per poll.
-        #
-        # Holding a key triggers keyboard auto-repeat at roughly 30 events
-        # per second. OpenCV queues them. Consuming one per render tick
-        # (~25 Hz) means the queue grows while a key is held, so input is
-        # processed seconds after it happened and keeps arriving after
-        # release. Tapping never builds a backlog, which is why tapping
-        # felt responsive and holding did not.
-        #
-        # Draining to empty each tick keeps latency bounded: we always act
-        # on the freshest input and the queue can never accumulate.
-        # waitKeyEx also reports extended codes, so arrow keys survive
-        # (plain waitKey masks them off).
-        drained = []
-        while True:
-            k = cv2.waitKeyEx(1)
-            if k == -1:
-                break
-            drained.append(k)
-            if len(drained) > 64:      # pathological flood guard
-                break
-
-        # Arrow key codes differ by platform; accept the common ones plus
-        # i/j/k/l as a guaranteed fallback.
-        ARROW_UP = {2490368, 65362, 82}
-        ARROW_DOWN = {2621440, 65364, 84}
-        ARROW_LEFT = {2424832, 65361, 81}
-        ARROW_RIGHT = {2555904, 65363, 83}
-
-        # Feed EVERY drained event to the walking handler, not just the
-        # last one, so pressing forward and turn together registers both.
-        if isinstance(loco, KeyboardCommand):
-            for ev in drained:
-                low = ev & 0xFF
-                if ev in ARROW_UP or low == ord("i"):
-                    loco.on_key(265)
-                elif ev in ARROW_DOWN or low == ord("k"):
-                    loco.on_key(264)
-                elif ev in ARROW_LEFT or low == ord("j"):
-                    loco.on_key(263)
-                elif ev in ARROW_RIGHT or low == ord("l"):
-                    loco.on_key(262)
-                # Strafe. n/m are free in this loop's single-shot keys below,
-                # and their low bytes (n/N 0x6E/0x4E, m/M 0x6D/0x4D) collide
-                # with no arrow code (low bytes 0x00 and 0x51-0x54 'Q'-'T').
-                elif low in (ord("n"), ord("N")):
-                    loco.on_key(KEYCODE_STRAFE_LEFT)
-                elif low in (ord("m"), ord("M")):
-                    loco.on_key(KEYCODE_STRAFE_RIGHT)
-
-        # Single-shot keys act on the most recent event only.
-        raw = drained[-1] if drained else -1
-        key = raw & 0xFF if raw != -1 else 255
-
-        if handle_key(key) == "quit":
+        if poll_keys() == "quit":
             reason = "quit"
             break
     S.counter, S.n_abort = counter, n_abort
@@ -1301,6 +1392,8 @@ def close_session(S):
     args, headless, profile, prof = S.args, S.headless, S.profile, S.prof
     S.grabber.stop()
     S.grabber.join(timeout=1.0)
+    if getattr(S, "timer_1ms", False):
+        set_timer_resolution_1ms(False)
     if S.renderer is not None:
         S.renderer.close()
     if not headless:

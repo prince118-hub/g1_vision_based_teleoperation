@@ -3,6 +3,11 @@
     # the real collection (Windows laptop, ZED 2i plugged in):
     python tools/record_teleop_live.py --source zed --operator charles --count 10
 
+    # tick rate / late ticks / dropout on the real camera, nothing written (stand in view):
+    python tools/record_teleop_live.py --source zed --bench 30 --seed-list 0
+    # ZED settings for a session (stored per episode in `camera`): --zed-depth-mode NEURAL_LIGHT
+    #   --zed-body-model HUMAN_BODY_MEDIUM. The defaults (NEURAL, HUMAN_BODY_ACCURATE) hold 25 Hz.
+
     # dry run on any machine, no camera, no pyzed (a take from tools/record_keypoints.py,
     # or a synthetic one from --make-fake-take):
     python tools/record_teleop_live.py --source fake --replay recordings/keypoints/reach_01_x.npz
@@ -80,6 +85,18 @@ tools/record_keypoints.py format (replayable with --source fake); per tick
 """
 from __future__ import annotations
 
+import os
+import sys
+
+# BEFORE numpy is imported: one OpenBLAS thread for the live camera (the measurement
+# and the reason are in g1_teleop/compute_threads.py). Only when this file is the
+# program and the source is the ZED, so every fake / headless / test path keeps the
+# thread pool it always had. `open_camera` applies and reads back the same limit.
+if __name__ == "__main__" and any(
+        x == "--source=zed" or (x == "--source" and sys.argv[i + 1:i + 2] == ["zed"])
+        for i, x in enumerate(sys.argv)):
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 import argparse
 import datetime
 import hashlib
@@ -137,6 +154,12 @@ DROPOUT_RECOMMEND_MAX = 0.05     # fraction of ticks not backed by a tracked fra
 OVERRUN_RECOMMEND_MAX = 0.02     # fraction of ticks that ran > 1.5 ticks late (paced only)
 #: The verdict screen ignores keys for this long after it opens.
 VERDICT_KEY_DELAY_S = 0.5
+#: The host monotonic clock behind `tick_wall_ns` and the keypoint rows' `ts_host_ns`
+#: (one clock for both; only differences are ever used). 2026-11-12: it was
+#: time.monotonic_ns, which on Windows / Python 3.10 advances in 15.6 ms steps, so a
+#: tick interval could only read 31 / 47 / 62 ms and the "> 60 ms" overrun count
+#: was 10% on a run whose true figure was 2.0%. perf_counter_ns is monotonic too.
+HOST_CLOCK_NS = time.perf_counter_ns
 #: Terminal prompt (headless --auto off); a module attribute so tests can script it.
 INPUT = input
 
@@ -206,7 +229,7 @@ class AuditTap:
 
     def grab(self):
         f = self.source.grab()
-        t = time.monotonic_ns()
+        t = HOST_CLOCK_NS()
         with self._lock:
             if self._rows is not None:
                 self._rows.append((t, None if f is None else _TapFrame(f)))
@@ -271,17 +294,31 @@ def open_camera(a):
     zed mode (tools/record_keypoints.session_meta); fake mode writes fake values
     plus the replayed take's identity and the take's own camera metadata."""
     if a.source == "zed":
+        import dataclasses
         import record_keypoints as RK
         from g1_teleop.config import ZEDConfig
-        from g1_teleop.zed_source import ZEDSource
-        print("opening ZED through ZEDSource (body-tracking model load can take a while)...")
-        zed = ZEDSource(ZEDConfig())
-        if not zed.camera.is_opened():
-            raise SystemExit("ZED did not open - ZEDSource does not check camera.open(); "
-                             "check the cable/SDK")
+        from g1_teleop.zed_source import ZEDOpenError, ZEDSource
+        # --zed-depth-mode / --zed-body-model override ZEDConfig for this session;
+        # what RAN is read back from the camera into every episode's `camera`
+        # metadata (depth_mode, body_tracking.detection_model, zed_config).
+        over = {k: v for k, v in (("depth_mode", getattr(a, "zed_depth_mode", None)),
+                                  ("body_model", getattr(a, "zed_body_model", None))) if v}
+        zcfg = dataclasses.replace(ZEDConfig(), **over)
+        print("opening ZED through ZEDSource: depth %s, body model %s (model load can take "
+              "a while)..." % (zcfg.depth_mode, zcfg.body_model))
+        try:
+            zed = ZEDSource(zcfg)
+        except ZEDOpenError as e:
+            raise SystemExit("ZED: %s" % e)
         meta = RK.session_meta(zed, types.SimpleNamespace(
             label="teleop_live", note=a.note, headless=False, still_s=0.0))
         meta["fake"] = False
+        # One BLAS thread beside the ZED SDK (g1_teleop/compute_threads.py): the
+        # 12-thread pool made the arm IK 3x slower and the loop ~16 Hz. Live only.
+        from g1_teleop.compute_threads import limit_blas_threads
+        meta["blas_threads"] = limit_blas_threads(1)
+        print("BLAS threads: %s -> %s" % (meta["blas_threads"]["before"],
+                                          meta["blas_threads"]["after"]))
         return zed, meta
     rec_fps = take_fps(SS.load_recording(a.replay))
     src = ReplaySource(a.replay, fps=None if a.headless else (a.fake_fps or rec_fps))
@@ -315,14 +352,17 @@ class LiveRecorder(TeleopRecorder):
         super()._observe_teleop(m, d, L)
         if self.buf is not None and len(self.buf) > len(self.frame_seq):
             self.frame_seq.append(int(L.get("last_seq", -1)))
-            self.tick_wall_ns.append(time.monotonic_ns())
+            self.tick_wall_ns.append(HOST_CLOCK_NS())
 
 
 class EpisodeHooks(RIC.LoopHooks):
     """The episode's view of `run_loop`: termination, keys, HUD. Reads only."""
 
     def __init__(self, sess, rec, seed: int, label: str, max_ticks: int,
-                 script=None, probe=None, early_success: bool = True):
+                 script=None, probe=None, early_success: bool = True,
+                 wall_limit_s: Optional[float] = None):
+        # --bench only: end after this many WALL seconds (never set when recording).
+        self.wall_limit_s, self._wall_t0 = wall_limit_s, None
         self.sess, self.rec, self.seed, self.label = sess, rec, seed, label
         self.max_ticks = int(max_ticks)
         self.script = sorted(script or [])          # [(t_sim, key)]
@@ -375,6 +415,12 @@ class EpisodeHooks(RIC.LoopHooks):
             return True
         if counter == 0 or counter % TICK:
             return False
+        if self.wall_limit_s is not None:
+            if self._wall_t0 is None:
+                self._wall_t0 = time.perf_counter()
+            elif time.perf_counter() - self._wall_t0 >= self.wall_limit_s:
+                self.end_reason = "bench_limit"
+                return True
         n = counter // TICK                 # ticks taken so far (0 .. n-1)
         if (self.early_success and n and self.rec.weld_release_tick >= 0
                 and not S.weld.engaged(S.data)):
@@ -458,14 +504,15 @@ def _timing(tick_ns, paced: bool) -> dict:
                      "> 1.5 ticks (the loop fell half a tick behind 25 Hz)")
 
 
-def run_episode(S, a, seed: int, label: str, record: bool = True, probe=None):
+def run_episode(S, a, seed: int, label: str, record: bool = True, probe=None,
+                wall_limit_s: Optional[float] = None):
     """Reset, run the loop once, and return (hooks, recorder, reset info).
     `record=False` runs the same loop with no recorder attached (--invariance);
     early success then cannot be judged, so only fall / cap / keys end it."""
     info = reset_for_episode(S, a, seed)
     rec = LiveRecorder() if record else types.SimpleNamespace(buf=None, weld_release_tick=-1)
     hooks = EpisodeHooks(S, rec, seed, label, a.max_ticks, script=parse_script(a.script),
-                         probe=probe, early_success=record)
+                         probe=probe, early_success=record, wall_limit_s=wall_limit_s)
     hooks.meta_for_eval = dict(box_spawn_xy=[float(info["start"].box_pos[0]),
                                              float(info["start"].box_pos[1])])
     S.tap.arm(getattr(S.grabber, "_seq", 0))
@@ -531,7 +578,10 @@ def episode_meta(S, a, seed, hooks, rec, info, verdict, kp_path) -> dict:
         degraded_ticks=int((~tracking).sum()),
         dropout_rate=float((~tracking).mean()) if len(tracking) else 0.0,
         timing=dict(_timing(rec.tick_wall_ns, paced=not a.headless),
-                    sim_seconds=len(rec.buf) * TICK_S),
+                    sim_seconds=len(rec.buf) * TICK_S,
+                    # display ticks the loop did not draw because it was behind
+                    # the wall clock (run_integrated_combined.run_loop)
+                    display_skips=int(getattr(S, "display_skips", 0))),
         keypoints_file=repo_relpath(kp_path) if kp_path else None,
         keypoints_seq_at_arm=int(S.tap.seq_at_arm),
         ik_max_iter=int(S.cfg.ik.max_iter),
@@ -957,6 +1007,44 @@ def cmd_record(a) -> int:
     return 0
 
 
+def cmd_bench(a) -> int:
+    """--bench SECONDS: the recorder's own loop (window, HUD, recorder attached,
+    keypoint tap armed) for SECONDS of wall time on the first seed, started at
+    once, then the tick rate, late ticks and dropout. NOTHING is written: no
+    episode, no keypoints, no ledger row. Stand in view of the camera - with no
+    body tracked the IK does not run and the rate is the cheap path's."""
+    seeds = ([int(s) for s in a.seed_list.split(",") if s.strip()] if a.seed_list
+             else seed_stream(a.seeds, 0))
+    a.max_ticks = max(int(a.max_ticks), int(a.bench / TICK_S) + 250)
+    S = open_live_session(a, seeds)
+    try:
+        hooks, rec, info = run_episode(S, a, seeds[0], "bench", wall_limit_s=a.bench)
+    finally:
+        RIC.close_session(S)
+    n = len(rec.buf) if rec.buf is not None else 0
+    tracking = np.asarray(rec.buf.tracking, dtype=bool) if n else np.zeros(0, bool)
+    t = _timing(rec.tick_wall_ns, paced=not a.headless)
+    seq = np.asarray(rec.frame_seq, dtype=np.int64)
+    wall = (rec.tick_wall_ns[-1] - rec.tick_wall_ns[0]) / 1e9 if n > 1 else 0.0
+    cam = S.camera_meta
+    out = dict(
+        depth_mode=cam.get("depth_mode"),
+        body_model=(cam.get("body_tracking") or {}).get("detection_model"),
+        ticks=n, wall_s=round(wall, 2), end_reason=hooks.end_reason,
+        tick_rate_hz=t.get("tick_rate_hz"),
+        late_ticks_pct=100.0 * t["overrun_ticks"] / max(n - 1, 1),
+        dropout_pct=100.0 * float((~tracking).mean()) if n else None,
+        camera_frames_hz=float((seq[-1] - seq[0]) / wall) if wall > 0 else None,
+        display_skips=int(getattr(S, "display_skips", 0)),
+        p95_tick_interval_ms=t.get("p95_tick_interval_ms"),
+        max_tick_interval_ms=t.get("max_tick_interval_ms"))
+    print("BENCH " + json.dumps(out))
+    print("camera metadata an episode would store: " + json.dumps(
+        {k: cam.get(k) for k in ("depth_mode", "body_tracking", "zed_config", "resolution",
+                                 "camera_fps", "sdk_version")}))
+    return 0
+
+
 def cmd_invariance(a) -> int:
     """Run the first seed twice, recorder attached and not, and compare qpos and
     qvel at EVERY physics step. Needs --headless (the sim clock): a threaded
@@ -1084,6 +1172,17 @@ def build_parser():
                          "every physics step (needs --source fake --headless)")
     ap.add_argument("--make-fake-take", default=None, metavar="OUT.npz",
                     help="write a synthetic grasp-and-lift take for --seed-list's first seed")
+    ap.add_argument("--zed-depth-mode", default=None, metavar="MODE",
+                    help="--source zed: ZED depth mode for this session, e.g. NEURAL (the "
+                         "ZEDConfig default), NEURAL_LIGHT, NEURAL_PLUS - any sl.DEPTH_MODE "
+                         "name this SDK has. Stored per episode (camera.depth_mode)")
+    ap.add_argument("--zed-body-model", default=None, metavar="MODEL",
+                    help="--source zed: body-tracking model, HUMAN_BODY_ACCURATE (the "
+                         "ZEDConfig default), HUMAN_BODY_MEDIUM or HUMAN_BODY_FAST. Stored "
+                         "per episode (camera.body_tracking.detection_model)")
+    ap.add_argument("--bench", type=float, default=None, metavar="SECONDS",
+                    help="measure only: run the recorder's loop for this many wall seconds "
+                         "and print tick rate, late ticks and dropout; writes nothing")
     ap.add_argument("--no-body", default=None,
                     help="--make-fake-take: no-body gaps 'start+length,...' in frames (O28)")
     return ap
@@ -1101,7 +1200,7 @@ def main(argv=None) -> int:
     if a.source == "zed":
         if a.headless:
             ap.error("--headless is for --source fake (a live operator needs the window)")
-        if not a.operator:
+        if not a.operator and a.bench is None:
             ap.error("--source zed needs --operator <id>")
         if a.auto == "pass":
             ap.error("--auto pass is for --source fake: a real demonstration is accepted "
@@ -1114,8 +1213,14 @@ def main(argv=None) -> int:
     if a.auto is None:
         a.auto = "pass" if a.headless else "off"
     a.operator = a.operator or "fake"
+    if a.source == "fake" and (a.zed_depth_mode or a.zed_body_model):
+        ap.error("--zed-depth-mode / --zed-body-model are for --source zed")
     if a.invariance:
         return cmd_invariance(a)
+    if a.bench is not None:
+        if a.headless:
+            ap.error("--bench measures the paced, windowed loop: not with --headless")
+        return cmd_bench(a)
     return cmd_record(a)
 
 

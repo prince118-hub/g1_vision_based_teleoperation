@@ -16,6 +16,20 @@ class BodyFrame:
     image: np.ndarray
 
 
+class ZEDOpenError(RuntimeError):
+    """The camera, or body tracking on it, did not start."""
+
+
+def _sdk_enum(enum, name: str, field: str):
+    """`enum.<name>`, or a ZEDOpenError listing what this SDK build offers."""
+    try:
+        return getattr(enum, str(name))
+    except AttributeError:
+        have = sorted(n for n in dir(enum) if n.isupper() and n != "LAST")
+        raise ZEDOpenError("ZEDConfig.%s = %r is not supported by this ZED SDK; it offers: %s"
+                           % (field, name, ", ".join(have))) from None
+
+
 class ZEDSource:
     def __init__(self, cfg: ZEDConfig):
         import pyzed.sl as sl
@@ -24,17 +38,35 @@ class ZEDSource:
 
         self.camera = sl.Camera()
         init = sl.InitParameters()
-        init.camera_resolution = getattr(sl.RESOLUTION, cfg.resolution)
-        init.depth_mode = getattr(sl.DEPTH_MODE, cfg.depth_mode)
+        init.camera_resolution = _sdk_enum(sl.RESOLUTION, cfg.resolution, "resolution")
+        init.depth_mode = _sdk_enum(sl.DEPTH_MODE, cfg.depth_mode, "depth_mode")
         init.coordinate_units = sl.UNIT.METER
-        self.camera.open(init)
+        detection_model = _sdk_enum(sl.BODY_TRACKING_MODEL, cfg.body_model, "body_model")
+        # 2026-11-12: the result of open() was never checked, so an unplugged or
+        # busy camera surfaced later as an unrelated failure (or as frames that
+        # never arrive).
+        status = self.camera.open(init)
+        if status != sl.ERROR_CODE.SUCCESS:
+            raise ZEDOpenError(
+                "the ZED camera did not open: %s (resolution %s, depth mode %s). Check that "
+                "the camera is on a USB 3 port, that no other program (ZED Explorer, another "
+                "recorder) holds it, and that the ZED SDK is installed with its AI models."
+                % (status, cfg.resolution, cfg.depth_mode))
 
         body_params = sl.BodyTrackingParameters()
         body_params.enable_tracking = True
-        body_params.enable_body_fitting = True
-        body_params.detection_model = sl.BODY_TRACKING_MODEL.HUMAN_BODY_ACCURATE
+        body_params.enable_body_fitting = bool(cfg.body_fitting)
+        # 2026-11-12: `cfg.body_model` is applied; HUMAN_BODY_ACCURATE was
+        # hardcoded here and the config field was dead.
+        body_params.detection_model = detection_model
         body_params.body_format = sl.BODY_FORMAT.BODY_38
-        self.camera.enable_body_tracking(body_params)
+        status = self.camera.enable_body_tracking(body_params)
+        if status != sl.ERROR_CODE.SUCCESS:
+            self.camera.close()
+            raise ZEDOpenError(
+                "the ZED camera opened but body tracking did not start: %s (model %s, "
+                "BODY_38). The model may still need to be downloaded/optimised by the SDK "
+                "(ZED_Diagnostic --ai)." % (status, cfg.body_model))
 
         self._runtime = sl.BodyTrackingRuntimeParameters()
         self._runtime.detection_confidence_threshold = cfg.confidence_threshold
