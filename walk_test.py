@@ -429,8 +429,8 @@ class PracticeHooks:
             "last try: " + format_stats(self.last) if self.last else "this try: not locked yet")
         RIC.text(img, line, (10, RIC.PANEL_H - 172), 0.45,
                  RIC.GREEN if cur["locked"] else RIC.GREY)
-        RIC.text(img, "t next seed   y same seed   u unlock   q quit", (10, RIC.PANEL_H - 148),
-                 0.5, RIC.GREY)
+        RIC.text(img, "t next seed   y same seed   u unlock   q quit   c view  r default view",
+                 (10, RIC.PANEL_H - 148), 0.5, RIC.GREY)
         if not S.overlay_full:
             RIC.draw_lock_status(img, 10, RIC.PANEL_H - 120, st)
 
@@ -466,6 +466,9 @@ def practice_parser():
                     help="lock rule name (g1_data.phases.LOCK_RULES; default LockConfig's)")
     ap.add_argument("--guide", choices=OC.GUIDE_CHOICES, default=OC.GUIDE_DEFAULT,
                     help="base-lock floor guide (default %(default)s)")
+    ap.add_argument("--camera", choices=("follow", "fixed"), default="follow",
+                    help="MuJoCo view: follow (the recorder's default; c next preset, "
+                         "r default view) or fixed (default %(default)s)")
     ap.add_argument("--headless", action="store_true",
                     help="tests: no window, sim-clock frames; keys only from --script")
     ap.add_argument("--script", default=None, help="headless: keys on the sim clock per try")
@@ -486,6 +489,7 @@ def open_practice_session(p, first_seed: int):
     ns.headless = bool(p.headless)
     ns.seconds = float(p.try_seconds) if p.headless else float("inf")
     ns.guide = p.guide
+    ns.camera = p.camera
     S = RIC.open_session(ns, source=NoCameraSource(fps=None if p.headless else 30.0),
                          sim_clock=bool(p.headless))
     if S is None:

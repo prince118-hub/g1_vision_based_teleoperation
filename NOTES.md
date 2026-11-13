@@ -8083,3 +8083,39 @@ ticks (a tick interval > 60 ms).
   scripted or evaluation path imports the changed loop or recorder code (only `BodyFrame` from zed_source.py, unchanged).
 - **Live episode after the fix (Charles, reported 2026-11-13):** one full episode, success, 25.0 Hz, 3 of 803 ticks late (0.4%), all keys worked. The checklist's own
   overrun criterion is <= 1% (docs/LIVE_RECORDING_CHECKLIST.md step 2); the default met it in 4 of 7 runs. Run-to-run spread is large.
+
+## 2026-11-13 — Follow camera for the MuJoCo view (branch `follow-camera`), render-only
+
+Operators lost the robot when they zoomed or rotated the world-fixed view, and the box was hard to see. The view now follows the robot
+in tools/record_teleop_live.py, walk_test.py and the plain loop (`--camera follow`, the default; `--camera fixed` = the old view).
+
+- **`g1_teleop/follow_camera.py`**: a `FollowCamera` is handed the base xy and yaw and writes four fields of the `MjvCamera` (lookat,
+  azimuth, elevation, distance). It never sees the model or the data. `run_integrated_combined.aim_camera` calls it right before
+  `update_scene`; the recorder's idle and verdict screens call it too.
+- **Framing.** Aim point 0.45 m ahead of the pelvis along the heading, z 0.85 m (box / hand height). Base position and heading are
+  low-pass filtered (factor 0.15 per display frame) so the gait does not shake the view; the filter snaps at each episode reset.
+- **Presets** (heading-relative azimuth, elevation, distance): `behind` -25 deg, -55 deg, 1.50 m (default: behind, to the robot's left,
+  looking down over the left shoulder); `front-side` -140, -25, 1.90; `side` -90, -15, 1.90; `top` 0, -89, 2.40.
+- **Default elevation is 55 deg, not the requested ~35 deg (judgement call).** Rendered at the grasp of scripted_v3 seed 0 (weld
+  engage + 5 ticks): at 35, 40, 45 and 50 deg the RIGHT hand is hidden behind the box it holds (and at -15/-20 deg azimuth by the head);
+  at 55 deg both hands, the box and the left shoulder are visible, the goal is in the corner of the start view and its marker is
+  visible on the walk to it. Charles looked at the live window and said the view is okay (2026-11-13).
+- **Keys.** `c` next preset (new), `r` default view (it was already the loop's reset-view key). a/d, w/s, +/- are OFFSETS on the preset
+  (5 deg, 5 deg, 0.15 m; elevation clamped to +-89 deg, distance to 0.5-6 m), so the view still follows after an adjustment; a preset
+  change clears them. On the recorder's idle screen c, r, w/s, +/- work before ENTER. Neither c nor r is a walking, recorder, practice
+  or verdict key (tested).
+- **Stored per episode**: `operator_ui.view` = mode, preset, offsets and the resulting view at the end of the episode, the default
+  preset, the aim point, and every change in the episode with its sim time. The ledger's session row has `view`. Printed in the
+  session header ("MuJoCo view: follow camera, preset behind", "view: behind") and at the top right of the MuJoCo panel.
+  `operator_ui` was `{guide}` and is now `{guide, view}`; the one test that asserted the old dict exactly was updated.
+- **Render-only, proven** (tools/test_operator_tools.py, seven `test_d_*`): follow vs fixed on the grasp fixture rendered every display
+  frame - 7000 steps, identical qpos/qvel hash, identical recorded 48-D states, while the follow camera's lookat took > 50 distinct
+  values and the fixed one never moved; view keys pressed during a headless episode leave states, actions, qpos, qvel and the reset
+  fingerprint identical to the same episode without them; `aim_camera` leaves MjData untouched. `--invariance`: CONFIRMED.
+- **Tick rate, real ZED, 30 s `--bench` runs** (body in view for the follow rows; the operator moved in and out in the others): follow
+  25.08 Hz / 2.5% late / 0% dropout and 25.10 Hz / 1.8% / 48%; fixed 25.07 Hz / 3.2% / 25% and 25.02 Hz / 3.4% / 10%; one earlier
+  follow run 25.06 Hz / 2.6% / 0.3%. No cost from the camera. Late ticks are higher than on 2026-11-12 for BOTH views today.
+- **Tests**, in parts (one process per test file, tools/test_train_policy.py one per test, temp files on D: - C: is still full):
+  **609 passed, 2 skipped, 0 failed**; tools/test_keypoint_recording.py SELFTEST PASS.
+- The three screenshots asked for were rendered from scripted_v3 seed 0 (`recordings/view_check/`, gitignored) and are not part of the
+  commit; Charles judged the view on the live window instead.

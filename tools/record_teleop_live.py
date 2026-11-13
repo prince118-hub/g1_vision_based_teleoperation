@@ -442,8 +442,8 @@ class EpisodeHooks(RIC.LoopHooks):
         # Bottom-left, under the MINIMAL panel's four lines and above the hints.
         RIC.text(img, "REC  %s  seed %d  tick %d/%d" % (self.label, self.seed, n, self.max_ticks),
                  (10, RIC.PANEL_H - 172), 0.6, RIC.RED)
-        RIC.text(img, "e stop+save   x discard   q quit (saves)", (10, RIC.PANEL_H - 148),
-                 0.5, RIC.GREY)
+        RIC.text(img, "e stop+save   x discard   q quit (saves)   c view  r default view",
+                 (10, RIC.PANEL_H - 148), 0.5, RIC.GREY)
         if not S.overlay_full:
             # the lock indicator ("lock rule v3 needs: ..." / "LOCKED"); the FULL
             # view already draws it as its first two lines
@@ -468,6 +468,7 @@ def ric_args(a, first_seed: int):
     ns.headless = bool(a.headless)
     ns.seconds = float("inf")
     ns.guide = a.guide
+    ns.camera = a.camera
     return ns
 
 
@@ -585,7 +586,10 @@ def episode_meta(S, a, seed, hooks, rec, info, verdict, kp_path) -> dict:
         keypoints_file=repo_relpath(kp_path) if kp_path else None,
         keypoints_seq_at_arm=int(S.tap.seq_at_arm),
         ik_max_iter=int(S.cfg.ik.max_iter),
-        operator_ui=dict(guide=a.guide),
+        # view: the MuJoCo view the operator had - the follow-camera preset, the
+        # manual offsets at the end of the episode and every change during it
+        # (g1_teleop/follow_camera.py; render-only).
+        operator_ui=dict(guide=a.guide, view=RIC.view_meta(S)),
         note_phase_labels="teleop: phase_labels are UNKNOWN by construction - derive offline")
 
 
@@ -759,6 +763,7 @@ def verdict_screen(S, rep) -> str:
         if note:
             RIC.text(left, note, (12, RIC.PANEL_H - 20), 0.55, RIC.RED)
         if S.renderer is not None:
+            RIC.aim_camera(S)
             S.renderer.update_scene(S.data, camera=S.cam, scene_option=S.scene_option)
             right = RIC.fit_to_box(cv2.cvtColor(S.renderer.render(), cv2.COLOR_RGB2BGR),
                                    RIC.MJ_PANEL_W, RIC.PANEL_H)
@@ -909,6 +914,7 @@ def idle(S, seed: int, k: int, total: int, label: str, last: str) -> str:
         frame, _ = S.grabber.latest()
         left = (RIC.fit_to_box(frame.image, RIC.ZED_PANEL_W, RIC.PANEL_H) if frame is not None
                 else np.zeros((RIC.PANEL_H, RIC.ZED_PANEL_W, 3), np.uint8))
+        RIC.aim_camera(S)
         S.renderer.update_scene(S.data, camera=S.cam, scene_option=S.scene_option)
         if S.guide is not None:
             S.guide.draw(S.renderer.scene, terms, S.lock_rule, S.data, S.ix, False)
@@ -917,6 +923,8 @@ def idle(S, seed: int, k: int, total: int, label: str, last: str) -> str:
         RIC.text(right, "NEXT  %s  seed %d   (%d of %d)" % (label, seed, k, total), (16, 46), 0.9,
                  RIC.CYAN)
         RIC.text(right, "ENTER start   n skip seed   q quit", (16, 86), 0.6, RIC.GREY)
+        RIC.text(right, "view: %s   (w/s tilt  +/- zoom  c next view  r default)"
+                 % RIC.view_label(S), (16, RIC.PANEL_H - 40), 0.5, RIC.GREY)
         RIC.text(right, "B-PRIME ON (fixed for collection, D18)", (16, 120), 0.6, RIC.GREEN)
         if last:
             RIC.text(right, "last: %s" % last, (16, 154), 0.55, RIC.GREY)
@@ -932,6 +940,10 @@ def idle(S, seed: int, k: int, total: int, label: str, last: str) -> str:
             return "skip"
         if low == ord("q"):
             return "quit"
+        if low in (ord("w"), ord("s"), ord("+"), ord("="), ord("-"), ord("_"),
+                   RIC.FC.KEY_CYCLE_PRESET, RIC.FC.KEY_RESET_VIEW):
+            RIC.camera_key(S, low)          # set the view before starting
+            continue
         if low == ord("b"):
             # Every episode must start under the D18 contract (reset_episode
             # raises otherwise), so there is nothing to toggle it FOR here; A/B
@@ -959,13 +971,15 @@ def cmd_record(a) -> int:
     ledger.append("session", label=label, source=src_name, operator=a.operator,
                   seeds=pending[:a.count], spec_version=spec.SPEC_VERSION,
                   lock_rule=rule.version, out_dir=repo_relpath(out_dir),
-                  max_ticks=int(a.max_ticks),
+                  max_ticks=int(a.max_ticks), view=RIC.view_label(S),
                   camera=dict((k, S.camera_meta.get(k)) for k in
                               ("fake", "sdk_version", "serial_number", "camera_model")))
     print("session %r (operator %s, lock rule %s, cap %d ticks = %s s): %d seed(s) pending, "
           "%d episode(s) this session -> %s"
           % (label, a.operator, rule.version, a.max_ticks, _secs(a.max_ticks * TICK_S),
              len(pending), a.count, repo_relpath(out_dir)))
+    print("view: %s%s" % (RIC.view_label(S), "" if S.follow is None else
+                          " (follow camera; c next preset, r default view)"))
     tally = dict(accept=0, failed=0, discard=0)
     queue, attempts, last = list(pending), 0, ""
     try:
@@ -1158,6 +1172,10 @@ def build_parser():
     ap.add_argument("--guide", choices=OC.GUIDE_CHOICES, default=OC.GUIDE_DEFAULT,
                     help="base-lock floor guide in the MuJoCo view (purely visual; "
                          "stored per episode as operator_ui.guide). Default %(default)s")
+    ap.add_argument("--camera", choices=RIC.FC.MODES, default=RIC.FC.MODE_DEFAULT,
+                    help="MuJoCo view: follow (over-the-shoulder, stays on the robot; "
+                         "render-only) or fixed (the old camera). The preset and manual "
+                         "offsets are stored per episode (operator_ui.view). Default %(default)s")
     ap.add_argument("--start-xy", type=lambda s: tuple(float(v) for v in s.split(",")),
                     default=START_XY, help="base start x,y (default the deploy/scripted start)")
     ap.add_argument("--start-standoff", type=float, default=None,
