@@ -51,7 +51,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 from g1_teleop import config as C
 from g1_teleop import synthetic_source as SS
-from g1_teleop.zed_source import ZEDSource
+from g1_teleop.zed_source import ZEDOpenError, ZEDSource
 
 OUT_DIR = os.path.join(ROOT, "recordings", "keypoints")
 ARM_IDS = (12, 13, 14, 15, 16, 17)
@@ -263,9 +263,10 @@ def main():
         ap.error("--headless needs --duration")
 
     print("opening ZED through ZEDSource (body-tracking model load can take a while)...")
-    zed = ZEDSource(C.ZEDConfig())
-    if not zed.camera.is_opened():
-        raise SystemExit("ZED did not open - ZEDSource does not check camera.open(); check the cable/SDK")
+    try:
+        zed = ZEDSource(C.ZEDConfig())
+    except ZEDOpenError as e:
+        raise SystemExit("ZED: %s" % e)
     base = session_meta(zed, args)
     print(json.dumps({k: base[k] for k in ("sdk_version", "camera_model", "resolution", "camera_fps",
                                            "depth_mode", "body_tracking")}, indent=1))

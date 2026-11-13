@@ -8,3 +8,5 @@ torch==2.11.0
 opencv-python>=4.8,<4.12
 # pyzed is installed via the Stereolabs ZED SDK, not pip.
 # See: https://www.stereolabs.com/docs/app-development/python/install
+# Holds NumPy's BLAS pool at one thread in the live recorder (g1_teleop/compute_threads.py).
+threadpoolctl==3.5.0

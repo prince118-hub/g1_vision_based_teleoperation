@@ -8015,3 +8015,71 @@ result** (O34 Option B). Only NEW files were added: three tools, a shared module
 - **Proximity correction:** the earlier final report showed only `palm_box_min_m`, the FARTHER palm. "Closest palm to box" is
   `palm_box_nearest_min_m`, now reported beside it. Lower is not better by itself: ACT on the patch has the smallest closest-palm median
   (0.074 m) but a larger farther-palm median (0.150 m) than ACT-LSTM (0.084, 0.138), because the weld needs both palms.
+
+## 2026-11-12 — Live recorder tick rate on the real ZED: 16.8 Hz -> 25.0 Hz (branch `zed-live-rate`)
+
+Machine: the NVIDIA laptop (RTX 3050, i5-11400H 6c/12t, 7.7 GB RAM, AC, Turbo). ZED 2i S/N 31064762, SDK 5.4.0, HD720@30, BODY_38.
+Every number is a 30 s run of `python tools/record_teleop_live.py --source zed --bench 30 --seed-list 0` with a body in view
+(`--bench`: the recorder's own loop, window, HUD, recorder and keypoint tap, started at once; writes nothing). Target: >= 24 Hz, <= 2% late
+ticks (a tick interval > 60 ms).
+
+**Result (final code).** Late % is on the high-resolution clock.
+
+| setting | tick rate | late ticks | dropout | runs |
+|---|---|---|---|---|
+| NEURAL + HUMAN_BODY_ACCURATE (default) | 25.06-25.09 Hz | 0.3, 0.4, 0.4, 0.7, 1.5, 1.6, 4.6 % | 0 % | 7 |
+| NEURAL + HUMAN_BODY_MEDIUM | 25.04-25.08 Hz | 0.7, 0.8, 1.2, 2.3 % | 0 % | 4 |
+| NEURAL_LIGHT + HUMAN_BODY_ACCURATE | 25.09 Hz | 1.7 % | 7.9 % | 1 |
+| NEURAL_LIGHT + HUMAN_BODY_MEDIUM | 25.05 Hz | 2.0 % | 0 % | 1 |
+
+**Before (code at 68edbe1).** Late % here is on the OLD 15.6 ms clock, which over-counts (below).
+
+| setting | tick rate | late ticks | dropout |
+|---|---|---|---|
+| NEURAL + HUMAN_BODY_ACCURATE | 16.8 Hz | 67.8 % | 0 % |
+| NEURAL_LIGHT + HUMAN_BODY_ACCURATE | 19.5 Hz | 31.8 % | 0 % |
+| NEURAL + HUMAN_BODY_MEDIUM | 13.8 Hz | 76.0 % | 0 % |
+| NEURAL_LIGHT + HUMAN_BODY_MEDIUM | 13.2 Hz | 85.0 % | 0 % |
+
+- **The ZED settings were not the bottleneck (TR33).** HUMAN_BODY_MEDIUM delivers more frames (25.6 against 15.9 Hz) and the loop got slower:
+  the cost was on the main loop per camera frame. The default (NEURAL, HUMAN_BODY_ACCURATE) is kept.
+- **Not the GIL either:** a pure-Python main thread keeps 78% of its speed beside the grab thread. The grab thread is the one that waits
+  (8-10 ms per Python-level call), which is why the camera delivers 16-19 Hz and not 30 (O29).
+- **The plain loop was not at 101% with a body in view:** `run_integrated_combined.py keyboard 0 --profile --seconds 30` gave 79.6%
+  (arm IK 28.5 ms per frame). Today's `recordings/live_check` episode at 24.9 Hz had 98% dropout, i.e. no IK running.
+- **Cause 1: NumPy's OpenBLAS pool (12 threads) beside the ZED SDK's threads.** `OPENBLAS_NUM_THREADS=1`: IK 28.5 -> 8.7 ms per frame, plain
+  loop 79.6% -> 119.4%. Set before NumPy loads when the recorder is started with `--source zed`, applied again and read back through
+  threadpoolctl (`g1_teleop/compute_threads.py`, `camera.blas_threads` in every episode; threadpoolctl==3.5.0 added to requirements.txt).
+  Live only: fake / headless / tests keep the pool they had. Limiting at runtime alone was not enough in the recorder (16.6-19 Hz against 20.5).
+- **Cause 2: where the loop waited.** It slept to the wall clock BEFORE each control period's work, so IK and drawing always arrived as
+  lateness of the next tick: 8% of ticks > 60 ms on a loop that slept 16% of the time. Now (paced runs only; headless and `--profile` never
+  sleep): the sleep is at the start of the control period, after the previous period's work; the display waits one control period (20 ms)
+  when that period also solved the IK; a display tick is skipped when the loop is already behind, never two in a row, keys still polled.
+  `timing.display_skips` is stored per episode (76-198 of ~757 ticks in these runs).
+- **Display overhead removed:** `cv2.pollKey` for `waitKeyEx(1)` (identical key codes and drain order, checked key by key with posted window
+  messages, not with a person at the keyboard); one window buffer instead of two panels plus `hstack`; MuJoCo rendered at the size it is
+  shown (760x570, was 960x720 scaled down); HUD outline not anti-aliased (0.58 -> 0.10 ms per string, 10-14 strings per tick); 1 ms Windows
+  timer while a paced session is open (not measured in isolation).
+- **`tick_wall_ns` and the keypoint `ts_host_ns` now use `time.perf_counter_ns`.** `time.monotonic_ns` steps 15.6 ms on this Windows / Python
+  3.10, so an interval could only read 31 / 47 / 62 ms: one run read 10.1% late on it and 2.0% on the high-resolution clock. Same columns,
+  same meaning; only differences are ever used. Episodes recorded before today carry the coarse clock.
+- **Tried, dropped:** always skipping the display on an IK tick (late 13-18%: the forced draw landed on the next tick, usually an IK tick
+  too); process / thread priority, `torch.set_num_threads(1)`, `cv2.setNumThreads(1)` (inside run-to-run noise).
+- **Not changed:** the arm IK (shared with the scripted demonstrator), the spec, the lock rule, the success rules, `g1_data/recorder.py`.
+  `--invariance` on the fake take: CONFIRMED.
+- **ZEDSource** checks `camera.open()` and `enable_body_tracking()` and raises `ZEDOpenError` with the SDK's status; depth mode and body model
+  come from `ZEDConfig` (the body model was hardcoded; the field was dead). Flags: `--zed-depth-mode`, `--zed-body-model`; what ran is read
+  back from the camera into each episode's `camera` metadata (`depth_mode`, `body_tracking.detection_model`, `zed_config`).
+- **Tests.** Four new ones in tools/test_record_teleop_live.py. The full suite in ONE process (`python -m pytest g1_data g1_model
+  g1_teleop tools -q`) gave 597 passed, 2 skipped, 5 failed, all five allocation errors (CUDA out of memory with 3.1 GiB free, MuJoCo
+  "Could not allocate memory", CUDA DLLs not loading). **Cause, found 2026-11-13: drive C: is full** (0.02 GB free, 238 MB after a
+  cleanup of my own temp files), so Windows cannot grow the page file: `WinError 1455, the paging file is too small` when a second
+  CUDA-loaded Python starts, and `No space left on device` for temp files. `main` fails the same way (tools/test_train_policy.py: 3 of
+  4 there, 2 of 4 here, same errors). **Run in parts, everything passes: 602 passed, 2 skipped** - one pytest process per test file,
+  tools/test_train_policy.py one process per test, temp files on D: (`TEMP` / `TMP`); tools/test_keypoint_recording.py SELFTEST PASS.
+- **Regression against main** (`tools/check_memory_design_regression.py --base main`, 68edbe1 against this branch, `--real`
+  `ckpt_step0200000.pt` of act_n40_seed0, act_lstm_n40_seed0, act_orig_n40_seed0, act_lstm_full_n40_seed0 and `best.pt` of
+  bc_b256_n40_seed0): **ALL IDENTICAL**, 15/15 (7 model configs, 3 old-format checkpoints, 5 real checkpoints). No module on the
+  scripted or evaluation path imports the changed loop or recorder code (only `BodyFrame` from zed_source.py, unchanged).
+- **Live episode after the fix (Charles, reported 2026-11-13):** one full episode, success, 25.0 Hz, 3 of 803 ticks late (0.4%), all keys worked. The checklist's own
+  overrun criterion is <= 1% (docs/LIVE_RECORDING_CHECKLIST.md step 2); the default met it in 4 of 7 runs. Run-to-run spread is large.
