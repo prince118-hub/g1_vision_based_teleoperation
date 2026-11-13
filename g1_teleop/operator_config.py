@@ -46,8 +46,9 @@ GUIDE_CHOICES = ("on", "off")
 GUIDE_DEFAULT = "on"
 
 #: Single-shot keys the operator tools add on top of run_integrated_combined's.
-#: None of them is used by the loop itself (its keys: a d w s + - r g o u b p q
-#: space, arrows / i j k l, n m).
+#: None of them is used by the loop itself (its keys: a d w s + - r c g o u b p q
+#: space, arrows / i j k l, n m; a d w s + - r c are the view keys,
+#: g1_teleop/follow_camera.py).
 KEY_PRACTICE_NEXT = ord("t")       # walk_test: new try, next training seed
 KEY_PRACTICE_SAME = ord("y")       # walk_test: new try, same seed
 KEY_ACCEPT = ord("a")              # verdict screen only (the loop is not running)

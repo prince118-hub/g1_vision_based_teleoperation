@@ -91,6 +91,7 @@ from locomotion_input import (PelvisVelocity, LeanJoystick, KeyboardCommand,
 # the default lock rule and the floor-guide default).
 from g1_teleop import operator_config as OC
 from g1_teleop.floor_guide import FloorGuide
+from g1_teleop import follow_camera as FC
 POLICY_PATH, SCENE_PATH = OC.POLICY_PATH, OC.SCENE_PATH
 
 # ── Display ───────────────────────────────────────────────────────────────────
@@ -570,7 +571,87 @@ def build_parser():
     ap.add_argument("--guide", choices=OC.GUIDE_CHOICES, default=OC.GUIDE_DEFAULT,
                     help="base-lock floor guide in the MuJoCo view (purely visual; "
                          "g1_teleop/floor_guide.py). Default %(default)s")
+    ap.add_argument("--camera", choices=FC.MODES, default=FC.MODE_DEFAULT,
+                    help="MuJoCo view: follow = the camera stays on the robot's work area "
+                         "(g1_teleop/follow_camera.py; render-only), fixed = the old "
+                         "world-fixed camera. Default %(default)s")
     return ap
+
+
+def aim_camera(S, snap=False):
+    """Point the session's view camera at the robot (follow mode; a no-op for the
+    fixed camera). Writes `S.cam` only - an MjvCamera, never the model or data."""
+    if getattr(S, "follow", None) is None:
+        return
+    if snap:
+        S.follow.snap()
+    S.follow.apply(S.cam, S.data.qpos[S.ix.base_xy_qpos],
+                   yaw_from_quat(S.data.qpos[S.ix.base_quat_qpos]))
+
+
+def view_meta(S) -> dict:
+    """The view in use, for an episode's metadata (`operator_ui.view`)."""
+    follow = getattr(S, "follow", None)
+    return follow.meta() if follow is not None else FC.fixed_meta(S.cam)
+
+
+def view_label(S) -> str:
+    follow = getattr(S, "follow", None)
+    return follow.label() if follow is not None else "fixed"
+
+
+def camera_key(S, key, t_s=0.0) -> bool:
+    """The view keys: a/d rotate, w/s tilt, +/- zoom, r default view, c next
+    preset. With the follow camera they are OFFSETS on the preset, so the view
+    keeps following; with the fixed camera they move it as they always did.
+    True when `key` was a view key."""
+    cam, follow = S.cam, getattr(S, "follow", None)
+    if key == ord("a"):
+        if follow is not None:
+            follow.rotate(-1, t_s)
+        else:
+            cam.azimuth = (cam.azimuth - 5) % 360
+    elif key == ord("d"):
+        if follow is not None:
+            follow.rotate(+1, t_s)
+        else:
+            cam.azimuth = (cam.azimuth + 5) % 360
+    elif key == ord("w"):
+        if follow is not None:
+            follow.tilt(+1, t_s)
+        else:
+            cam.elevation = min(cam.elevation + 5, 89)
+    elif key == ord("s"):
+        if follow is not None:
+            follow.tilt(-1, t_s)
+        else:
+            cam.elevation = max(cam.elevation - 5, -89)
+    elif key in (ord("+"), ord("=")):
+        if follow is not None:
+            follow.zoom(+1, t_s)
+        else:
+            cam.distance = max(cam.distance - 0.3, 0.5)
+    elif key in (ord("-"), ord("_")):
+        if follow is not None:
+            follow.zoom(-1, t_s)
+        else:
+            cam.distance += 0.3
+    elif key == FC.KEY_RESET_VIEW:
+        if follow is not None:
+            follow.reset_view(t_s)
+            print("view -> %s (default)" % follow.label())
+        else:
+            cam.lookat[:] = CAM_LOOKAT
+            cam.distance, cam.azimuth, cam.elevation = (
+                CAM_DISTANCE, CAM_AZIMUTH, CAM_ELEVATION)
+    elif key == FC.KEY_CYCLE_PRESET:
+        if follow is not None:
+            print("view -> %s" % follow.cycle(t_s))
+        else:
+            print("c ignored: the follow camera is off (--camera fixed)")
+    else:
+        return False
+    return True
 
 
 # ── Session / loop split (2026-10-22, tools/record_teleop_live.py) ───────────
@@ -787,6 +868,12 @@ def open_session(args, source=None, sim_clock=None):
     cam.azimuth = CAM_AZIMUTH
     cam.elevation = CAM_ELEVATION
     S.cam, S.scene_option = cam, mujoco.MjvOption()
+    # The follow camera (render-only): it writes `cam` and nothing else.
+    S.follow = (FC.FollowCamera() if getattr(args, "camera", FC.MODE_DEFAULT) == "follow"
+                else None)
+    print("MuJoCo view: %s%s" % (
+        ("follow camera, preset %s" % S.follow.label()) if S.follow is not None else "fixed camera",
+        "  (a/d rotate, w/s tilt, +/- zoom, c next preset, r default view)"))
     # Overlay mode. MINIMAL is the default because it is the piloting view; FULL
     # is for debugging and for reports. The choice is remembered for the rest of
     # the session (it is not written to disk, so a restart is MINIMAL again).
@@ -826,6 +913,8 @@ def reset_for_episode(S, seed, start_xy=OC.START_XY, start_standoff=None):
     S.data.qpos[S.ix.base_qpos][0] = xy[0]
     S.data.qpos[S.ix.base_qpos][1] = xy[1]
     mujoco.mj_forward(S.model, S.data)
+    if getattr(S, "follow", None) is not None:
+        S.follow.begin_episode()      # view change log restarts; the view itself is kept
     # A replayed take starts from frame 0, and no frame from before the start
     # is applied.
     src = getattr(S, "source_obj", None)
@@ -926,22 +1015,8 @@ def run_loop(S, hooks=None):
             return None
         if key == ord("q"):
             return "quit"
-        elif key == ord("a"):
-            cam.azimuth = (cam.azimuth - 5) % 360
-        elif key == ord("d"):
-            cam.azimuth = (cam.azimuth + 5) % 360
-        elif key == ord("w"):
-            cam.elevation = min(cam.elevation + 5, 89)
-        elif key == ord("s"):
-            cam.elevation = max(cam.elevation - 5, -89)
-        elif key in (ord("+"), ord("=")):
-            cam.distance = max(cam.distance - 0.3, 0.5)
-        elif key in (ord("-"), ord("_")):
-            cam.distance += 0.3
-        elif key == ord("r"):
-            cam.lookat[:] = CAM_LOOKAT
-            cam.distance, cam.azimuth, cam.elevation = (
-                CAM_DISTANCE, CAM_AZIMUTH, CAM_ELEVATION)
+        elif camera_key(S, key, counter * SIM_DT):
+            pass                       # a d w s + - r c: the view only
         elif key == ord("g"):
             grasp_cmd = 0.0 if grasp_cmd > 0.5 else 1.0
             print("grasp command -> %.0f%s" % (
@@ -1312,6 +1387,7 @@ def run_loop(S, hooks=None):
 
         # ── Right panel: simulation ─────────────────────────────────────
         _t = time.perf_counter() if profile else 0.0
+        aim_camera(S)                  # follow camera: writes `cam` only
         renderer.update_scene(data, camera=cam, scene_option=scene_option)
         if S.guide is not None:
             # Decor geoms appended to the render scene after update_scene: not in
@@ -1363,7 +1439,7 @@ def run_loop(S, hooks=None):
         if S.overlay_full or counter * SIM_DT < HINT_SECONDS:
             # Two lines: one does not fit the panel width at a readable scale.
             hints = ["g grasp   u unlock   b B-prime   o overlay (minimal/full)",
-                     "a/d rot  w/s tilt  +/- zoom  r reset  space stop  q quit"]
+                     "a/d rot  w/s tilt  +/- zoom  c view  r reset view  space stop  q quit"]
             if isinstance(loco, KeyboardCommand):
                 # Its own line: prefixing hints[0] no longer fits with strafe.
                 hints.insert(0, "arrows walk/turn   n/m strafe (hold)   p precision")
@@ -1371,6 +1447,9 @@ def run_loop(S, hooks=None):
                 text(right, h_, (10, PANEL_H - 30 + 16 * k_), 0.45, (200, 200, 200))
         if S.guide is not None:
             S.guide.banner(right, MJ_PANEL_W - 190, 46)
+        _vl = "view: %s" % view_label(S)
+        text(right, _vl, (MJ_PANEL_W - 12 - cv2.getTextSize(
+            _vl, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0][0], 70), 0.45, GREY)
         if hooks is not None:
             hooks.draw(right, st, S)
 

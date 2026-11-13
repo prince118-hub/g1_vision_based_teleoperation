@@ -72,6 +72,26 @@ there). The guide is purely visual: decor geoms in the render scene only — no 
 collision, not in the recorded state (`tools/test_operator_tools.py` proves guide on vs off
 gives identical trajectories). `--guide off` turns it off in all three tools.
 
+## 2b. The MuJoCo view — the follow camera
+
+The view follows the robot (practice and recording alike; `--camera fixed` gives the old
+world-fixed camera). It aims about 0.45 m in front of the pelvis at box height and turns
+with the robot's heading. It is render-only: nothing recorded depends on it.
+
+| key | what it does |
+|---|---|
+| `c` | next view: **behind** (default, over the left shoulder) → **front-side** → **side** → **top** → behind |
+| `r` | back to the default view (behind, no adjustments) |
+| `a` / `d` | rotate the view 5° (it keeps following the robot afterwards) |
+| `w` / `s` | tilt 5° |
+| `+` / `-` | zoom 0.15 m in / out |
+
+The current view is printed at the top right of the MuJoCo panel (`view: behind`, plus any
+adjustment, e.g. `view: behind  az -10 el +5 dist -0.15`) and in the session header. On the
+recorder's idle screen `c`, `r`, `w`/`s`, `+`/`-` already work, so the view can be set before
+`ENTER`. The view and every change made during an episode are stored in the episode
+(`operator_ui.view`).
+
 ## 3. Record
 
 ```

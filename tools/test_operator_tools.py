@@ -136,7 +136,12 @@ def test_a_failed_episode_recommends_discard_with_the_failing_phase():
     d = _rows(out)[-1]
     assert d["event"] == "discard" and d["reason"].startswith("failed: PLACE")
     assert d["operator_choice"] == "discard" and d["recommendation"]["recommend"] == "discard"
-    assert meta["operator_ui"] == {"guide": "on"}
+    assert meta["operator_ui"]["guide"] == "on"
+    # the follow camera at its default: preset behind, no offsets, nothing changed
+    v = meta["operator_ui"]["view"]
+    assert (v["mode"], v["preset"], v["changes"]) == ("follow", "behind", [])
+    assert v["offsets"] == dict(azimuth_deg=0.0, elevation_deg=0.0, distance_m=0.0)
+    assert set(meta["operator_ui"]) == {"guide", "view"}
 
 
 def test_a_a_failed_episode_can_never_be_accepted():
@@ -376,7 +381,7 @@ class _CpuRenderer:
         pass
 
 
-def _guided_run(guide: str, leak: bool = False):
+def _guided_run(guide: str, leak: bool = False, camera: str = "follow", cams=None):
     """run_integrated_combined on the --synthetic grasp fixture in --profile mode
     (renders + draws every 25 Hz frame, no window) with the TeleopRecorder
     attached: (sha of qpos+qvel after every step, steps, recorded states,
@@ -402,7 +407,16 @@ def _guided_run(guide: str, leak: bool = False):
     mujoco.Renderer, FG.FloorGuide.draw = _CpuRenderer, draw
     S = RIC.open_session(RIC.build_parser().parse_args(
         ["keyboard", "0", "--synthetic", "grasp", "--profile", "--start-standoff", "0.32",
-         "--seconds", "14", "--guide", guide]))
+         "--seconds", "14", "--guide", guide, "--camera", camera]))
+    if cams is not None:
+        # record what the render path hands mjv_updateScene, frame by frame
+        real_update = _CpuRenderer.update_scene
+
+        def update(self, data, camera=None, scene_option=None):
+            cams.append((float(camera.azimuth), float(camera.elevation), float(camera.distance),
+                         tuple(float(v) for v in camera.lookat)))
+            return real_update(self, data, camera=camera, scene_option=scene_option)
+        S.renderer.update_scene = update.__get__(S.renderer)
     try:
         mujoco.mj_step = step
         with TeleopRecorder() as rec:
@@ -565,6 +579,212 @@ def test_c_practice_keys_do_not_collide_with_the_loop():
     src = open(os.path.join(ROOT, "run_integrated_combined.py"), encoding="utf-8").read()
     for k in (OC.KEY_PRACTICE_NEXT, OC.KEY_PRACTICE_SAME):
         assert 'ord("%s")' % chr(k) not in src, chr(k)
+
+
+# ═══ TASK D - the follow camera (g1_teleop/follow_camera.py) ════════════════
+def _cam():
+    cam = mujoco.MjvCamera()
+    cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+    return cam
+
+
+def _cam_pos(cam):
+    """Where MuJoCo puts a free camera: lookat minus distance along the view."""
+    az, el = np.radians(cam.azimuth), np.radians(cam.elevation)
+    fwd = np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+    return np.asarray(cam.lookat) - cam.distance * fwd
+
+
+def test_d_default_view_is_over_the_left_shoulder_and_aims_ahead_of_the_pelvis():
+    from g1_teleop import follow_camera as FC
+    assert FC.PRESET_NAMES == ("behind", "front-side", "side", "top")
+    assert FC.DEFAULT_PRESET == "behind" and FC.MODE_DEFAULT == "follow"
+    assert 0.4 <= FC.AIM_FORWARD_M <= 0.5 and FC.AIM_HEIGHT_M == 0.85
+    d = FC.PRESETS[0]
+    assert 1.3 <= d.distance_m <= 1.6
+    for yaw_deg, base in ((0.0, (0.6, 0.0)), (90.0, (1.2, -0.3)), (-170.0, (2.0, 1.0))):
+        yaw = np.radians(yaw_deg)
+        f = FC.FollowCamera()
+        cam = _cam()
+        f.apply(cam, base, yaw)
+        head = np.array([np.cos(yaw), np.sin(yaw)])
+        left = np.array([-np.sin(yaw), np.cos(yaw)])
+        # aims AHEAD of the pelvis at hand height, not at the pelvis
+        assert np.allclose(cam.lookat[:2], np.asarray(base) + FC.AIM_FORWARD_M * head)
+        assert cam.lookat[2] == FC.AIM_HEIGHT_M
+        rel = _cam_pos(cam)[:2] - np.asarray(base)
+        assert rel @ head < -0.05, "the camera must be BEHIND the robot"
+        assert rel @ left > 0.2, "and to its LEFT (over the left shoulder)"
+        assert _cam_pos(cam)[2] > 1.4, "and above its head"
+        assert abs(FC._wrap_deg(cam.azimuth - (yaw_deg + d.azimuth_deg))) < 1e-9
+        assert (cam.elevation, cam.distance) == (d.elevation_deg, d.distance_m)
+
+
+def test_d_keys_are_offsets_and_the_view_still_follows():
+    """a/d/w/s/+/- change OFFSETS on the preset: after an adjustment the camera
+    still turns and moves with the robot. r = default view, c = next preset
+    (offsets cleared). Limits hold."""
+    import types
+    import run_integrated_combined as RIC
+    from g1_teleop import follow_camera as FC
+    f = FC.FollowCamera()
+    S = types.SimpleNamespace(cam=_cam(), follow=f)
+    for k in "aawww++":
+        assert RIC.camera_key(S, ord(k), 1.0)
+    assert f.offsets() == dict(azimuth_deg=-10.0, elevation_deg=15.0,
+                               distance_m=-2 * FC.DISTANCE_STEP_M)
+    assert "az -10 el +15" in f.label() and f.label().startswith("behind")
+    p = f.preset
+    for yaw_deg, base in ((0.0, (0.0, 0.0)), (120.0, (3.0, 1.0))):
+        f.snap()
+        f.apply(S.cam, base, np.radians(yaw_deg))
+        assert abs(FC._wrap_deg(S.cam.azimuth - (yaw_deg + p.azimuth_deg - 10.0))) < 1e-9
+        assert S.cam.elevation == p.elevation_deg + 15.0
+        assert abs(S.cam.distance - (p.distance_m - 2 * FC.DISTANCE_STEP_M)) < 1e-12
+        head = np.array([np.cos(np.radians(yaw_deg)), np.sin(np.radians(yaw_deg))])
+        assert np.allclose(S.cam.lookat[:2], np.asarray(base) + FC.AIM_FORWARD_M * head)
+    # limits: tilt and zoom clamp, and the offset reported is the one in force
+    for _ in range(60):
+        f.tilt(-1)
+        f.zoom(+1)
+    assert f.view()["elevation_deg"] == -FC.ELEVATION_LIMIT_DEG
+    assert f.view()["distance_m"] == FC.DISTANCE_MIN_M
+    assert p.elevation_deg + f.d_elevation == -FC.ELEVATION_LIMIT_DEG
+    # c cycles in order and clears the offsets; r is the default view from anywhere
+    names = []
+    for _ in range(5):
+        RIC.camera_key(S, FC.KEY_CYCLE_PRESET, 2.0)
+        names.append(f.preset.name)
+        assert not f.has_offsets()
+    assert names == ["front-side", "side", "top", "behind", "front-side"]
+    f.rotate(+3)
+    RIC.camera_key(S, FC.KEY_RESET_VIEW, 3.0)
+    assert f.preset.name == "behind" and not f.has_offsets() and f.label() == "behind"
+    assert f.changes[-1]["what"] == "reset" and f.changes[-1]["t_s"] == 3.0
+    # other keys are not view keys; the fixed camera keeps its old keys
+    assert not RIC.camera_key(S, ord("g")) and not RIC.camera_key(S, ord("t"))
+    fixed = types.SimpleNamespace(cam=_cam(), follow=None)
+    fixed.cam.azimuth, fixed.cam.elevation, fixed.cam.distance = 0.0, -20.0, 4.5
+    for k in "dw-":
+        assert RIC.camera_key(fixed, ord(k))
+    assert (fixed.cam.azimuth, fixed.cam.elevation, fixed.cam.distance) == (5.0, -15.0, 4.8)
+    assert RIC.view_label(fixed) == "fixed" and RIC.view_meta(fixed)["mode"] == "fixed"
+
+
+def test_d_smoothing_is_bounded_and_wraps_and_a_new_episode_snaps():
+    from g1_teleop import follow_camera as FC
+    f, cam = FC.FollowCamera(), _cam()
+    f.apply(cam, (0.0, 0.0), np.radians(179.0))
+    f.apply(cam, (0.0, 0.0), np.radians(-179.0))           # +2 deg through the wrap
+    assert abs(FC._wrap_deg(f._yaw_deg - 179.0) - 2.0 * FC.SMOOTHING) < 1e-9
+    for _ in range(200):
+        f.apply(cam, (1.0, 2.0), np.radians(-179.0))
+    assert abs(FC._wrap_deg(f._yaw_deg + 179.0)) < 1e-6 and np.allclose(f._xy, (1.0, 2.0))
+    f.rotate(+1, 4.0)
+    f.begin_episode()                                       # reset: jump, log cleared, view kept
+    assert f.changes == [] and f.d_azimuth == FC.AZIMUTH_STEP_DEG
+    f.apply(cam, (5.0, 5.0), 0.0)
+    assert f._xy == (5.0, 5.0) and f._yaw_deg == 0.0
+
+
+def test_d_follow_camera_touches_the_view_camera_only():
+    """`apply` is handed numbers and an MjvCamera - never the model or the
+    data - and the session helper reads data without writing it."""
+    import inspect
+    import types
+    import run_integrated_combined as RIC
+    from g1_teleop import follow_camera as FC
+    from g1_teleop.indices import ModelIndex
+    assert list(inspect.signature(FC.FollowCamera.apply).parameters) == [
+        "self", "cam", "base_xy", "yaw_rad", "smoothing"]
+    src = open(FC.__file__, encoding="utf-8").read()
+    assert "import mujoco" not in src and "MjData" not in src.split('"""', 2)[2]
+    m = _model()
+    d = mujoco.MjData(m)
+    mujoco.mj_resetDataKeyframe(m, d, 0)
+    mujoco.mj_forward(m, d)
+    before = [np.array(getattr(d, k)).copy() for k in ("qpos", "qvel", "ctrl", "qacc_warmstart",
+                                                        "xpos", "act", "time")]
+    S = types.SimpleNamespace(cam=_cam(), follow=FC.FollowCamera(), data=d,
+                              ix=ModelIndex.resolve(m))
+    for _ in range(3):
+        RIC.aim_camera(S)
+    RIC.aim_camera(S, snap=True)
+    after = [np.array(getattr(d, k)) for k in ("qpos", "qvel", "ctrl", "qacc_warmstart",
+                                                "xpos", "act", "time")]
+    assert all(np.array_equal(x, y) for x, y in zip(before, after))
+    assert S.cam.lookat[2] == FC.AIM_HEIGHT_M
+
+
+def test_d_follow_vs_fixed_identical_trajectories_and_recorded_states():
+    """THE invariance proof for the view: follow camera vs the old fixed camera
+    on the grasp fixture, rendered every display frame - every physics step's
+    qpos and qvel identical and the recorded 48-D states identical, while the
+    two cameras really did differ (the follow camera moved with the robot)."""
+    cams_follow, cams_fixed = [], []
+    h_follow, n1, s1, _ = _guided_run("on", camera="follow", cams=cams_follow)
+    h_fixed, n2, s2, _ = _guided_run("on", camera="fixed", cams=cams_fixed)
+    assert n1 == n2 == 7000
+    assert h_follow == h_fixed, "the follow camera changed the trajectory"
+    assert s1.shape == s2.shape and np.array_equal(s1, s2)
+    assert len(cams_follow) == len(cams_fixed) > 300
+    assert len(set(cams_fixed)) == 1, "the fixed camera must not move"
+    assert len({c[3] for c in cams_follow}) > 50, "the follow camera must move with the robot"
+    assert all(c[1] == -55.0 and c[2] == 1.5 for c in cams_follow)
+    if _CACHE.get("h_on"):
+        assert h_follow == _CACHE["h_on"]
+
+
+def test_d_view_is_stored_per_episode_with_the_changes_made_in_it():
+    """Headless, the view keys pressed on the sim clock: the episode stores the
+    preset, the offsets in force at its end and each change with its time; the
+    ledger's session row names the view; the recorded states do not depend on
+    the view keys."""
+    out = os.path.join(_tmp(), "d_view")
+    assert RT.main(_argv(out, "1.0:c,2.0:w,2.5:+,3.0:a," + _grasp_script())) == 0
+    path = glob.glob(os.path.join(out, "failed", "*.npz"))[0]
+    arrays, meta = load_episode(path)
+    v = meta["operator_ui"]["view"]
+    assert (v["mode"], v["preset"], v["default_preset"]) == ("follow", "front-side", "behind")
+    assert v["offsets"] == dict(azimuth_deg=-5.0, elevation_deg=5.0, distance_m=-0.15)
+    assert [(c["t_s"], c["what"]) for c in v["changes"]] == [
+        (1.0, "preset"), (2.0, "tilt"), (2.5, "zoom"), (3.0, "rotate")]
+    assert v["view"]["elevation_deg"] == -20.0 and abs(v["view"]["distance_m"] - 1.75) < 1e-9
+    sess = [r for r in _rows(out) if r["event"] == "session"][-1]
+    assert sess["view"] == "behind"
+    # the same episode without the view keys: identical recorded arrays
+    out0 = os.path.join(_tmp(), "d_view0")
+    assert RT.main(_argv(out0, _grasp_script())) == 0
+    a0, m0 = load_episode(glob.glob(os.path.join(out0, "failed", "*.npz"))[0])
+    for k in ("states", "actions", "qpos", "qvel"):
+        assert np.array_equal(arrays[k], a0[k]), k
+    assert m0["reset_fingerprint"] == meta["reset_fingerprint"]
+    assert m0["operator_ui"]["view"]["changes"] == []
+    # --camera fixed is stored as such
+    outf = os.path.join(_tmp(), "d_fixed")
+    assert RT.main(_argv(outf, _grasp_script(), extra=["--camera", "fixed"])) == 0
+    _, mf = load_episode(glob.glob(os.path.join(outf, "failed", "*.npz"))[0])
+    assert mf["operator_ui"]["view"]["mode"] == "fixed"
+
+
+def test_d_view_keys_do_not_collide_and_the_flag_defaults_to_follow():
+    """c is new; r was already the loop's reset-view key. Neither is a walking
+    key, a recorder key, a practice key or a verdict key."""
+    import run_integrated_combined as RIC
+    import walk_test as W
+    from g1_teleop import follow_camera as FC
+    from locomotion_input import KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT
+    taken = {ord(ch) for ch in "ijklnmpgexqbytuo "} | {10, 13, OC.KEY_ACCEPT, OC.KEY_DISCARD,
+                                                        OC.KEY_PRACTICE_NEXT, OC.KEY_PRACTICE_SAME,
+                                                        KEYCODE_STRAFE_LEFT, KEYCODE_STRAFE_RIGHT}
+    assert FC.KEY_CYCLE_PRESET == ord("c") and FC.KEY_RESET_VIEW == ord("r")
+    assert not {FC.KEY_CYCLE_PRESET, FC.KEY_RESET_VIEW} & taken
+    for ev in (2490368, 2621440, 2424832, 2555904):          # arrow codes: low byte 0
+        assert ev & 0xFF not in (FC.KEY_CYCLE_PRESET, FC.KEY_RESET_VIEW)
+    assert RIC.build_parser().parse_args([]).camera == "follow"
+    assert RT.build_parser().parse_args([]).camera == "follow"
+    assert W.practice_parser().parse_args([]).camera == "follow"
+    assert RT.build_parser().parse_args(["--camera", "fixed"]).camera == "fixed"
 
 
 def test_zzz_cleanup():
