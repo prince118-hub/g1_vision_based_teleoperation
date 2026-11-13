@@ -23,8 +23,14 @@ attempt          an `issue` row, closed by the next accept / discard / error row
                  "unfinished". A held-out-spawn `error` with no issue before it is
                  a skipped seed, not an attempt.
 operator         the `operator` of the latest `session` row before the issue.
-outcome          accept | failed (discard of a SAVED, task-failed episode) |
-                 discard (operator discard, nothing written) | error | unfinished.
+outcome          accept | failed (the episode FAILED the success rule; saved in
+                 failed/) | discard (the operator discarded it: with `x` during
+                 the episode, nothing written, or on the verdict screen, a
+                 SUCCESSFUL episode kept in discarded/ - `discarded_success`) |
+                 error | unfinished.
+revoked          an accept later revoked (tools/revoke_episode.py: a `discard` row
+                 with `revokes`). The attempt counts as a discard of a successful
+                 episode, not as an accept, so `accepted` equals the ledger's.
 success rate     accepted / attempted, every outcome in the denominator.
 wall_s           decision-row time minus issue-row time. Ledger times have 1 s
                  resolution; the interval includes scoring and saving (~ s) but
@@ -54,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import glob
 import os
 import sys
 from typing import Dict, List, Optional
@@ -67,6 +74,7 @@ sys.path[:0] = [ROOT, HERE]
 import report_io as IO                                              # noqa: E402
 
 DECISIONS = ("accept", "discard", "error")
+DISCARDED_DIR = "discarded"            # tools/record_teleop_live.DISCARDED_DIR
 
 
 def _t(s) -> Optional[_dt.datetime]:
@@ -88,7 +96,10 @@ def outcome_of(row: dict) -> str:
         return "accept"
     if row["event"] == "error":
         return "error"
-    if row.get("saved") or str(row.get("reason", "")).startswith("failed"):
+    # "failed" is the SUCCESS RULE's verdict (the recorder's reason "failed: <phase>
+    # ..."), never the fact that a file was kept: a successful episode the
+    # operator discards is saved too (discarded/).
+    if str(row.get("reason", "")).startswith("failed"):
         return "failed"
     return "discard"
 
@@ -113,7 +124,8 @@ def attempts_from_rows(rows: List[dict]) -> List[dict]:
                      source=session.get("source") or session.get("label"),
                      t_issue=r.get("t"), outcome="unfinished", wall_s=None, ticks=None,
                      end_reason=None, file=None, reason=None, time_limit=None,
-                     max_ticks=session.get("max_ticks"))
+                     max_ticks=session.get("max_ticks"), revoked=False,
+                     discarded_success=False)
             open_[seed] = a
             out.append(a)
         elif ev in DECISIONS and seed in open_:
@@ -129,6 +141,17 @@ def attempts_from_rows(rows: List[dict]) -> List[dict]:
             if r.get("max_ticks") is not None:
                 a["max_ticks"] = r.get("max_ticks")
             a["file"] = _base(r.get("path") or r.get("saved"))
+            a["discarded_success"] = bool(a["outcome"] == "discard" and r.get("saved"))
+        elif ev == "discard" and r.get("revokes"):
+            # A revocation (tools/revoke_episode.py) closes no issue: it takes back
+            # an earlier ACCEPT. That attempt becomes an operator discard of a
+            # successful episode; the file now lives in discarded/.
+            name = _base(r.get("revokes"))
+            for a in reversed(out):
+                if a["seed"] == seed and a["outcome"] == "accept" and a["file"] == name:
+                    a.update(outcome="discard", revoked=True, discarded_success=True,
+                             reason=r.get("reason"), file=_base(r.get("saved")) or name)
+                    break
     for a in out:
         a["sim_s"] = None if a["ticks"] is None else float(a["ticks"]) * IO.TICK_S
         a["success"] = int(a["outcome"] == "accept")
@@ -137,7 +160,10 @@ def attempts_from_rows(rows: List[dict]) -> List[dict]:
 
 def attach_episodes(attempts: List[dict], folder: str) -> None:
     """Per-episode dropout and timing from the saved files the attempts name."""
-    files = {os.path.basename(p): p for p in IO.episode_files(folder, include_failed=True)}
+    paths = IO.episode_files(folder, include_failed=True) + sorted(
+        p for p in glob.glob(os.path.join(folder, DISCARDED_DIR, "*.npz"))
+        if not p.endswith("_kp.npz"))
+    files = {os.path.basename(p): p for p in paths}
     for a in attempts:
         a.update(dropout_pct=None, degraded_ticks=None, tick_rate_hz=None, overrun_ticks=None,
                  paced=None, episode_source=None)
@@ -190,6 +216,8 @@ def summarize(attempts: List[dict], name: str) -> dict:
     return dict(
         operator=name, sources=IO.joined(a["source"] for a in attempts), attempts=n,
         accepted=count["accept"], failed=count["failed"], discarded=count["discard"],
+        discarded_successes=sum(bool(a.get("discarded_success")) for a in attempts),
+        revoked=sum(bool(a.get("revoked")) for a in attempts),
         errors=count["error"], unfinished=count["unfinished"],
         success_rate=(acc / n) if n else None,
         wall_s_per_attempt=float(np.mean(walls)) if walls else None,
@@ -215,7 +243,8 @@ ATTEMPT_COLS = ["operator", "k", "seed", "outcome", "success", "cum_success_rate
                 "rolling_success_rate", "wall_s", "sim_s", "ticks", "end_reason", "time_limit",
                 "dropout_pct", "tick_rate_hz", "overrun_ticks", "paced", "max_ticks", "source",
                 "t_issue", "file", "reason"]
-OP_COLS = ["operator", "sources", "attempts", "accepted", "failed", "discarded", "errors",
+OP_COLS = ["operator", "sources", "attempts", "accepted", "failed", "discarded",
+           "discarded_successes", "revoked", "errors",
            "unfinished", "success_rate", "wall_s_per_attempt", "sim_s_per_attempt",
            "wall_s_per_accepted_attempt", "wall_s_per_accepted_demo", "dropout_pct",
            "saved_episodes_measured", "tick_rate_hz_mean", "overrun_ticks_total", "paced",

@@ -8119,3 +8119,118 @@ in tools/record_teleop_live.py, walk_test.py and the plain loop (`--camera follo
   **609 passed, 2 skipped, 0 failed**; tools/test_keypoint_recording.py SELFTEST PASS.
 - The three screenshots asked for were rendered from scripted_v3 seed 0 (`recordings/view_check/`, gitignored) and are not part of the
   commit; Charles judged the view on the live window instead.
+
+## 2026-11-13b — 25-demo pilot: pilot check, late-tick rule, replay 16/26, seed 7, revoke
+
+**Pilot.** 26 accepted in `recordings/demonstrations` (5 sessions, 12:30-13:45, 129 attempts, accept rate 0.20; 86 `x` discards with
+nothing saved, 17 successes discarded incl. one revoked accept, 0 failed the success rule). Demo length mean 26.5 / median 25.2 / max
+40.6 s; push before weld median 22 mm; placement error median 32 mm (max 98). Dropout 0 in all 26.
+
+**`tools/pilot_check.py` (runs/pilot_check/20261113-134804): FAIL, on replay only** - fingerprint 26/26, manipulation 16/26, whole
+task 13/26. Every guard, split + norm (21/5) and the BC smoke (0.229 -> 0.100; deployed 0.100 vs zero 0.565) PASS.
+
+**Late ticks, all 43 saved episodes.** 402 of 30,717 intervals late (1.31%); late interval median 64 ms, p95 79 ms; 384 of 392 runs
+are single ticks and the next interval is short (catch-up). Three long ones: 267, 385 (first tick of seed 27), 425 ms. Per session
+mean late %: 1.34, 0.24, 0.89, 1.97, 2.03 (second half > first half in every session; session 2 started 20 s after session 1 and was
+the lowest - so not a plain thermal ramp; cause NOT established, no temperature was logged). No phase clustering (1.15-1.46% in
+walk-in, reach, lift, carry, after release). Arm-target step across a late interval = across a normal one (p95 0.053 vs 0.052 rad).
+Physics: exactly 20 steps per tick always. 10 episodes were over 2% (all discarded), 2 over 3%, none over 5%.
+
+**A. Late-tick rule changed (Charles, decided 2026-11-13): recommend discard when late ticks > 5% (was 2%) OR any single interval
+> 150 ms, first interval of the episode ignored** (`OVERRUN_RECOMMEND_MAX`, `MAX_INTERVAL_RECOMMEND_MS`). Still a RECOMMENDATION:
+the operator decides. Stored per episode: `timing.limits` and `timing.max_tick_interval_after_first_ms`; verdict row "longest tick".
+`timing.host` = GPU temperature and load from nvidia-smi, read once at the END of a paced episode (0.7 s, after the loop); CPU
+temperature is NOT read (no cheap unprivileged source on Windows). `pilot_check --max-overrun-frac` default 0.05. **No earlier
+episode was retro-accepted.** Under the new rule 2 of the 43 saved episodes would be flagged (267 and 425 ms; both were discarded).
+
+**B. Replay 16/26 - findings (NOTHING changed for B yet).**
+- **H1, stance at the lock: CONFIRMED as the main cause.** The 10 failures have a larger walk-in divergence (base xy at the recorded
+  lock tick: median 40 mm, max 83 mm, vs 23 / 41 mm for the 16 that reproduce) and the lock fires 2-192 ticks off (4 never weld).
+  Replaying the SAME actions from the RECORDED state at the lock tick (qpos, qvel of that tick; lock taken from state dim 47;
+  through the locked window; replay_check's own criterion): **24 of 26 reproduce, 9 of the 10 failures**; weld tick shift 0 or 1 in
+  all 26; box divergence while locked median 11 mm. Not reproduced: seed 7 (box 77 mm - the 128 mm pre-weld push, below) and seed 1
+  (34 mm; it passes the standard replay at 20 mm).
+- **H2, commands applied mid-tick: TRUE.** The loop's control period is 10 physics steps (50 Hz); a 25 Hz tick is two of them. Arm
+  targets (a new camera frame -> IK), the velocity command and the grasp key are all taken at control-period boundaries, so they can
+  change at step 10 of a tick. The recorder samples `ctrl` at step 0. Measured by replaying two pilot keypoint takes through the
+  recorder (`--source fake --replay`, headless) with every physics step logged: applied arm ctrl changed inside the tick in **25.6%
+  and 31.9% of ticks, always at step 10**; size median 0.014 / 0.011 rad (0.8 / 0.6 deg), p95 0.076 / 0.079 rad (4.4 deg), max 0.64 /
+  0.53 rad (one jump); in 47 of 160 and 51 of 175 of those ticks the mid-tick target was replaced again before the next sample, so it
+  is in no file (about 8-9% of ticks). The recorded action equals the ctrl of the tick's first step exactly (0.0 rad). Velocity:
+  while station-keeping it changes at step 10 in ~90% of free ticks by 0.001 (p95 0.002-0.005) m/s; with a key held it is constant,
+  so only press / release edges move. Grasp key: can land at step 10; D22 already labels the grip from the next tick's weld bit.
+  Effect: small - from the recorded lock state the 25 Hz-held actions still reproduce 24/26 with the weld within 1 tick. It is the
+  same kind of difference replay_check's docstring accepts for the scripted demonstrator (500 Hz command, 25 Hz sample).
+- Side observation, not chased: replaying an episode's own keypoint take through the fake source does NOT reproduce that episode's
+  recorded arm targets (seed 7: 59 of 535 ticks identical) - frame delivery on the sim clock differs from the live run.
+- **Proposed, NOT applied:** (1) latch inputs at 25 Hz tick boundaries (arm targets, velocity command, grasp command taken only when
+  `counter % 20 == 0`; the walking policy still runs at 50 Hz on the latched command) - the recorded action then IS what was applied
+  for the whole tick; cost: up to 20 ms more latency on the arm targets, station-keeping feedback at 25 Hz. The 26 pilot demos stay
+  valid (states exact, action = the target at the tick start) but were recorded under the old timing: store an `input_latch` field
+  so the two are distinguishable. (2) a replay check for human data: gate on the manipulation replayed from the recorded lock state
+  (routing proof: weld within 2 ticks, 26/26 today), report the box divergence against 25 mm per episode, keep the open-loop
+  whole-episode replay as a report only; negative controls to be verified when it is built.
+
+**C. Seed 7, "push before weld 127.8 mm" yet grasp PASS - two different quantities, not a code bug.** `box_pre_grasp_disturb_mm` is
+the PEAK 3-D displacement of the box from its start at ANY physics step before the weld. D19 (`success.py grasp_spawn_max` 0.05 m)
+is the XY distance from the spawn AT THE ENGAGE TICK only. Seed 7: the box was 117 mm away in xy and 50 mm up at tick 143, and back
+to 38.9 mm at the engage tick 166 -> D19 passes. D19 as written does not see a box that was shoved and came back. Peak > 50 mm in 3
+accepted demos: seeds 7 (128), 14 (78), 9 (67). No rule changed.
+
+**D. `tools/teleop_metrics.py`:** a revoked accept (a `discard` row with `revokes`) turns that attempt into a discard, so `accepted`
+equals the ledger's (26, was 27); "failed" now means the success rule failed (reason "failed: ..."), not "a file was kept" - a
+successful episode the operator discards is `discard` (new columns `discarded_successes`, `revoked`); episodes in discarded/ are
+measured too. On the pilot: 129 attempts, 26 accepted, 0 failed, 103 discarded (17 successes, 1 revoked).
+
+**`tools/revoke_episode.py`** (2026-11-13, merged 8fc1a3c): seed 19's mis-keyed accept revoked; ledger rows are never edited.
+
+## 2026-11-13c — Decisions after the pilot (Charles): input timing kept, from-lock replay gate, push rule, DISCARD blocks accept
+
+**1. Input timing NOT changed - a documented LIMITATION of the teleoperated demonstrations (all 50 pilot-phase demos, and any
+recorded with this loop).** The loop takes its inputs every 10 physics steps (50 Hz) and a recorded tick is 20 steps (25 Hz), so the
+command applied in the second half of a tick can differ from the one recorded for it (the recorder samples `ctrl` at the tick's first
+step; D4). Measured 2026-11-13 by replaying two pilot keypoint takes through the recorder with every physics step logged (seed 5 take:
+626 ticks; seed 27 take: 549 ticks):
+
+| | seed 5 take | seed 27 take |
+|---|---|---|
+| ticks whose applied arm ctrl changed inside the tick (always at step 10) | 160 of 626 = 25.6% | 175 of 549 = 31.9% |
+| size of the change, max over the 17 joints: median | 0.0138 rad (0.79 deg) | 0.0108 rad (0.62 deg) |
+| p95 | 0.0762 rad (4.37 deg) | 0.0785 rad (4.50 deg) |
+| max | 0.6428 rad | 0.5342 rad |
+| mid-tick target replaced before the next sample (in no file) | 47 ticks | 51 ticks |
+| recorded action vs ctrl at the tick's first step | identical (0.0 rad) | identical (0.0 rad) |
+
+Velocity command while station-keeping: changes at step 10 in 87-91% of free ticks by a median 0.001 m/s (p95 0.002-0.005, max 0.04);
+these runs had no key presses - with a key held the command is constant by construction, so only press / release edges can shift
+(not measured). Grasp key: can land at step 10 by the same mechanism (not exercised in these runs); the grip label is the next tick's
+weld bit (D22). What it means for the data: every recorded state is exact, and each recorded action is the command in force at the
+start of its tick - a 25 Hz sample of a 50 Hz command, the same kind of difference replay_check accepts for the scripted demonstrator
+(500 Hz command, 25 Hz sample). Holding the recorded action for the whole tick still fires the weld within 1 tick of the recording in
+26 of 26 pilot demos when replayed from the lock. The latch-at-tick fix proposed in 2026-11-13b was DECLINED so that all demos share
+one input timing.
+
+**2. Replay gate for human data: `replay_check.replay_from_lock`** (also `python tools/replay_check.py <episodes> --from-lock`).
+The recorded actions replayed from the recorded qpos / qvel at the first tick of the locked window that contains the weld, lock taken
+from state dim 47, to the lock release. GATE: weld within 2 ticks of the recording. REPORTED only: box divergence while locked against
+25 mm, and the open-loop whole-episode replay. Controls that must fail: wrong permutation, and the box removed to the goal platform.
+On the 26 pilot demos (fresh model per episode): **gate 26/26; wrong permutation fails 26/26; box removed fails 26/26**; box within
+25 mm 25/26 (seed 7, 32 mm - the 2026-11-13b figure of 24/26 came from a throwaway script that reused one MjModel across episodes).
+A third control, the box moved 0.25 m in y, fails in 25/26 and is REPORTED, not required: in seed 20 the left hand swept the displaced
+box 0.26 m back between the palms and the weld fired on the recorded tick (the gate's `conditions` held: d 0.10 / 0.13 m, opposed
+-0.95). `pilot_check`'s replay check now gates on fingerprint + from-lock + the two controls; an episode whose weld engaged with the
+base free cannot be replayed from a lock and FAILS it. On the pilot: `[PASS] replay  fingerprint 26/26, manipulation from the lock
+26/26, controls failed 26/26 | reported: box within 25 mm 25/26, open loop 16/26, whole task 13/26` (run with --skip-train,
+runs/pilot_check/20261113-142058; the BC smoke had passed in the first run).
+
+**3. Push rule (acceptance, NOT the success rule).** Peak box displacement before the weld (`box_pre_grasp_disturb_mm`) > 50 mm ->
+RECOMMEND DISCARD (`PUSH_RECOMMEND_MAX_MM`); shown on the verdict screen as "push before weld"; limits stored per episode
+(`acceptance_rules`). D19 / `success.py` unchanged. **Seeds 7 (128 mm), 9 (67 mm), 14 (78 mm) revoked** with tools/revoke_episode.py
+(reason "peak push before weld > 50 mm, new acceptance rule"): moved to discarded/, three ledger rows appended, none edited.
+Ledger after: 267 lines, **23 accepted** (0-6, 8, 10-13, 16, 17, 19-22, 24-28), pending 7, 9, 14, 29, 30, ...
+
+**4. A DISCARD recommendation now BLOCKS acceptance** (`RECOMMENDATION_BLOCKS_ACCEPT`): `a` is refused with the reason for dropout,
+late ticks, a long tick and the push, as it already was for a failed success rule; only `d` works. `can_accept` = success and no
+reason. A blocked success is still saved in discarded/ and its seed re-offered.
+
+Tests, in parts (one process per test file, tools/test_train_policy.py one per test, temp on D:): **616 passed, 2 skipped, 0 failed**; tools/test_keypoint_recording.py SELFTEST PASS; `--invariance` CONFIRMED. The first pass had 1 failure, `test_every_relpath_call_site_goes_through_the_helper`: tools/test_revoke_episode.py (merged 8fc1a3c without a full-suite run) called `os.path.relpath` directly; fixed to `repo_relpath`. So `main` carried one failing test from 8fc1a3c until this merge.

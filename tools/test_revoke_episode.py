@@ -44,7 +44,7 @@ def _snapshot(out):
     for base, _, names in os.walk(out):
         for n in names:
             p = os.path.join(base, n)
-            files[os.path.relpath(p, out)] = open(p, "rb").read()
+            files[repo_relpath(p, out)] = open(p, "rb").read()
     return files
 
 

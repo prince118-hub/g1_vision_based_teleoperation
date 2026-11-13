@@ -132,6 +132,13 @@ def test_pilot_passes_end_to_end_on_a_good_folder():
     assert inv["seeds"] == list(SEEDS) and inv["attempts"] == 4 and inv["accept_rows"] == 3
     rp = by["replay"]["details"]
     assert rp["fingerprint_matched"] == rp["manipulation_reproduced"] == 3
+    # the gate is the replay FROM THE RECORDED LOCK STATE, and both controls
+    # (wrong permutation, box removed) fail on every episode
+    assert rp["controls_failed_as_required"] == 3
+    for row in rp["per_episode"]:
+        assert row["checkable"] and row["weld_tick_delta"] <= 2
+        assert row["control_wrong_permutation_failed"] and row["control_box_removed_failed"]
+        assert "open_loop_manipulation_ok" in row and "box_while_locked_m" in row
     sn = by["split + norm"]["details"]
     assert sn["train"] == 2 and sn["val"] == 1
     sm = by["BC smoke"]["details"]
@@ -314,3 +321,38 @@ if __name__ == "__main__":
             print(f"ok    {name}")
     print(f"\n{len(_tests()) - failed}/{len(_tests())} passed")
     raise SystemExit(1 if failed else 0)
+
+
+def test_replay_gate_is_the_from_lock_replay_and_a_passing_control_fails_it(monkeypatch, tmp_path):
+    """The gate ignores the open-loop result, fails when the weld does not
+    reproduce from the lock, when an episode has no locked window to replay
+    from, and when a control passes."""
+    import replay_check as RC
+    eps = [type("E", (), dict(path="x/ep_seed0001_a.npz", seed=1))()]
+    log = str(tmp_path / "gate.log")
+
+    def run(open_ok=False, lock=None, perm_ok=False, gone_ok=False):
+        lock = dict(dict(checkable=True, manipulation_ok=True, weld_tick_delta=1,
+                         box_within_limit=False, locked=dict(box=0.077)), **(lock or {}))
+        monkeypatch.setattr(RC, "replay", lambda p, verbose=True: dict(
+            reset_fingerprint_ok=True, manipulation_ok=open_ok, task_success=False,
+            lock_tick_delta=57, locked=dict(box=0.9)))
+
+        def from_lock(p, wrong_permutation=False, box_removed=False, **k):
+            if wrong_permutation:
+                return dict(manipulation_ok=perm_ok)
+            if box_removed:
+                return dict(manipulation_ok=gone_ok)
+            return lock
+        monkeypatch.setattr(RC, "replay_from_lock", from_lock)
+        return PC.replay_all(eps, log)
+
+    ok = run()                       # open loop failed, box 77 mm: reported, not scored
+    assert ok.status == PC.PASS and ok.details["open_loop_manipulation_reproduced"] == 0
+    assert ok.details["box_within_limit"] == 0 and ok.details["controls_failed_as_required"] == 1
+    assert run(open_ok=True, lock=dict(manipulation_ok=False, weld_tick_delta=9)).status == PC.FAIL
+    free = run(lock=dict(checkable=False, manipulation_ok=False, note="welded while free"))
+    assert free.status == PC.FAIL and "cannot be replayed from the lock" in free.reasons[0]
+    for kw in (dict(perm_ok=True), dict(gone_ok=True)):
+        c = run(**kw)
+        assert c.status == PC.FAIL and "CONTROL PASSED" in c.reasons[0]
