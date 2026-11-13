@@ -119,16 +119,18 @@ After every episode the **verdict screen** shows (and the terminal prints):
 - the **placement error** (box to goal centre, limit 0.10 m), tilt, resting, released;
 - **tracking dropout**: % of ticks whose arm command was not backed by a tracked frame;
 - **tick overruns**: ticks that ran more than 1.5 ticks late (camera sessions only);
+- **longest tick**: the longest single tick interval, first tick ignored (camera sessions only);
+- **push before weld**: the furthest the box moved from its start at any moment before the weld;
 - a **RECOMMENDATION**, accept or discard, with every reason against accepting.
 
-Then press **`a` = accept** or **`d` = discard**. Keys pressed during the episode are
+Then press **`a` = accept** or **`d` = discard** (`a` works only when the recommendation is ACCEPT). Keys pressed during the episode are
 flushed and keys are ignored for the first 0.5 s, so a camera-rotate `a`/`d` cannot answer
 for you.
 
 | rule | |
 |---|---|
 | **An episode that FAILS the success rule can never be accepted.** | `a` is refused; only `d` works. It is kept in `failed/` for audit; the seed is offered again. |
-| A success is recommended **discard** when tracking dropout > **5 %** of ticks or overruns > **2 %** of ticks. | Soft: you may still accept. Both limits are PROVISIONAL until the camera session (checklist step 2) measures the real population. |
+| **A success whose RECOMMENDATION is DISCARD cannot be accepted either** (since 2026-11-13). The reasons: tracking dropout > **5 %** of ticks; late ticks > **5 %** of ticks; any single tick > **150 ms** (the first tick of the episode is ignored); the box pushed more than **50 mm** before the weld (peak, any moment). | `a` is refused with the reason; only `d` works. It is kept in `discarded/`; the seed is offered again. The limits in force are stored in each episode (`acceptance_rules`, `timing.limits`). The late-tick limits come from the 25-demo pilot (they were 2 % and soft); the dropout limit is PROVISIONAL (0 % in every pilot demo). The push limit is an acceptance rule, not the success rule (D19 tests the box only at the instant of the weld). |
 | A success you discard | is kept in `discarded/` (never the training folder); the seed is offered again. |
 | `x` during the episode | writes nothing; the seed is offered again. |
 | Ctrl+C | saves the episode but never accepts it. |

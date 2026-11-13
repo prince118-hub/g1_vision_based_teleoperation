@@ -323,6 +323,133 @@ def replay(path: str, threshold: float = 0.01, negative_seed=None, verbose=True,
     return report
 
 
+def replay_from_lock(path: str, wrong_permutation: bool = False, negative_shift: float = 0.0,
+                     box_removed: bool = False, verbose: bool = True) -> dict:
+    """The replay check for HUMAN demonstrations: the recorded actions replayed
+    from the RECORDED full state at the base lock, through the locked window.
+
+    Why not `replay`: it starts at tick 0 and walks in open loop. A scripted
+    walk-in diverges 21-26 mm; a keyboard walk-in diverges up to 83 mm (pilot,
+    2026-11-13), the lock then fires elsewhere or late, and the manipulation is
+    replayed from a stance the demonstration never had: 16 of 26 pilot demos
+    "reproduced". Starting from the saved state at the lock removes the walk
+    from the question and leaves what this file exists to prove - that the
+    logged action is the quantity that drove the robot (routing, permutation,
+    gripper command): 26 of 26 fire the weld within 1 tick.
+
+    What is restored: `qpos` and `qvel` of the first tick of the locked window
+    that contains the recorded weld engagement. The lock is taken FROM THE FILE
+    (state dim 47), not from the predicate, and is engaged at that state, as the
+    live loop engaged it. While locked the walking policy is not queried, so its
+    LSTM state (not in the file) is not needed; the window ends where the lock
+    was released. The actions are routed exactly as `replay` routes them.
+
+    GATE (`manipulation_ok`): the weld fires within TICK_TOL ticks of the
+    recorded tick. REPORTED, not gated: the box divergence while locked against
+    LOCKED_BOX_M (a limit measured on scripted episodes; a human pushes the box
+    before the weld - pilot median 22 mm - and that contact is not reproducible
+    to 25 mm in every episode: 24 of 26).
+
+    Controls, which must FAIL the gate or the check proves nothing:
+    `wrong_permutation` (action[0:17] written straight into ctrl) and
+    `box_removed` (the box put on the GOAL platform at the restore: the same
+    hand motion with no box there must not weld). `negative_shift` (the box
+    displaced by that many metres in y) is a REPORTED third control, not a
+    required one: the box is a free body in the path of the closing hands, and
+    in 1 of 26 pilot demos (seed 20) the left hand swept a box moved 246 mm
+    back between the palms and the weld fired on the recorded tick. That is
+    physics, not a routing error - `main` says the same of its control A.
+    """
+    arrays, meta = load_episode(path)
+    S = arrays["states"].astype(np.float64)
+    A = arrays["actions"].astype(np.float64)
+    seed, we = int(meta["seed"]), int(meta["weld_engage_tick"])
+    report = dict(path=path, seed=seed, recorded_weld_tick=we, manipulation_ok=False,
+                  checkable=False, wrong_permutation=bool(wrong_permutation),
+                  negative_shift_m=float(negative_shift), box_removed=bool(box_removed))
+    locked = S[:, spec.BASE_LOCKED] > 0.5
+    if we < 0 or we >= len(S) or not locked[we]:
+        report["note"] = ("the weld never engaged" if we < 0 else
+                          "the weld engaged while the base was FREE: no locked window "
+                          "to replay from (the walking policy's state is not in the file)")
+        if verbose:
+            print("\n=== %s  seed %d: from-lock replay NOT POSSIBLE: %s"
+                  % (os.path.basename(path), seed, report["note"]))
+        return report
+    t0 = we
+    while t0 > 0 and locked[t0 - 1]:
+        t0 -= 1
+    t1 = we
+    while t1 < len(S) and locked[t1]:
+        t1 += 1
+
+    cfg = TeleopConfig()
+    model = load_model(cfg)
+    model.opt.timestep = cfg.loco.sim_dt
+    if contract_of(model) != meta["contact_contract"]:
+        raise AssertionError("contact contract mismatch (D18): recorded under %s, this model "
+                             "is %s" % (meta["contact_contract"], contract_of(model)))
+    data = mujoco.MjData(model)
+    ix = ModelIndex.resolve(model)
+    sp = spec.SpecLayout.resolve(model, ix)
+    data.qpos[:] = arrays["qpos"][t0]
+    data.qvel[:] = arrays["qvel"][t0]
+    if negative_shift:
+        y = float(data.qpos[ix.box_qpos][1])
+        new_y = float(np.clip(y + negative_shift if y <= 0 else y - negative_shift, -0.23, 0.23))
+        report["negative_shift_mm"] = float(1000 * abs(new_y - y))
+        data.qpos[ix.box_qpos][1] = new_y
+    if box_removed:
+        data.qpos[ix.box_qpos][:2] = GOAL_XY       # same platform height (scene.xml)
+        data.qvel[ix.box_qvel] = 0.0
+    mujoco.mj_forward(model, data)
+    weld, lock = GraspWeld(model), BaseLock(model)
+    lock.lock(model, data)
+    L = cfg.loco
+    DEF = np.asarray(L.default_angles, dtype=np.float64)
+    KPS = np.asarray(L.kps, dtype=np.float32)
+    KDS = np.asarray(L.kds, dtype=np.float32)
+    weld_tick = -1
+    div = dict(box=0.0, palm_L=0.0, palm_R=0.0, arm_L=0.0, arm_R=0.0, base=0.0)
+    gi = dict(GROUPS)
+    for t in range(t0, t1):
+        d = np.abs(sp.build_state(model, data, ix, sync=True) - S[t])
+        for k in div:
+            div[k] = max(div[k], float(d[gi[k]].max()))
+        a = A[t]
+        upper = a[spec.UPPER_A] if wrong_permutation else spec.upper_ctrl_from_action(a)
+        grip = float(a[spec.GRIP_L_A])
+        for _ in range(spec.PHYSICS_STEPS_PER_TICK):
+            lq, ldq = data.qpos[ix.leg_qpos], data.qvel[ix.leg_qvel]
+            data.ctrl[ix.leg_ctrl] = (DEF - lq) * KPS + (0.0 - ldq) * KDS
+            data.ctrl[ix.upper_ctrl] = upper
+            data.ctrl[ix.pad_ctrl] = 0.0            # TR17
+            if weld.update(model, data, grip)[0] and weld_tick < 0:
+                weld_tick = t
+            mujoco.mj_step(model, data)
+    dw = abs(weld_tick - we) if weld_tick >= 0 else 10 ** 6
+    report.update(
+        checkable=True, window=[int(t0), int(t1)], weld_engaged=weld_tick >= 0,
+        weld_tick=int(weld_tick), weld_tick_delta=int(dw), locked=div,
+        box_within_limit=bool(div["box"] <= LOCKED_BOX_M), box_limit_m=LOCKED_BOX_M,
+        manipulation_ok=bool(weld_tick >= 0 and dw <= TICK_TOL))
+    if verbose:
+        tag = (" [control: wrong permutation]" if wrong_permutation else
+               " [control: box removed to the goal platform]" if box_removed else
+               " [control: box moved %.0f mm]" % report.get("negative_shift_mm", 0.0)
+               if negative_shift else "")
+        print("\n=== %s  seed %d: FROM THE RECORDED STATE AT THE LOCK, ticks %d-%d%s ==="
+              % (os.path.basename(path), seed, t0, t1, tag))
+        print("weld %s (tick %s vs recorded %d, delta %s) | box while locked %.4f m (%s %.3f, "
+              "reported) | palms %.4f/%.4f m, arms %.4f/%.4f rad"
+              % ("ENGAGED" if weld_tick >= 0 else "NEVER FIRED", weld_tick, we,
+                 dw if dw < 10 ** 6 else "n/a", div["box"],
+                 "<=" if report["box_within_limit"] else ">", LOCKED_BOX_M,
+                 div["palm_L"], div["palm_R"], div["arm_L"], div["arm_R"]))
+        print("MANIPULATION reproduced from the lock: %s" % report["manipulation_ok"])
+    return report
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -336,10 +463,30 @@ def main():
                     help="m, control A: displace the box beyond the 0.16 m weld gate")
     ap.add_argument("--negative-offset", type=int, default=500,
                     help="seed offset used for the negative control spawn")
+    ap.add_argument("--from-lock", action="store_true",
+                    help="human demonstrations: replay from the recorded state at the base "
+                         "lock (replay_from_lock) with both controls, instead of open loop")
     a = ap.parse_args()
     files = sorted({p for g in a.paths for p in glob.glob(g)})
     if not files:
         raise SystemExit("no episodes match %s" % a.paths)
+    if a.from_lock:
+        rows = [(replay_from_lock(p), replay_from_lock(p, wrong_permutation=True),
+                 replay_from_lock(p, box_removed=True),
+                 replay_from_lock(p, negative_shift=a.negative_shift)) for p in files]
+        ok = sum(r[0]["manipulation_ok"] for r in rows)
+        box = sum(bool(r[0].get("box_within_limit")) for r in rows)
+        c1 = sum(not r[1]["manipulation_ok"] for r in rows)
+        c2 = sum(not r[2]["manipulation_ok"] for r in rows)
+        c3 = sum(not r[3]["manipulation_ok"] for r in rows)
+        n = len(rows)
+        print("\n================ FROM-LOCK SUMMARY over %d episode(s) ================" % n)
+        print("MANIPULATION reproduced (weld within %d ticks): %d/%d" % (TICK_TOL, ok, n))
+        print("box within %.0f mm while locked (reported)    : %d/%d" % (1000 * LOCKED_BOX_M, box, n))
+        print("control, wrong permutation, FAILED as it must : %d/%d" % (c1, n))
+        print("control, box removed, FAILED as it must       : %d/%d" % (c2, n))
+        print("control, box moved %.2f m in y, failed (reported): %d/%d" % (a.negative_shift, c3, n))
+        sys.exit(0 if (ok == n and c1 == n and c2 == n) else 1)
     reps, negs, shifted = [], [], []
     for p in files:
         r = replay(p, threshold=a.threshold, wrong_permutation=a.wrong_permutation)

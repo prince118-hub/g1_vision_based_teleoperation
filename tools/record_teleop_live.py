@@ -147,11 +147,38 @@ TICK_S = TICK * RIC.SIM_DT                 # 0.04 s
 OVERRUN_S = 1.5 * TICK_S
 KEY_ENTER = (10, 13)
 KP_DIR, FAILED_DIR, DISCARDED_DIR = "keypoints", "failed", "discarded"
-#: RECOMMENDATION thresholds (soft: the operator may still accept). PROVISIONAL -
-#: no real take exists yet (docs/LIVE_RECORDING_CHECKLIST.md step 2 measures
-#: dropout and overruns on the camera); set them from that population.
+#: RECOMMENDATION thresholds (soft: the operator may still accept).
+#: Dropout: PROVISIONAL (0 in all 26 pilot demos, so the pilot did not test it).
+#: Late ticks: set from the 25-demo pilot (Charles, 2026-11-13; NOTES.md): 43 saved
+#: episodes ran 0-3.4% late ticks, median late interval 64 ms, p95 79 ms, with no
+#: measurable effect on the recorded arm targets; the old 2% limit discarded 10
+#: successes. What can hurt is ONE long freeze (the operator keeps moving while
+#: the simulation waits), so a single interval is limited too. The first interval
+#: of an episode is ignored (start-up; 385 ms in one pilot demo, before any motion).
 DROPOUT_RECOMMEND_MAX = 0.05     # fraction of ticks not backed by a tracked frame (O28)
-OVERRUN_RECOMMEND_MAX = 0.02     # fraction of ticks that ran > 1.5 ticks late (paced only)
+OVERRUN_RECOMMEND_MAX = 0.05     # fraction of ticks that ran > 1.5 ticks late (paced only)
+MAX_INTERVAL_RECOMMEND_MS = 150.0   # longest single tick interval, first one ignored
+#: Peak displacement of the box (3-D, any physics step) BEFORE the weld
+#: (`box_pre_grasp_disturb_mm`). A DEMO-ACCEPTANCE rule (Charles, 2026-11-13), NOT
+#: the success rule: D19 (`success.py grasp_spawn_max`) tests the box's XY distance
+#: from its spawn at the engage tick only, so a box shoved 117 mm and back to 39 mm
+#: passes it (pilot seed 7). A demonstration that shoves the box first is not the
+#: demonstration wanted.
+PUSH_RECOMMEND_MAX_MM = 50.0
+#: 2026-11-13 (Charles): a DISCARD recommendation BLOCKS acceptance - `a` is
+#: refused for every reason, not only a failed success rule. Before, the dropout
+#: and late-tick reasons were soft and a mis-keyed `a` accepted the episode.
+RECOMMENDATION_BLOCKS_ACCEPT = True
+
+
+def acceptance_rules() -> dict:
+    """The acceptance rules in force, stored in every episode's metadata."""
+    return dict(max_dropout=DROPOUT_RECOMMEND_MAX, max_overrun_frac=OVERRUN_RECOMMEND_MAX,
+                max_interval_ms=MAX_INTERVAL_RECOMMEND_MS, first_interval_ignored=True,
+                max_pre_weld_push_mm=PUSH_RECOMMEND_MAX_MM,
+                recommendation_blocks_accept=RECOMMENDATION_BLOCKS_ACCEPT,
+                note="an episode is acceptable only when the success rule passes AND no "
+                     "limit here is exceeded (dropout and late ticks: paced runs only)")
 #: The verdict screen ignores keys for this long after it opens.
 VERDICT_KEY_DELAY_S = 0.5
 #: The host monotonic clock behind `tick_wall_ns` and the keypoint rows' `ts_host_ns`
@@ -490,19 +517,48 @@ def reset_for_episode(S, a, seed: int) -> dict:
     return RIC.reset_for_episode(S, seed, start_xy=a.start_xy, start_standoff=a.start_standoff)
 
 
+def timing_limits() -> dict:
+    """The late-tick recommendation limits in force, stored in every episode."""
+    return dict(max_overrun_frac=OVERRUN_RECOMMEND_MAX,
+                max_interval_ms=MAX_INTERVAL_RECOMMEND_MS, first_interval_ignored=True,
+                note="recommend discard when overrun_ticks / n_ticks > max_overrun_frac or "
+                     "max_tick_interval_after_first_ms > max_interval_ms (paced runs only)")
+
+
 def _timing(tick_ns, paced: bool) -> dict:
     t = np.asarray(tick_ns, dtype=np.int64)
     if len(t) < 2:
         return dict(paced=paced, tick_rate_hz=None, overrun_ticks=0,
-                    overrun_threshold_ms=1000 * OVERRUN_S)
+                    overrun_threshold_ms=1000 * OVERRUN_S, limits=timing_limits())
     dt = np.diff(t) / 1e9
     return dict(paced=paced, tick_rate_hz=float((len(t) - 1) / max(dt.sum(), 1e-12)),
                 overrun_ticks=int((dt > OVERRUN_S).sum()),
                 overrun_threshold_ms=1000 * OVERRUN_S,
                 max_tick_interval_ms=float(1000 * dt.max()),
+                # the same, without the episode's first interval (start-up)
+                max_tick_interval_after_first_ms=(float(1000 * dt[1:].max())
+                                                  if len(dt) > 1 else None),
                 p95_tick_interval_ms=float(1000 * np.percentile(dt, 95)),
+                limits=timing_limits(),
                 note="tick interval on the host clock; an overrun is an interval "
                      "> 1.5 ticks (the loop fell half a tick behind 25 Hz)")
+
+
+def gpu_status(timeout_s: float = 3.0):
+    """GPU temperature and load from nvidia-smi, or None (no NVIDIA GPU, no
+    nvidia-smi, a timeout). One call takes ~0.7 s, so it runs once per episode,
+    AFTER the loop has stopped. CPU temperature is not read: Windows has no
+    cheap, unprivileged source for it."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=timeout_s).stdout.strip().splitlines()[0]
+        temp, util = [float(v) for v in out.split(",")]
+        return dict(gpu_temp_c=temp, gpu_util_pct=util, source="nvidia-smi, at episode end")
+    except Exception:
+        return None
 
 
 def run_episode(S, a, seed: int, label: str, record: bool = True, probe=None,
@@ -564,6 +620,7 @@ def episode_meta(S, a, seed, hooks, rec, info, verdict, kp_path) -> dict:
         weld_engage_tick=rec.weld_engage_tick, weld_release_tick=rec.weld_release_tick,
         lock_engage_tick=rec.lock_engage_tick, lock_release_tick=rec.lock_release_tick,
         box_pre_grasp_disturb_mm=float(rec.box_pre_grasp_disturb_mm),
+        acceptance_rules=acceptance_rules(),
         end_reason=hooks.end_reason, failed=not verdict["episode_success"],
         outcome=dict(ok=bool(verdict["episode_success"]), attributed_to=verdict["attributed_to"],
                      grasp=bool(verdict["grasp"]), lift=bool(verdict["lift"]),
@@ -580,6 +637,10 @@ def episode_meta(S, a, seed, hooks, rec, info, verdict, kp_path) -> dict:
         dropout_rate=float((~tracking).mean()) if len(tracking) else 0.0,
         timing=dict(_timing(rec.tick_wall_ns, paced=not a.headless),
                     sim_seconds=len(rec.buf) * TICK_S,
+                    # GPU temperature at the end of the episode (paced runs only):
+                    # late ticks rose through the pilot sessions and nothing
+                    # recorded could say whether the machine was throttling.
+                    host=None if a.headless else gpu_status(),
                     # display ticks the loop did not draw because it was behind
                     # the wall clock (run_integrated_combined.run_loop)
                     display_skips=int(getattr(S, "display_skips", 0))),
@@ -629,8 +690,11 @@ def checks_of(verdict, meta) -> dict:
 # ─── the verdict, the recommendation, the operator's choice ─────────────────
 def episode_report(verdict, meta) -> dict:
     """Everything the operator decides on, as data (printed by print_report,
-    drawn by verdict_image). `can_accept` is the success rule and nothing else;
-    `recommend` is "accept" only when no reason against it exists."""
+    drawn by verdict_image). `recommend` is "accept" only when no reason
+    against it exists, and `can_accept` is the same thing since 2026-11-13: a
+    DISCARD recommendation blocks acceptance (it used to be the success rule
+    alone). `success` is still the success rule and decides the folder (failed/
+    or discarded/)."""
     gd, ld, td, pd_ = (verdict["grasp_detail"], verdict["lift_detail"],
                        verdict["transport_detail"], verdict["place_detail"])
     o, t = meta["outcome"], meta["timing"]
@@ -662,9 +726,22 @@ def episode_report(verdict, meta) -> dict:
         over_ok = over_frac <= OVERRUN_RECOMMEND_MAX
         rows.append(("tick overruns", over_ok, "%d of %d ticks late (<= %.0f%%), %.1f Hz"
                      % (overruns, n, 100 * OVERRUN_RECOMMEND_MAX, t["tick_rate_hz"])))
+        longest = t.get("max_tick_interval_after_first_ms")
+        if longest is None:                     # an episode from before the field
+            longest = t.get("max_tick_interval_ms")
+        long_ok = longest is None or float(longest) <= MAX_INTERVAL_RECOMMEND_MS
+        rows.append(("longest tick", long_ok if longest is not None else None,
+                     "%.0f ms (<= %.0f ms, first tick ignored)"
+                     % (longest, MAX_INTERVAL_RECOMMEND_MS) if longest is not None else "n/a"))
     else:
-        over_ok = True
+        over_ok, long_ok, longest = True, True, None
         rows.append(("tick overruns", None, "n/a: not paced to wall clock (headless)"))
+    push = meta.get("box_pre_grasp_disturb_mm")
+    push_ok = True
+    if push is not None and verdict["engage_tick"] >= 0:
+        push_ok = float(push) <= PUSH_RECOMMEND_MAX_MM
+        rows.append(("push before weld", push_ok, "box moved at most %.0f mm before the weld "
+                     "(<= %.0f mm)" % (float(push), PUSH_RECOMMEND_MAX_MM)))
     success = bool(verdict["episode_success"])
     phase = verdict["attributed_to"] or ""
     term = meta.get("termination") or {}
@@ -685,7 +762,19 @@ def episode_report(verdict, meta) -> dict:
     if not over_ok:
         reasons.append("%d tick overruns (> %.0f%%): the loop fell behind real time"
                        % (overruns, 100 * OVERRUN_RECOMMEND_MAX))
-    return dict(rows=rows, success=success, can_accept=success, failing_phase=phase,
+    if not long_ok:
+        reasons.append("one tick took %.0f ms (> %.0f ms): the simulation froze while the "
+                       "operator kept moving" % (longest, MAX_INTERVAL_RECOMMEND_MS))
+    if not push_ok:
+        reasons.append("the box was pushed %.0f mm before the weld (> %.0f mm): a "
+                       "demonstration that shoves the box first"
+                       % (float(push), PUSH_RECOMMEND_MAX_MM))
+    # 2026-11-13: acceptable = the success rule AND no reason against it.
+    can_accept = success and not (RECOMMENDATION_BLOCKS_ACCEPT and reasons)
+    blocked_by = ("the success rule failed" if not success else
+                  "; ".join(r.split(":")[0].split(" (>")[0] for r in reasons) if reasons else "")
+    return dict(rows=rows, success=success, can_accept=can_accept, blocked_by=blocked_by,
+                pre_weld_push_mm=None if push is None else float(push), failing_phase=phase,
                 placement_error=float(pd_["placement_error_m"]), dropout=dropout,
                 overrun_ticks=overruns, n_ticks=n, end_reason=meta["end_reason"],
                 seed=int(meta["seed"]), recommend="discard" if reasons else "accept",
@@ -720,7 +809,9 @@ def report_lines(rep) -> list:
     for r in rep["reasons"]:
         out.append(("  - " + r, False))
     out.append((("a = accept   d = discard" if rep["can_accept"] else
-                 "d = discard   (accept NOT possible: the success rule failed)"), None))
+                 "d = discard   (accept NOT possible: %s)"
+                 % ("the success rule failed" if not rep["success"] else
+                    "the recommendation is DISCARD")), None))
     return out
 
 
@@ -731,7 +822,7 @@ def print_report(rep) -> None:
 
 def choice_from_key(key: int, can_accept: bool) -> Optional[str]:
     """One verdict-screen / prompt key -> "accept", "discard", "refused" (a
-    pressed on a failed episode) or None (anything else)."""
+    pressed on an episode that may not be accepted) or None (anything else)."""
     low = key & 0xFF if key >= 0 else -1
     if low in (OC.KEY_ACCEPT, ord("A")):
         return "accept" if can_accept else "refused"
@@ -775,8 +866,14 @@ def verdict_screen(S, rep) -> str:
             continue
         c = choice_from_key(key, rep["can_accept"])
         if c == "refused":
-            note = "accept refused: this episode FAILED the success rule - press d"
-            print("  a refused: the episode failed the success rule (%s)" % rep["failing_phase"])
+            if not rep["success"]:
+                note = "accept refused: this episode FAILED the success rule - press d"
+                print("  a refused: the episode failed the success rule (%s)"
+                      % rep["failing_phase"])
+            else:
+                note = "accept refused: RECOMMEND DISCARD (%s) - press d" % rep["blocked_by"][:60]
+                print("  a refused: the recommendation is DISCARD (%s)"
+                      % "; ".join(rep["reasons"]))
         elif c is not None:
             return c
 
@@ -784,12 +881,14 @@ def verdict_screen(S, rep) -> str:
 def terminal_choice(rep) -> str:
     """Headless --auto off: tools/record_episodes.py's prompt."""
     prompt = ("  [a]ccept / [d]iscard ? " if rep["can_accept"] else
-              "  [d]iscard (accept not possible: the success rule failed) ? ")
+              "  [d]iscard (accept not possible: %s) ? " % rep["blocked_by"])
     while True:
         r = INPUT(prompt).strip().lower()
         c = choice_from_key(ord(r[0]), rep["can_accept"]) if r else None
         if c == "refused":
-            print("  refused: an episode that fails the success rule can never be accepted")
+            print("  refused: an episode that fails the success rule can never be accepted"
+                  if not rep["success"] else
+                  "  refused: the recommendation is DISCARD (%s)" % rep["blocked_by"])
         elif c is not None:
             return c
 
@@ -805,7 +904,8 @@ def decide(S, a, rep, end_reason: str) -> tuple:
     else:
         choice, by = verdict_screen(S, rep), "operator"
     if choice == "accept" and not rep["can_accept"]:          # belt and braces
-        raise AssertionError("a failed episode cannot be accepted")
+        raise AssertionError("this episode cannot be accepted (%s)"
+                             % rep.get("blocked_by", "the success rule failed"))
     return choice, by
 
 

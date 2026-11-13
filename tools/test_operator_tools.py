@@ -137,6 +137,10 @@ def test_a_failed_episode_recommends_discard_with_the_failing_phase():
     assert d["event"] == "discard" and d["reason"].startswith("failed: PLACE")
     assert d["operator_choice"] == "discard" and d["recommendation"]["recommend"] == "discard"
     assert meta["operator_ui"]["guide"] == "on"
+    assert meta["timing"]["limits"] == RT.timing_limits()      # stored in every episode
+    assert meta["acceptance_rules"] == RT.acceptance_rules()
+    assert meta["box_pre_grasp_disturb_mm"] >= 0.0
+    assert meta["timing"]["host"] is None                      # headless: nvidia-smi not called
     # the follow camera at its default: preset behind, no offsets, nothing changed
     v = meta["operator_ui"]["view"]
     assert (v["mode"], v["preset"], v["changes"]) == ("follow", "behind", [])
@@ -199,7 +203,8 @@ def test_a_operator_discards_a_successful_episode():
     assert "lock rule" in str(e)
 
 
-def _report(verdict_success=True, dropout=0.0, overruns=0, paced=False, n=400):
+def _report(verdict_success=True, dropout=0.0, overruns=0, paced=False, n=400, longest=None,
+            first=None, push=10.0):
     ep = _CACHE.get("ep_arrays")
     if ep is None:
         out = os.path.join(_tmp(), "a_failed")
@@ -212,25 +217,81 @@ def _report(verdict_success=True, dropout=0.0, overruns=0, paced=False, n=400):
     if verdict_success:
         v.update(episode_success=True, place=True, attributed_to="")
     m = dict(meta, dropout_rate=dropout, degraded_ticks=int(dropout * n), n_ticks=n,
+             box_pre_grasp_disturb_mm=push,
              timing=dict(paced=paced, tick_rate_hz=24.9 if paced else None,
                          overrun_ticks=overruns))
+    if longest is not None:
+        m["timing"].update(max_tick_interval_after_first_ms=longest,
+                           max_tick_interval_ms=max(longest, first or 0.0))
     return RT.episode_report(v, m)
 
 
 def test_a_recommendation_reasons_dropout_and_overruns():
-    """Soft reasons: a success with 20% dropout or 5% late ticks is recommended
-    DISCARD but may still be accepted; headless overruns are n/a."""
+    """A success with 20% dropout, too many late ticks, one long freeze or a
+    box pushed before the weld is recommended DISCARD, and since 2026-11-13 a
+    DISCARD recommendation BLOCKS acceptance; headless overruns are n/a."""
     ok = _report()
     assert ok["recommend"] == "accept" and ok["can_accept"] and not ok["reasons"]
     assert [r for r in ok["rows"] if r[0] == "tick overruns"][0][1] is None
     drop = _report(dropout=0.20)
-    assert drop["recommend"] == "discard" and drop["can_accept"]
+    assert drop["recommend"] == "discard" and drop["success"] and not drop["can_accept"]
+    assert "tracking dropout" in drop["blocked_by"]
     assert any("tracking dropout 20.0%" in r for r in drop["reasons"]), drop["reasons"]
-    late = _report(paced=True, overruns=20, n=400)
+    # late ticks: <= 5% of ticks AND no single interval > 150 ms (first one ignored)
+    assert (RT.OVERRUN_RECOMMEND_MAX, RT.MAX_INTERVAL_RECOMMEND_MS) == (0.05, 150.0)
+    late = _report(paced=True, overruns=21, n=400)
     assert late["recommend"] == "discard" and any("overruns" in r for r in late["reasons"])
-    assert _report(paced=True, overruns=2, n=400)["recommend"] == "accept"
+    assert _report(paced=True, overruns=20, n=400)["recommend"] == "accept"      # 5.0%
+    assert _report(paced=True, overruns=12, n=400)["recommend"] == "accept"      # 3%: was discard
+    froze = _report(paced=True, overruns=2, n=400, longest=267.0)
+    assert froze["recommend"] == "discard" and froze["success"] and not froze["can_accept"]
+    assert any("267 ms (> 150 ms)" in r for r in froze["reasons"]), froze["reasons"]
+    assert [r for r in froze["rows"] if r[0] == "longest tick"][0][1] is False
+    assert _report(paced=True, overruns=2, n=400, longest=150.0)["recommend"] == "accept"
+    # a slow FIRST tick alone is not a reason
+    assert _report(paced=True, n=400, longest=80.0, first=385.0)["recommend"] == "accept"
+    assert not [r for r in ok["rows"] if r[0] == "longest tick"]                 # headless: n/a
+    # the timing block: the first interval is excluded from the limited maximum,
+    # and the limits in force are stored with it
+    ns = np.cumsum([0, 385e6, 40e6, 40e6, 70e6, 40e6]).astype(np.int64)
+    t = RT._timing(ns, paced=True)
+    assert abs(t["max_tick_interval_ms"] - 385.0) < 1e-6 and t["overrun_ticks"] == 2
+    assert abs(t["max_tick_interval_after_first_ms"] - 70.0) < 1e-6
+    assert t["limits"] == RT.timing_limits()
+    assert (t["limits"]["max_overrun_frac"], t["limits"]["max_interval_ms"],
+            t["limits"]["first_interval_ignored"]) == (0.05, 150.0, True)
+    assert RT._timing(ns[:1], paced=True)["limits"] == RT.timing_limits()
+    # the box pushed before the weld: an ACCEPTANCE rule on the peak displacement
+    # (the success rule's D19 tests the engage tick only and is not changed)
+    assert RT.PUSH_RECOMMEND_MAX_MM == 50.0
+    shove = _report(push=127.8)
+    assert shove["success"] and shove["recommend"] == "discard" and not shove["can_accept"]
+    assert any("pushed 128 mm before the weld (> 50 mm)" in r for r in shove["reasons"])
+    row = [r for r in shove["rows"] if r[0] == "push before weld"][0]
+    assert row[1] is False and "128 mm" in row[2] and shove["pre_weld_push_mm"] == 127.8
+    assert _report(push=50.0)["can_accept"] and _report(push=50.1)["recommend"] == "discard"
+    assert [r for r in ok["rows"] if r[0] == "push before weld"][0][1] is True
+    # a blocked success: `a` is refused, `d` works, and the screen says why
+    assert RT.choice_from_key(ord("a"), shove["can_accept"]) == "refused"
+    assert RT.choice_from_key(ord("d"), shove["can_accept"]) == "discard"
+    assert RT.choice_from_key(ord("a"), ok["can_accept"]) == "accept"
+    last = RT.report_lines(shove)[-1][0]
+    assert last == "d = discard   (accept NOT possible: the recommendation is DISCARD)"
+    assert RT.report_lines(ok)[-1][0] == "a = accept   d = discard"
+    a = type("A", (), dict(auto="off", headless=True))()
+    with _Answers("a", "d") as ans:
+        assert RT.decide(None, a, shove, "success") == ("discard", "operator")
+    assert "accept not possible" in ans.prompts[0] and "pushed" in ans.prompts[0]
+    e = _raises(AssertionError, RT.decide, None, type("A", (), dict(auto="pass", headless=True))(),
+                dict(shove, recommend="accept"), "success")
+    assert "cannot be accepted" in str(e)
+    rules = RT.acceptance_rules()
+    assert (rules["max_pre_weld_push_mm"], rules["max_overrun_frac"], rules["max_interval_ms"],
+            rules["max_dropout"], rules["recommendation_blocks_accept"]) == (50.0, 0.05, 150.0,
+                                                                             0.05, True)
     bad = _report(verdict_success=False)
     assert not bad["can_accept"] and bad["failing_phase"] == "PLACE"
+    assert RT.report_lines(bad)[-1][0].endswith("(accept NOT possible: the success rule failed)")
     lines = [t for t, _ in RT.report_lines(bad)]
     assert any(t.startswith("place") and "FAIL" in t for t in lines)
     assert any("placement" in t for t in lines) and any("tracking dropout" in t for t in lines)

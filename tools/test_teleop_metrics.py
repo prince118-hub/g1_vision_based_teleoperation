@@ -204,3 +204,57 @@ def test_old_ledgers_without_the_cap_still_report(result):
     assert (a["demo_ticks_min"], a["demo_ticks_median"], a["demo_ticks_max"]) == (400, 450.0, 500)
     assert a["time_limit_endings"] == 0 and a["max_ticks"] == "n/a"
     assert ops["ALL"]["demo_ticks_max"] == 600
+
+
+def test_discarded_successes_are_discards_and_a_revoked_accept_is_not_accepted(tmp_path):
+    """A successful episode the operator discards is `discard` (never `failed`,
+    which is the success rule's verdict), and an accept taken back by
+    tools/revoke_episode.py no longer counts as accepted: the numbers equal the
+    ledger's own."""
+    from g1_data.ledger import EpisodeLedger
+    folder = tmp_path / "rv"
+    folder.mkdir()
+    at = lambda hms: "2026-11-13T%s" % hms
+    rows = [
+        dict(event="session", t=at("13:00:00"), label="teleop-live", source="teleop_live",
+             operator="charles", seeds=[16, 19], lock_rule="v3"),
+        dict(event="issue", t=at("13:13:23"), seed=16),
+        dict(event="discard", t=at("13:14:00"), seed=16, ticks=656, end_reason="success",
+             reason="operator discard of a successful episode (recommended accept)",
+             saved="recordings\\rv\\discarded\\ep_seed0016_a.npz"),
+        dict(event="issue", t=at("13:15:00"), seed=16),
+        dict(event="discard", t=at("13:15:20"), seed=16, ticks=400, end_reason="operator_stop",
+             reason="failed: GRASP (operator_stop)", saved="recordings\\rv\\failed\\ep_seed0016_f.npz"),
+        dict(event="issue", t=at("13:15:48"), seed=16),
+        dict(event="accept", t=at("13:16:19"), seed=16, ticks=613, end_reason="success",
+             path="recordings\\rv\\ep_seed0016_b.npz", heldout=False),
+        dict(event="issue", t=at("13:17:33"), seed=19),
+        dict(event="accept", t=at("13:18:07"), seed=19, ticks=633, end_reason="success",
+             path="recordings\\rv\\ep_seed0019_c.npz", heldout=False),
+        dict(event="discard", t=at("13:21:19"), seed=19, ticks=633, end_reason="success",
+             reason="acceptance revoked: operator mis-key",
+             saved="recordings\\rv\\discarded\\ep_seed0019_c.npz",
+             revokes="recordings\\rv\\ep_seed0019_c.npz"),
+    ]
+    with open(os.path.join(str(folder), "ledger.jsonl"), "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    _episode(os.path.join(str(folder), "discarded", "ep_seed0016_a.npz"), 656, 0, 25.0, 1, "charles")
+    _episode(os.path.join(str(folder), "failed", "ep_seed0016_f.npz"), 400, 0, 25.0, 0, "charles")
+    _episode(os.path.join(str(folder), "ep_seed0016_b.npz"), 613, 0, 25.0, 5, "charles")
+    _episode(os.path.join(str(folder), "discarded", "ep_seed0019_c.npz"), 633, 0, 25.0, 14, "charles")
+    res = TM.analyze(str(folder), out=str(tmp_path / "out"), window=2)
+    assert [(a["seed"], a["outcome"], a["revoked"], a["discarded_success"]) for a in res["attempts"]] == [
+        (16, "discard", False, True), (16, "failed", False, False),
+        (16, "accept", False, False), (19, "discard", True, True)]
+    op = {r["operator"]: r for r in res["operators"]}["charles"]
+    assert (op["attempts"], op["accepted"], op["failed"], op["discarded"],
+            op["discarded_successes"], op["revoked"]) == (4, 1, 1, 2, 2, 1)
+    assert op["accepted"] == EpisodeLedger(os.path.join(str(folder), "ledger.jsonl")).summary()["accepted"]
+    assert op["success_rate"] == 0.25
+    # the revoked episode is still measured, from discarded/
+    revoked = res["attempts"][-1]
+    assert revoked["file"] == "ep_seed0019_c.npz" and revoked["overrun_ticks"] == 14
+    assert revoked["success"] == 0 and revoked["reason"].startswith("acceptance revoked")
+    assert op["saved_episodes_measured"] == 4
+    assert op["demo_ticks_max"] == 613                    # demo lengths: accepted only

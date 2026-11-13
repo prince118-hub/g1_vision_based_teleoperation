@@ -21,7 +21,11 @@ ONE COMMAND, SIX CHECKS, ONE VERDICT
                spawn, every source a REAL demonstration (`teleop_live`; fake
                only with --allow-fake), every seed a training seed and none an
                exp1 / exp2 / selection seed.
-3. replay      tools/replay_check.replay on EVERY accepted episode: reset
+3. replay      (2026-11-13: the gate is `replay_check.replay_from_lock` - the
+               actions replayed from the recorded state at the base lock, weld
+               within 2 ticks, with two controls that must fail; box divergence
+               and the open-loop replay below are REPORTED only.) Was:
+               tools/replay_check.replay on EVERY accepted episode: reset
                fingerprint and MANIPULATION reproduced (the criterion
                replay_check scores). The whole task is not expected to replay
                open loop (the walk; NOTES 2026-09-16) and is reported only.
@@ -36,8 +40,9 @@ ONE COMMAND, SIX CHECKS, ONE VERDICT
                episode's metadata. FAIL on the MEDIAN (a systematic camera or
                machine problem); WARN per episode (the operator accepted it).
                Thresholds: --min-tick-rate 24 Hz (LIVE_RECORDING_CHECKLIST
-               step 2); --max-dropout 0.05 and --max-overrun-frac 0.02 (the
-               operator guide's PROVISIONAL recommend-discard limits).
+               step 2); --max-dropout 0.05 and --max-overrun-frac 0.05 (the
+               recorder's recommend-discard limits; late ticks 2% -> 5% on
+               2026-11-13 from the pilot).
                Also the DEMO LENGTHS (min / median / max ticks and seconds of
                the accepted episodes), the recording cap(s) in force and how
                many accepted episodes the CAP ended (end_reason time_limit):
@@ -243,6 +248,13 @@ def guards(eps, allow_fake: bool) -> List[Check]:
 
 # ─── 3. replay ───────────────────────────────────────────────────────────────
 def replay_all(eps, log_path: str) -> Check:
+    """The replay gate for human demonstrations (2026-11-13): the reset
+    fingerprint, and the manipulation replayed FROM THE RECORDED STATE AT THE
+    LOCK (`replay_check.replay_from_lock`: the weld fires within 2 ticks of the
+    recording) with its two controls, which must fail. Reported, never scored:
+    the box divergence while locked against 25 mm, and the whole-episode
+    open-loop replay (`replay_check.replay`), which cannot reproduce a keyboard
+    walk-in (16 of 26 on the pilot)."""
     import replay_check as RC
     rows, reasons = [], []
     with open(log_path, "w", encoding="utf-8") as log, \
@@ -251,6 +263,11 @@ def replay_all(eps, log_path: str) -> Check:
             name = os.path.basename(e.path)
             try:
                 r = RC.replay(e.path, verbose=True)
+                f = RC.replay_from_lock(e.path) if r["reset_fingerprint_ok"] else {}
+                c_perm = (RC.replay_from_lock(e.path, wrong_permutation=True)
+                          if f.get("checkable") else {})
+                c_gone = (RC.replay_from_lock(e.path, box_removed=True)
+                          if f.get("checkable") else {})
             except Exception as ex:                         # noqa: BLE001
                 traceback.print_exc()
                 rows.append(dict(episode=name, seed=e.seed, error=_first_lines(ex, 2)))
@@ -258,29 +275,57 @@ def replay_all(eps, log_path: str) -> Check:
                 continue
             row = dict(episode=name, seed=e.seed,
                        fingerprint_ok=bool(r["reset_fingerprint_ok"]),
-                       manipulation_ok=bool(r.get("manipulation_ok")),
-                       task_reproduced=bool(r.get("task_success")),
-                       weld_tick_delta=r.get("weld_tick_delta"),
-                       lock_tick_delta=r.get("lock_tick_delta"),
-                       box_while_locked_m=(r.get("locked") or {}).get("box"))
+                       # the gate
+                       manipulation_ok=bool(f.get("manipulation_ok")),
+                       checkable=bool(f.get("checkable")),
+                       weld_tick_delta=f.get("weld_tick_delta"),
+                       control_wrong_permutation_failed=(not c_perm.get("manipulation_ok", True)),
+                       control_box_removed_failed=(not c_gone.get("manipulation_ok", True)),
+                       # reported only
+                       box_while_locked_m=(f.get("locked") or {}).get("box"),
+                       box_within_limit=f.get("box_within_limit"),
+                       open_loop_manipulation_ok=bool(r.get("manipulation_ok")),
+                       open_loop_lock_tick_delta=r.get("lock_tick_delta"),
+                       open_loop_box_while_locked_m=(r.get("locked") or {}).get("box"),
+                       task_reproduced=bool(r.get("task_success")))
             rows.append(row)
             if not row["fingerprint_ok"]:
                 reasons.append("%s: reset fingerprint MISMATCH" % name)
+            elif not row["checkable"]:
+                reasons.append("%s: cannot be replayed from the lock (%s)"
+                               % (name, f.get("note", "?")))
             elif not row["manipulation_ok"]:
-                reasons.append("%s: manipulation NOT reproduced (dWeld %s, box while "
-                               "locked %s m)" % (name, row["weld_tick_delta"],
-                                                 row["box_while_locked_m"]))
+                reasons.append("%s: manipulation NOT reproduced from the recorded lock state "
+                               "(weld tick delta %s)" % (name, row["weld_tick_delta"]))
+            elif not (row["control_wrong_permutation_failed"]
+                      and row["control_box_removed_failed"]):
+                reasons.append("%s: a CONTROL PASSED (wrong permutation failed: %s, box removed "
+                               "failed: %s) - the replay is not depending on the recorded "
+                               "actions meeting the box" % (
+                                   name, row["control_wrong_permutation_failed"],
+                                   row["control_box_removed_failed"]))
     n = len(eps)
+    cnt = lambda k: sum(1 for r in rows if r.get(k))
     details = dict(
         episodes=n, log=repo_relpath(log_path),
-        fingerprint_matched=sum(1 for r in rows if r.get("fingerprint_ok")),
-        manipulation_reproduced=sum(1 for r in rows if r.get("manipulation_ok")),
-        whole_task_reproduced=sum(1 for r in rows if r.get("task_reproduced")),
+        fingerprint_matched=cnt("fingerprint_ok"),
+        manipulation_reproduced=cnt("manipulation_ok"),
+        controls_failed_as_required=sum(1 for r in rows if r.get("control_wrong_permutation_failed")
+                                        and r.get("control_box_removed_failed")),
+        box_within_limit=cnt("box_within_limit"),
+        open_loop_manipulation_reproduced=cnt("open_loop_manipulation_ok"),
+        whole_task_reproduced=cnt("task_reproduced"),
         per_episode=rows,
-        note="whole task is NOT expected to replay open loop (the walk); reported only")
+        note="gate: fingerprint, and the weld within 2 ticks when the actions are replayed "
+             "from the recorded state at the lock, with both controls failing. Reported only: "
+             "box divergence while locked (25 mm), open-loop manipulation and whole task "
+             "(a keyboard walk-in does not replay open loop)")
     return Check("replay", FAIL if reasons else PASS, reasons, details,
-                 "fingerprint %d/%d, manipulation reproduced %d/%d, whole task %d/%d (not scored)"
+                 "fingerprint %d/%d, manipulation from the lock %d/%d, controls failed %d/%d | "
+                 "reported: box within 25 mm %d/%d, open loop %d/%d, whole task %d/%d"
                  % (details["fingerprint_matched"], n, details["manipulation_reproduced"], n,
+                    details["controls_failed_as_required"], n, details["box_within_limit"], n,
+                    details["open_loop_manipulation_reproduced"], n,
                     details["whole_task_reproduced"], n))
 
 
@@ -652,7 +697,7 @@ def build_parser():
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--min-tick-rate", type=float, default=24.0)
     ap.add_argument("--max-dropout", type=float, default=0.05)
-    ap.add_argument("--max-overrun-frac", type=float, default=0.02)
+    ap.add_argument("--max-overrun-frac", type=float, default=0.05)
     return ap
 
 
