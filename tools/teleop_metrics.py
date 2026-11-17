@@ -107,12 +107,14 @@ def outcome_of(row: dict) -> str:
 def attempts_from_rows(rows: List[dict]) -> List[dict]:
     """The ledger rows as attempts, in order (see DEFINITIONS)."""
     session: dict = {}
+    n_sessions = 0
     open_: Dict[int, dict] = {}
     out: List[dict] = []
     for r in rows:
         ev = r.get("event")
         if ev == "session":
             session = r
+            n_sessions += 1
             continue
         if "seed" not in r:
             continue
@@ -125,7 +127,9 @@ def attempts_from_rows(rows: List[dict]) -> List[dict]:
                      t_issue=r.get("t"), outcome="unfinished", wall_s=None, ticks=None,
                      end_reason=None, file=None, reason=None, time_limit=None,
                      max_ticks=session.get("max_ticks"), revoked=False,
-                     discarded_success=False)
+                     discarded_success=False, session_n=n_sessions,
+                     session="%d %s" % (n_sessions, session.get("t") or "n/a"),
+                     placement_m=None)
             open_[seed] = a
             out.append(a)
         elif ev in DECISIONS and seed in open_:
@@ -141,6 +145,7 @@ def attempts_from_rows(rows: List[dict]) -> List[dict]:
             if r.get("max_ticks") is not None:
                 a["max_ticks"] = r.get("max_ticks")
             a["file"] = _base(r.get("path") or r.get("saved"))
+            a["placement_m"] = r.get("placement_error")
             a["discarded_success"] = bool(a["outcome"] == "discard" and r.get("saved"))
         elif ev == "discard" and r.get("revokes"):
             # A revocation (tools/revoke_episode.py) closes no issue: it takes back
@@ -166,7 +171,7 @@ def attach_episodes(attempts: List[dict], folder: str) -> None:
     files = {os.path.basename(p): p for p in paths}
     for a in attempts:
         a.update(dropout_pct=None, degraded_ticks=None, tick_rate_hz=None, overrun_ticks=None,
-                 paced=None, episode_source=None)
+                 paced=None, episode_source=None, push_mm=None)
         p = files.get(a["file"]) if a["file"] else None
         if p is None:
             continue
@@ -182,6 +187,10 @@ def attach_episodes(attempts: List[dict], folder: str) -> None:
         a["tick_rate_hz"] = tm.get("tick_rate_hz")
         a["overrun_ticks"] = tm.get("overrun_ticks")
         a["paced"] = tm.get("paced")
+        # the peak box displacement before the weld (the recorder's push check, mm)
+        a["push_mm"] = meta.get("box_pre_grasp_disturb_mm")
+        if a.get("placement_m") is None:
+            a["placement_m"] = (meta.get("outcome") or {}).get("placement_error")
 
 
 def learning_curve(attempts: List[dict], window: int = 5) -> None:
@@ -213,6 +222,10 @@ def summarize(attempts: List[dict], name: str) -> dict:
     count = {o: sum(a["outcome"] == o for a in attempts)
              for o in ("accept", "failed", "discard", "error", "unfinished")}
     demo = [int(a["ticks"]) for a in attempts if a["success"] and a["ticks"] is not None]
+    push = IO.finite(a.get("push_mm") for a in attempts if a["success"])
+    place = IO.finite(a.get("placement_m") for a in attempts if a["success"])
+    late = [(int(a["overrun_ticks"]), int(a["ticks"])) for a in attempts
+            if a.get("overrun_ticks") is not None and a["ticks"]]
     return dict(
         operator=name, sources=IO.joined(a["source"] for a in attempts), attempts=n,
         accepted=count["accept"], failed=count["failed"], discarded=count["discard"],
@@ -228,6 +241,11 @@ def summarize(attempts: List[dict], name: str) -> dict:
         saved_episodes_measured=len(saved),
         tick_rate_hz_mean=float(np.mean(rates)) if rates else None,
         overrun_ticks_total=sum(over) if over else None,
+        late_tick_pct=(100.0 * sum(o for o, _ in late) / sum(n for _, n in late)) if late else None,
+        push_mm_median=float(np.median(push)) if push else None,
+        push_mm_max=max(push) if push else None,
+        placement_m_median=float(np.median(place)) if place else None,
+        placement_m_max=max(place) if place else None,
         paced=IO.joined(a.get("paced") for a in attempts),
         demo_ticks_min=min(demo) if demo else None,
         demo_ticks_median=float(np.median(demo)) if demo else None,
@@ -242,14 +260,18 @@ def summarize(attempts: List[dict], name: str) -> dict:
 ATTEMPT_COLS = ["operator", "k", "seed", "outcome", "success", "cum_success_rate",
                 "rolling_success_rate", "wall_s", "sim_s", "ticks", "end_reason", "time_limit",
                 "dropout_pct", "tick_rate_hz", "overrun_ticks", "paced", "max_ticks", "source",
-                "t_issue", "file", "reason"]
+                "t_issue", "file", "reason", "session", "push_mm", "placement_m"]
 OP_COLS = ["operator", "sources", "attempts", "accepted", "failed", "discarded",
            "discarded_successes", "revoked", "errors",
            "unfinished", "success_rate", "wall_s_per_attempt", "sim_s_per_attempt",
            "wall_s_per_accepted_attempt", "wall_s_per_accepted_demo", "dropout_pct",
-           "saved_episodes_measured", "tick_rate_hz_mean", "overrun_ticks_total", "paced",
+           "saved_episodes_measured", "tick_rate_hz_mean", "overrun_ticks_total",
+           "late_tick_pct", "push_mm_median", "push_mm_max", "placement_m_median",
+           "placement_m_max", "paced",
            "demo_ticks_min", "demo_ticks_median", "demo_ticks_max", "demo_s_median",
            "time_limit_endings", "time_limit_accepted", "max_ticks"]
+#: One row per ledger `session` row (numbered in ledger order, then its start time).
+SESSION_COLS = ["session"] + OP_COLS
 
 
 def plot_learning_curve(attempts: List[dict], path: str) -> Optional[str]:
@@ -307,21 +329,32 @@ def analyze(folder: str, out: Optional[str] = None, window: int = 5,
     table = [summarize([a for a in attempts if a["operator"] == o], o) for o in ops]
     if len(ops) != 1:
         table.append(summarize(attempts, "ALL"))
+    sessions = []
+    for s in dict.fromkeys(a["session"] for a in attempts):
+        xs = [a for a in attempts if a["session"] == s]
+        row = summarize(xs, IO.joined(a["operator"] for a in xs))
+        row["session"] = s
+        sessions.append(row)
+    total = summarize(attempts, IO.joined(a["operator"] for a in attempts))
+    total["session"] = "ALL"
+    sessions.append(total)
     out = out or os.path.join(ROOT, "runs", "teleop_metrics", os.path.basename(folder))
     os.makedirs(out, exist_ok=True)
     IO.write_csv(os.path.join(out, "attempts.csv"), attempts, ATTEMPT_COLS)
     IO.write_csv(os.path.join(out, "operators.csv"), table, OP_COLS)
+    IO.write_csv(os.path.join(out, "sessions.csv"), sessions, SESSION_COLS)
     png = plot_learning_curve(attempts, os.path.join(out, "learning_curve.png"))
     md = ["# Teleoperation metrics: %s" % os.path.basename(folder), "",
           "Source(s): %s. Definitions: tools/teleop_metrics.py docstring." %
           IO.joined(a["source"] for a in attempts), "",
           "## Per operator", "", IO.md_table(table, OP_COLS), "",
+          "## Per session", "", IO.md_table(sessions, SESSION_COLS), "",
           "## Attempts", "", IO.md_table(attempts, ATTEMPT_COLS[:17]), ""]
     if png:
         md += ["![learning curve](learning_curve.png)", ""]
     with open(os.path.join(out, "teleop_metrics.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(md))
-    return dict(attempts=attempts, operators=table, out=out, png=png)
+    return dict(attempts=attempts, operators=table, sessions=sessions, out=out, png=png)
 
 
 def main(argv=None) -> int:
