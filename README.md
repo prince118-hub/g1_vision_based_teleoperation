@@ -97,8 +97,12 @@ run `python tools/fetch_release_data.py --from-dir <folder with the zips>`.
 ### 3. Commands
 
 **(a) Replay a scripted demonstration.** Re-runs the recorded 25 Hz actions open loop in
-MuJoCo and checks the task still succeeds (weld, lift, placement). `--negative` adds the
-control: the same actions against a shifted box must fail.
+MuJoCo and checks that they reproduce the manipulation: same reset, the weld fires within
+2 ticks of the recorded tick, the box tracks within 25 mm while the base is locked. It ends
+with `REPLAY PASS`. Open loop does **not** reproduce the walk to the goal platform (the
+walking policy is closed-loop), so "whole task reproduced 0/1" and a placement FAIL are
+expected - see NOTES.md 2026-09-16. `--negative` adds the controls: the same actions against
+a moved box must fail.
 
 ```bash
 python tools/replay_check.py recordings/scripted_v3/ep_seed0000.npz
@@ -141,8 +145,10 @@ python tools/compare_to_final.py runs/try_eval/act_lstm_full_seed0.jsonl
   recorded under base-lock rule v2 and every experiment ran under v3 (`CLAUDE.md` §8,
   2026-10-24). It is recorded in the output header.
 - Add `--viewer --realtime` to watch, `--video-dir <folder>` to save MP4s.
-- Bit-identical trajectories are expected only on the machine the results came from;
-  on other hardware a few episodes diverge numerically (`CLAUDE.md` O34), so compare
+- "same trajectory = yes" (bit-identical states) needs the original setup: CUDA torch on
+  the machine the results came from. Tested: CUDA there gives 4/4 identical; CPU torch on
+  the same machine gives the same outcomes and placement errors but different bits. Other
+  hardware can also diverge numerically on some episodes (`CLAUDE.md` O34). Compare
   outcomes, not hashes.
 
 **(d) Regenerate the final report.** Read-only on the evaluation records; rebuilds the
@@ -153,8 +159,11 @@ into a new folder:
 python tools/make_final_report.py --out runs/report_regen
 ```
 
-`runs/report_regen/report.md` should match the shipped
-`runs/scripted_v3/analysis_final/report.md`; `docs/ANALYSIS.md` explains every table.
+`runs/report_regen/` should match the shipped `runs/scripted_v3/analysis_final/`:
+`report.md` and every CSV byte for byte; the PNG figures too when the pinned plotting
+packages are installed. Check with
+`git diff --no-index --stat runs/scripted_v3/analysis_final runs/report_regen` (no output = identical).
+`docs/ANALYSIS.md` explains every table.
 
 ## Rebuilding the Release data (maintainers)
 

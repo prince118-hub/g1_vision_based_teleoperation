@@ -7,7 +7,10 @@ runs/scripted_v3*/eval/<run>/exp1.jsonl or exp2.jsonl (from the
 analysis_scripted_v3 release asset) and prints both outcomes side by side, plus
 whether the state trajectory hash is identical.
 
-Read the hash column with CLAUDE.md O34 in mind: the simulation is not bit-for-bit
+Bit-identical needs CUDA torch (the results were produced on CUDA): on the results
+machine CUDA reproduced 4/4 recorded trajectories exactly, CPU torch gave the same
+outcomes with different bits (tested 2026-11-17).
+Read the hash column with CLAUDE.md O34 in mind too: the simulation is not bit-for-bit
 reproducible across machines, even with the pinned versions (26/40 scripted seeds
 agreed to <= 0.0003 mm on a second laptop, 14 diverged by up to 10.6 mm). A
 different hash on another machine is expected; the outcome columns are what to

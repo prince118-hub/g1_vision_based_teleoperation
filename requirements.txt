@@ -14,6 +14,13 @@ threadpoolctl==3.5.0
 pandas==2.2.3
 scipy==1.14.1
 matplotlib==3.9.2
+# matplotlib's own dependencies, pinned so the report figures rebuild byte-identically
+# (unpinned, pillow 12 / fonttools 4.65 changed every PNG's bytes, not its content).
+pillow==11.2.1
+fonttools==4.53.1
+contourpy==1.3.0
+kiwisolver==1.4.7
+pyparsing==3.1.4
 # tools/eval_scripted.py (one-heavy-process check); tests.
 psutil==7.2.2
 pytest==8.3.3
