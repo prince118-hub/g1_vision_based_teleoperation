@@ -89,7 +89,7 @@ python tools/fetch_release_data.py --only checkpoints_scripted_v3        # 1.34 
 | `analysis_scripted_v3` | 5 MB | `runs/scripted_v3*/eval/`, `.../analysis_final/`, each final run's `metadata.json` | (c), (d) |
 | `checkpoints_memory_design` | 979 MB | selected checkpoint of the 6 ACT / ACT-LSTM runs | (c) |
 | `checkpoints_scripted_v3` | 1340 MB | selected checkpoint of the 16 BC, ACT-12, ACT-LSTM-12 runs | (c), other models |
-| `human_demonstrations` | 31 MB | `recordings/demonstrations/` (teleoperated pilot, no raw keypoints) | optional |
+| `human_demonstrations` | 31 MB | `recordings/demonstrations/` (teleoperated pilot; no raw keypoints, recording laptop's hostname removed from each episode's meta, everything else as recorded) | optional |
 
 Without network access to GitHub, download the zips by hand from the Release page and
 run `python tools/fetch_release_data.py --from-dir <folder with the zips>`.

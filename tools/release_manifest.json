@@ -13,11 +13,11 @@
   },
   {
    "name": "human_demonstrations.zip",
-   "size": 31457389,
-   "sha256": "524dd1aad71826ced096c6fe18e11d5c0383740be0dfbdddbf55fbce55c3a87c",
+   "size": 31455379,
+   "sha256": "252ade0435fdecaf4d51d7061b17d53525520da9d2e9ee9f78a3d13b9dbdd272",
    "n_files": 82,
-   "unpacked_bytes": 31672251,
-   "description": "Teleoperated demonstrations (accepted, discarded/, failed/, ledger.jsonl), WITHOUT the raw ZED keypoints/ -> recordings/demonstrations/"
+   "unpacked_bytes": 31670224,
+   "description": "Teleoperated demonstrations (accepted, discarded/, failed/, ledger.jsonl), WITHOUT the raw ZED keypoints/ and with camera.host removed from each episode's meta (so the 4 file sha256 values in ledger.jsonl no longer match) -> recordings/demonstrations/"
   },
   {
    "name": "analysis_scripted_v3.zip",
