@@ -12,6 +12,9 @@ env/
 *.log
 demonstrations/
 *.npz
+# Normalization stats ARE needed to run a trained checkpoint (tools/deploy.py reads
+# the run's own stats) and are a few KB each, so they are tracked.
+!data/processed/norm_stats_*.npz
 *.hdf5
 test_locomotion_input.py
 summarise_locomotion_eval.py
@@ -38,4 +41,25 @@ reference/
 *.avi
 *.svo
 *.svo2
+
+# Release data: built by tools/package_release_data.py, published as GitHub
+# Release assets, fetched by tools/fetch_release_data.py. Never committed.
+*.zip
+release_build/
+.release_cache/
+
+# Temp and partial files (eval_scripted writes *.jsonl.part until complete)
+*.part
+*.tmp
+*.bak
+*~
+.pytest_cache/
+.DS_Store
+Thumbs.db
+
+# Secrets
 .env
+.env.*
+*.pem
+*.key
+.netrc

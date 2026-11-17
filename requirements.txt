@@ -10,3 +10,17 @@ opencv-python>=4.8,<4.12
 # See: https://www.stereolabs.com/docs/app-development/python/install
 # Holds NumPy's BLAS pool at one thread in the live recorder (g1_teleop/compute_threads.py).
 threadpoolctl==3.5.0
+# Analysis and reports (tools/analyze_experiments.py, tools/make_final_report.py).
+pandas==2.2.3
+scipy==1.14.1
+matplotlib==3.9.2
+# matplotlib's own dependencies, pinned so the report figures rebuild byte-identically
+# (unpinned, pillow 12 / fonttools 4.65 changed every PNG's bytes, not its content).
+pillow==11.2.1
+fonttools==4.53.1
+contourpy==1.3.0
+kiwisolver==1.4.7
+pyparsing==3.1.4
+# tools/eval_scripted.py (one-heavy-process check); tests.
+psutil==7.2.2
+pytest==8.3.3

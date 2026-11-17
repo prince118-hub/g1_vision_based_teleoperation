@@ -101,6 +101,13 @@ ZERO_DIMS = tuple(d for d in spec.CONSTANT_ACTION_DIMS if d != spec.GRIP_R_A)
 assert ZERO_DIMS == (6, 13, 14, 15, 16), ZERO_DIMS
 
 
+def stored_path(p: str) -> str:
+    """A repo-relative path read from a run's metadata.json, as an absolute path.
+    Runs trained on Windows store backslashes (`recordings\\scripted_v3`); on
+    Linux/macOS those are not separators, so split on both before joining."""
+    return os.path.join(ROOT, *[part for part in str(p).replace("\\", "/").split("/") if part])
+
+
 def post_process(a) -> np.ndarray:
     """The deployed action from a denormalized prediction. See module docstring."""
     a = np.array(a, dtype=np.float64, copy=True)
@@ -141,7 +148,7 @@ class CheckpointPolicy:
         self.kind = notes["model"]
         self.K = int(notes["chunk_size"])
         paths = notes["data_paths"]
-        self.norm_path = os.path.join(ROOT, paths["norm"])
+        self.norm_path = stored_path(paths["norm"])
         self.st, self.ac, self.norm_meta = DS.load_norm_stats(self.norm_path)
         # The normalizer must be the one fitted on THIS run's training split
         # (review, 2026-10-24): a stats file regenerated or swapped since
@@ -617,9 +624,9 @@ def _seeds(a) -> List[int]:
 
 def _splits_file(meta_json: dict) -> Optional[dict]:
     p = meta_json["config"]["notes"]["data_paths"].get("splits")
-    if not p or not os.path.exists(os.path.join(ROOT, p)):
+    if not p or not os.path.exists(stored_path(p)):
         return None
-    return json.load(open(os.path.join(ROOT, p), encoding="utf-8"))
+    return json.load(open(stored_path(p), encoding="utf-8"))
 
 
 def run_train_seeds(meta_json: dict) -> List[int]:
@@ -658,7 +665,7 @@ def training_lock_rule(meta_json: dict):
     first file in the folder. Missing or mixed -> SystemExit (fail-closed,
     review 2026-10-24)."""
     from g1_data.phases import lock_config_from_meta
-    ep_dir = os.path.join(ROOT, meta_json["config"]["notes"]["data_paths"]["episodes"])
+    ep_dir = stored_path(meta_json["config"]["notes"]["data_paths"]["episodes"])
     if not os.path.isdir(ep_dir):
         raise SystemExit("training episodes folder %s not found - cannot check the lock "
                          "rule this run was trained under" % repo_relpath(ep_dir))

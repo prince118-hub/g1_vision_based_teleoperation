@@ -180,6 +180,14 @@ def test_post_process_overwrites_untrained_dims_and_thresholds_the_weld():
     spec.assert_velocity_within_clip(p[spec.VEL_A])
 
 
+def test_stored_path_reads_windows_and_posix_separators_alike():
+    """Runs trained on Windows store `recordings\\scripted_v3`; it must resolve on any OS."""
+    want = os.path.join(D.ROOT, "data", "processed", "norm_stats_scripted_v3_n40.npz")
+    for p in ("data\\processed\\norm_stats_scripted_v3_n40.npz",
+              "data/processed/norm_stats_scripted_v3_n40.npz"):
+        assert D.stored_path(p) == want, p
+
+
 # ─── the loop is the replay loop ─────────────────────────────────────────────
 def test_natural_start_matches_the_demonstrators_tick_zero():
     """reset_episode + base at (0.60, 0.00) is EXACTLY the recorded start, all
