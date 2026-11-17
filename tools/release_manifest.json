@@ -1,0 +1,47 @@
+{
+ "repo": "prince118-hub/g1_vision_based_teleoperation",
+ "tag": "data-v1",
+ "note": "Built by tools/package_release_data.py; fetched by tools/fetch_release_data.py.",
+ "assets": [
+  {
+   "name": "scripted_v3_dataset.zip",
+   "size": 55846477,
+   "sha256": "be7ca77ff3ce7059073220c07b0eb583ef195f225f76d7bb7766de33008c4116",
+   "n_files": 201,
+   "unpacked_bytes": 56036820,
+   "description": "Scripted demonstrations (g1-spec-1.2.0, 200 episodes) -> recordings/scripted_v3/"
+  },
+  {
+   "name": "human_demonstrations.zip",
+   "size": 31457389,
+   "sha256": "524dd1aad71826ced096c6fe18e11d5c0383740be0dfbdddbf55fbce55c3a87c",
+   "n_files": 82,
+   "unpacked_bytes": 31672251,
+   "description": "Teleoperated demonstrations (accepted, discarded/, failed/, ledger.jsonl), WITHOUT the raw ZED keypoints/ -> recordings/demonstrations/"
+  },
+  {
+   "name": "analysis_scripted_v3.zip",
+   "size": 5272626,
+   "sha256": "bc9f9359bd257e6af550ef975b540d544f884ccb133f8dd51091ce865d681725",
+   "n_files": 775,
+   "unpacked_bytes": 42403397,
+   "description": "Exp 1/2 evaluation records, checkpoint selection, final report, and the 22 final runs' metadata -> runs/scripted_v3/, runs/scripted_v3_memory_design/"
+  },
+  {
+   "name": "checkpoints_scripted_v3.zip",
+   "size": 1340457706,
+   "sha256": "4d19d9d89a64059a9b71b7037b37c56d03cc09e7931424c4137399558bf6f906",
+   "n_files": 16,
+   "unpacked_bytes": 1340454656,
+   "description": "Selected checkpoint of each of the 16 runs under runs/scripted_v3/ (needs analysis_scripted_v3 for each run's metadata.json)"
+  },
+  {
+   "name": "checkpoints_memory_design.zip",
+   "size": 978700522,
+   "sha256": "e647ebeac30cc9ff5e30c322355f18b6e9ac1e4e27878b01f62443a45ecf8a63",
+   "n_files": 6,
+   "unpacked_bytes": 978699066,
+   "description": "Selected checkpoint of each of the 6 ACT / ACT-LSTM (memory design) runs (needs analysis_scripted_v3 for each run's metadata.json)"
+  }
+ ]
+}
