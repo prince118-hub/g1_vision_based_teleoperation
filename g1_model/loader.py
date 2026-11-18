@@ -114,6 +114,9 @@ class ChunkDataset(Dataset):
         # 2026-10-18, open item 29: an unlabelled episode's gripper action is a
         # copy of its own weld bit; a mix means the dims mean two things.
         DS.assert_uniform_grip_label(episodes)
+        # 2026-11-19: dims 19-21 hold ONE velocity label (absent = the recorded
+        # command), and the normalizer was fitted on that label.
+        velocity_label = DS.assert_uniform_velocity_label(episodes)
 
         # A3: a normalizer from another split loads without complaint and shifts
         # every input by a constant. This is the only place that can notice.
@@ -122,6 +125,7 @@ class ChunkDataset(Dataset):
                 norm_meta,
                 list(norm_fit_seeds) if norm_fit_seeds is not None else episodes,
                 where=where or "norm stats")
+            DS.assert_norm_velocity_label(norm_meta, velocity_label, where=where or "norm stats")
 
         # ─── B1: read everything, once ───────────────────────────────────────
         # why: see DESIGN_NOTES.md#loader-in-memory

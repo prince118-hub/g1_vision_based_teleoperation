@@ -110,6 +110,63 @@ def test_eval_status_states(root):
     assert s["state"] == "done" and s["exp1"] == "100/100" and s["max_ticks"] == 1234
 
 
+@pytest.fixture
+def dataset_reset():
+    yield
+    HR.use_dataset("human_v1")
+
+
+def test_human_v1_names_and_paths_are_unchanged(dataset_reset):
+    HR.use_dataset("human_v1")
+    assert HR.run_name("act_orig", 0) == "act_orig_human40_seed0"
+    assert HR.run_name("bc", 2) == "bc_b256_human40_seed2"
+    assert (HR.EPISODES, HR.SPLITS, HR.NORM, HR.RUN_ROOT) == (
+        "recordings/demonstrations", "data/processed/splits_human_v1.json",
+        "data/processed/norm_stats_human_v1.npz", "runs/human_v1")
+    assert HR._reason("act_orig") == HR.MODELS["act_orig"]["reason"]
+    assert HR.CAP_FROM == "recordings/demonstrations"
+
+
+def test_human_v2_cannot_write_into_human_v1(dataset_reset):
+    HR.use_dataset("human_v2")
+    assert HR.RUN_ROOT == "runs/human_v2" and HR.run_name("act_orig", 0) == "act_orig_human40v2_seed0"
+    assert all("human_v1" not in p for p in (HR.EPISODES, HR.SPLITS, HR.NORM, HR.RUN_ROOT))
+    assert HR._reason("act_orig").startswith("human_v2") and "200k steps" in HR._reason("act_orig")
+    assert {HR.run_name(m, s) for m, s in HR.all_runs()}.isdisjoint(
+        {"%s_seed%d" % (HR.MODELS[m]["stem"], s) for m, s in HR.all_runs()})
+
+
+def test_human_v2_train_and_eval_commands(root, monkeypatch, dataset_reset):
+    HR.use_dataset("human_v2")
+    seen = []
+
+    def fake_run(cmd, out, err):
+        seen.append(cmd)
+        if "train_bc.py" in " ".join(cmd):
+            _result(os.path.join(root, HR.run_name("act_orig", 0)), "finished")
+        return dict(exit_code=0, wall_seconds=1.0, peak_ram_gb=0.1, peak_gpu_mib=1, interrupted_by_user=False)
+    monkeypatch.setattr(HR, "_run_logged", fake_run)
+    assert HR.train("act_orig", 0, root=root) == 0
+    t = seen[0]
+    for flag, val in (("--episodes", "data/processed/episodes_human_v2"),
+                      ("--splits", "data/processed/splits_human_v2.json"),
+                      ("--norm", "data/processed/norm_stats_human_v2.npz")):
+        assert t[t.index(flag) + 1] == val
+    assert " ".join(HR.MODELS["act_orig"]["budget"]) in " ".join(t)       # same settings as human_v1
+    assert t[t.index("--budget-reason") + 1].startswith("human_v2")
+    HR.evaluate("act_orig", 0, root=root)
+    e = seen[1]
+    assert e[e.index("--max-ticks-from") + 1] == "recordings/demonstrations"   # the same cap
+    assert e[e.index("--runs") + 1] == "act_orig_human40v2_seed0" and "v3" in e
+
+
+def test_ps1_launchers_pass_data_with_human_v1_default():
+    for f in ("run_human.ps1", "eval_human.ps1", "status_human.ps1"):
+        s = _ps1(f)
+        assert '[ValidateSet("human_v1", "human_v2")][string]$Data = "human_v1"' in s, f
+        assert "--data" in s and "$Data" in s, f
+
+
 def _ps1(path):
     return open(os.path.join(HERE, path), encoding="utf-8").read()
 

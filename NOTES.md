@@ -8289,3 +8289,76 @@ from seed 240; the 3 episodes identical to the saved ones.
 1 failed** - the relpath lint test (item 2 above, fails identically on main); tools/test_keypoint_recording.py SELFTEST PASS. Four
 parts (test_act, test_act_memory, test_memory_design, one train_policy test) exit 127 with every test passed: the known cuDNN LSTM
 crash at exit (CLAUDE.md section 8, 2026-09-29). Before the `stored_path` fix the same run had 18 failures, all pre-existing.
+
+## 2026-11-19 — Smoothed walking labels: a TEST (human_v2), not adopted (branch `velocity-label-test`)
+
+**Why.** The confirming test (2026-11-18/19, open loop through `deploy.CheckpointPolicy.act` on the 40 train + 10 val human
+demos): the inference path is exact (deploy-path chunk L1 reproduces every checkpoint's `val_loss` to ~1e-8; deploy's tick-0
+observation bit-identical to `states[0]` on 50/50 demos), but act_orig and act_lstm_full output vx/vy = the constant "no key"
+(~ -0.001 m/s; also wrist roll/pitch 4, 5, 11, 12) at every checkpoint, even on their own training demos: walk-in right-key rate
+0% for vx AND wz. BC fits them open loop (train 88-98%). A model-free 1-NN finds the forward key from ONE state on 56-61% of
+key-down ticks, so W_o = 1 is not blind to it: the constant median of an on/off label minimises chunked L1.
+
+**What the human labels are.** `KeyboardCommand.release_sec = 0.25`: OpenCV gives key-down only, so one press is a 6-tick latch
+pulse. Walk-in key-down runs: median 6-7 ticks; gaps p10 2, p25 6-7, median 13 (vx). So "holding" a key is a pulse train.
+
+**How the locomotion policy responds** (measured, `deploy_episode` with constant commands, base facing away from the box, 4 s,
+mean of the last 2 s; and a least-squares FOPDT fit on unlocked human ticks):
+- steady forward speed / command: 0.1 -> 0.066, 0.2 -> 0.149, 0.3 -> 0.232, 0.4 -> 0.313, 0.6 -> 0.476, 0.8 -> 0.639 m/s (linear,
+  0.66-0.80x; NO deadzone despite `legged_robot.py:306` zeroing |v| < 0.2 in its training); turn 0.1..0.6 -> 0.83-0.92x;
+  strafe 0.1..0.3 -> 0.52-0.71x. **Backward is not linear:** -0.1 -> -0.10, -0.2 -> -0.15, -0.3 -> -0.08, -0.4 -> 0.00,
+  -0.6 -> -0.01 m/s (the operator's -0.4 key barely moves the robot).
+- dynamics: forward tau ~0.5 s, no delay (R^2 0.38, gait sway), held-key t50 0.24 s; turn tau ~0.08 s (R^2 0.83).
+- The scripted "small-command" rows (0.05-0.40 -> 0.02-0.05 m/s) were confounded by simultaneous vy -0.8 strafing; the clean
+  measurement above supersedes them.
+
+**Option chosen: (a) a centred (zero-phase) moving average over 13 ticks (0.52 s) of dims 19-21, zero padding outside the
+episode, locked ticks exactly 0 (D17)** - `spec.velocity_label_smoothed`, label `centred_ma13_v1`. Why 13: one press-plus-gap
+cycle is ~12 ticks (7 is shorter and leaves the on/off structure, see the plot), and the forward time constant is ~0.5 s, so
+the robot already averages forward commands over about this window; the steady map is linear, so the response to the averaged
+command is the averaged response. Zero-phase so the label does not lag the operator. Rejected (b), relabel with the achieved
+velocity: it lags the command by tau (0.5 s forward), carries the gait sway (R^2 0.38), and the backward map is not invertible
+(-0.4 key -> ~0 m/s).
+
+**Window sweep** (human, walk-in ticks unless stated):
+
+| window | vx label != 0 | median abs vx | 10-NN median L1 / zero, vx / wz | replay locks /50 | lock within 10 ticks of recorded | base error at recorded lock, median / p90 | heading, median / p90 |
+|---|---|---|---|---|---|---|---|
+| 1 (keys) | 53% | 0.008 | 0.90 / 1.15 | 42 | 31 | 27 / 63 mm | 1.3 / 7.1 deg |
+| 7 | 74% | 0.086 | 0.78 / 1.12 | 44 | 27 | 40 / 82 mm | 2.0 / 10.1 deg |
+| **13** | 85% | 0.210 | **0.67** / 1.09 | 39 | 18 | 45 / 92 mm | 3.1 / 11.0 deg |
+| 25 | 96% | 0.168 | 0.55 / 1.05 | 34 | 16 | 63 / 117 mm | 4.9 / 12.6 deg |
+
+Replay = open loop from tick 0 to the recorded lock + 40 in deploy's loop, recorded arms, raw or smoothed velocity; window 1 is
+the baseline (open-loop human replay drifts, 2026-11-13c). The 10-NN column is a model-free learnability proxy (median label of
+the 10 nearest states from OTHER episodes, W_o = 1, vs predicting 0): walk-in TURNING is not predictable from one state at any
+window. Human change at 13: unlocked mean |change| vx 0.073, vy 0.003, wz 0.100; every other action dim bit-identical.
+**Scripted labels under the same filter: small, not a no-op** - mean |change| 0.024 / 0.025 / 0.029 (8-10% of the mean |label|),
+8-17% of unlocked ticks move > 0.05.
+
+**Versioning.** `meta["velocity_label"]` per episode (absent = `command_v1`, the recorded command: every file before today);
+norm stats store it (`save_norm_stats(velocity_label=)`, absent = command_v1); `dataset.assert_uniform_velocity_label` (split,
+norm, loader) refuses a mix; `assert_norm_velocity_label` (norm, loader) refuses stats fitted on the other label.
+`tools/convert_velocity_label.py` writes COPIES (refuses overwrite, a source folder, a file already labelled, any change outside
+dims 19-21) with source sha256 + window + commit. **human_v2:** `data/processed/episodes_human_v2` (50 copies, gitignored),
+`splits_human_v2.json` = human_v1 exactly (same 40/10, same order, every field), `norm_stats_human_v2.npz` = human_v1's except
+action dims 19-21 (vx std 0.190 -> 0.149, wz 0.299 -> 0.262, vy floored 0.0107 -> 0.0100). `tools/human_runs.py --data human_v2`
+(launchers `-Data human_v2`, default human_v1 unchanged): runs/human_v2, run names `*_human40v2_seed<k>`, same settings, same
+evaluation, cap still from recordings/demonstrations (1568).
+
+**Probe** (`runs/human_v2_probe/act_orig_human40v2_seed0`, 20k steps, labelled PROBE, uncommitted code; 0.45 h at 12.5 st/s,
+final val 0.272), open loop through `CheckpointPolicy.act`, walk-in, deployed action; same definitions for human_v1 act_orig 20k:
+
+| | v1 20k | **v2 20k** | v2 best.pt (step 17k, val 0.267) |
+|---|---|---|---|
+| vx key-down direction (sign right, abs > 0.1), train / val | 0% / 0% | **79% / 69%** | 69% / 62% |
+| vx commanding (abs > 0.1), train / val | 0% / 0% | 67% / 64% | 57% / 54% |
+| vx L1 vs its own label / zero, train | 1.177 / 1.228 (keys) | 1.125 / 1.363 (smoothed) | 1.196 / 1.363 |
+| vx mean command on key-down / key-up ticks, train | 0.002 / 0.001 | 0.152 / 0.122 | 0.110 / 0.090 |
+| wz key-down direction, train / val | 0% / 0% | **0% / 0%** | 0% / 0% |
+| wz key-down direction in MOVE (transport), train / val | 73% / 77% | 90% / 81% | 90% / 83% |
+
+**Reading.** Forward walking is now commanded in the walk-in (79% of key-down ticks, open loop, on training demos), but weakly
+timed (corr with the smoothed label 0.30; ~0.12-0.15 commanded on key-down and key-up alike = a slow steady approach, ~0.1 m/s).
+**Walk-in turning still collapses to 0**, as the 10-NN proxy predicted; lateral alignment (|lat| <= 0.05 m, |heading| <= 5 deg)
+then depends on the spawn. Not yet run: closed loop. Not adopted: the full 200k run and its evaluation are Charles's call.

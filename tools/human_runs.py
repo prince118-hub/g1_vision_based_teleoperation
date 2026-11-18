@@ -49,6 +49,17 @@ deploy.py or eval_scripted.py process runs (they never wait silently).
 
 Every finished command writes runs/human_v1/summaries/<run>.train.txt or .eval.txt
 (JSON) and appends one line to runs/human_v1/summary_human.txt.
+
+DATASETS (--data, default human_v1)
+-----------------------------------
+human_v1  the recorded command as the walking label (recordings/demonstrations,
+          *_human_v1 split/norm, runs/human_v1, run names *_human40_seed<k>).
+human_v2  a TEST (2026-11-19, not adopted): the SAME 40/10 seeds, walking dims 19-21
+          relabelled by tools/convert_velocity_label.py (centred moving average,
+          spec.VELOCITY_LABEL_SMOOTH) into data/processed/episodes_human_v2, its own
+          *_human_v2 split/norm, runs/human_v2, run names *_human40v2_seed<k> - so it
+          can never write into human_v1. Same models, settings and evaluation; the cap
+          still comes from recordings/demonstrations (identical episode lengths).
 """
 from __future__ import annotations
 
@@ -74,6 +85,22 @@ DRY_ROOT = "runs/human_v1_dryrun"
 SEEDS = (0, 1, 2)
 DONE_STATUSES = ("finished", "hard_cap")
 WHY = "human_v1 (40 teleop demos, spec 1.2.0, lock rule v3): settings of the scripted main runs"
+#: The evaluation cap's source for EVERY dataset: the accepted human recordings (a
+#: relabelled copy has the same episode lengths; only the raw folder has the ledger).
+CAP_FROM = "recordings/demonstrations"
+#: Run-name suffix after the stem ("" for human_v1, so its names are unchanged).
+STEM_SUFFIX = ""
+#: --data: what each dataset name points at. human_v1 is the module default above.
+DATASETS: Dict[str, Dict[str, str]] = {
+    "human_v1": dict(episodes=EPISODES, splits=SPLITS, norm=NORM, root=RUN_ROOT, suffix="", why=WHY),
+    "human_v2": dict(episodes="data/processed/episodes_human_v2",
+                     splits="data/processed/splits_human_v2.json",
+                     norm="data/processed/norm_stats_human_v2.npz",
+                     root="runs/human_v2", suffix="v2",
+                     why="human_v2 (the human_v1 40/10 seeds; walking labels 19-21 = centred moving "
+                         "average, velocity_label centred_ma13_v1; a TEST): settings of the scripted main runs"),
+}
+DATASET = "human_v1"
 
 #: model -> (run-name stem, train_bc.py args without --seed, budget args, budget reason)
 MODELS: Dict[str, Dict] = {
@@ -97,8 +124,22 @@ DRY_BUDGET = {"bc": ["--epochs", "3", "--checkpoint-every", "1"],
 HEAVY_SCRIPTS = ("train_bc.py", "deploy.py", "eval_scripted.py")
 
 
+def use_dataset(name: str) -> None:
+    """Point EPISODES/SPLITS/NORM/RUN_ROOT and the run names at one dataset (CLI --data)."""
+    global EPISODES, SPLITS, NORM, RUN_ROOT, STEM_SUFFIX, WHY, DATASET
+    d = DATASETS[name]
+    EPISODES, SPLITS, NORM, RUN_ROOT = d["episodes"], d["splits"], d["norm"], d["root"]
+    STEM_SUFFIX, WHY, DATASET = d["suffix"], d["why"], name
+
+
+def _reason(model: str) -> str:
+    """The budget reason: the model's, with the current dataset's description in front."""
+    r, v1 = MODELS[model]["reason"], DATASETS["human_v1"]["why"]
+    return WHY + r[len(v1):] if r.startswith(v1) else r
+
+
 def run_name(model: str, seed: int) -> str:
-    return "%s_seed%d" % (MODELS[model]["stem"], seed)
+    return "%s%s_seed%d" % (MODELS[model]["stem"], STEM_SUFFIX, seed)
 
 
 def all_runs():
@@ -233,6 +274,8 @@ def _check_data():
     for p in (SPLITS, NORM):
         if not os.path.exists(_abs(p)):
             raise SystemExit("missing %s - build the human split and norm first (tools/build_dataset.py)" % p)
+    if not os.path.isdir(_abs(EPISODES)):
+        raise SystemExit("missing episode folder %s" % EPISODES)
 
 
 def _run_logged(cmd: List[str], stdout_path: str, stderr_path: str):
@@ -276,9 +319,10 @@ def train(model: str, seed: int, restart: bool = False, root: str = RUN_ROOT,
             raise SystemExit(
                 "REFUSED: %s was INTERRUPTED (%s). It will not be continued - a resumed run would not be\n"
                 "identical to an uninterrupted one. Restart it FROM SCRATCH with:\n"
-                "    powershell -ExecutionPolicy Bypass -File tools\\run_human.ps1 -Model %s -Seed %d -Restart\n"
+                "    powershell -ExecutionPolicy Bypass -File tools\\run_human.ps1 -Model %s -Seed %d%s -Restart\n"
                 "(the incomplete folder is moved to %s/_failed/, not deleted)."
-                % (name, st["status"], model, seed, root))
+                % (name, st["status"], model, seed,
+                   "" if DATASET == "human_v1" else " -Data " + DATASET, root))
     _refuse_if_heavy()
     run_dir = _abs(root, name)
     if st["state"] == "incomplete":
@@ -298,7 +342,7 @@ def train(model: str, seed: int, restart: bool = False, root: str = RUN_ROOT,
     os.makedirs(run_dir, exist_ok=True)
     spec = MODELS[model]
     cmd = [sys.executable, "-u", os.path.join("tools", "train_bc.py"), "train", *spec["args"],
-           "--seed", str(seed), *(budget or spec["budget"]), "--budget-reason", reason or spec["reason"],
+           "--seed", str(seed), *(budget or spec["budget"]), "--budget-reason", reason or _reason(model),
            "--episodes", EPISODES, "--splits", SPLITS, "--norm", NORM, "--out-dir", run_dir]
     commit = _git("rev-parse", "--short", "HEAD")
     _append_summary(root, "%s %-28s TRAIN started  commit %s" % (now(), name, commit))
@@ -338,7 +382,7 @@ def evaluate(model: str, seed: int, root: str = RUN_ROOT, extra: Optional[List[s
     if es["state"] == "incomplete":
         print("%s: evaluation incomplete (%s) - finished files are kept, the rest is redone from its first "
               "seed (deterministic per episode)." % (name, es["have"]))
-    cap = extra or ["--max-ticks-from", EPISODES]
+    cap = extra or ["--max-ticks-from", CAP_FROM]
     cmd = [sys.executable, "-u", os.path.join("tools", "eval_scripted.py"), "--run-root", root,
            "--runs", name, "--lock-rule", "v3", *cap]
     ev_dir = _abs(root, "eval", name)
@@ -444,21 +488,24 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     for c in ("train", "eval"):
         p = sub.add_parser(c)
+        p.add_argument("--data", default="human_v1", choices=sorted(DATASETS))
         p.add_argument("--model", required=True, choices=sorted(MODELS))
         p.add_argument("--seed", required=True, type=int, choices=SEEDS)
         if c == "train":
             p.add_argument("--restart", action="store_true",
                            help="move an INTERRUPTED run to _failed/ and train it again from scratch")
-    sub.add_parser("status")
+    p = sub.add_parser("status")
+    p.add_argument("--data", default="human_v1", choices=sorted(DATASETS))
     p = sub.add_parser("dryrun")
     p.add_argument("--models", nargs="+", default=list(MODELS), choices=sorted(MODELS))
     a = ap.parse_args(argv)
+    use_dataset(getattr(a, "data", "human_v1"))
     if a.cmd == "train":
-        return train(a.model, a.seed, restart=a.restart)
+        return train(a.model, a.seed, restart=a.restart, root=RUN_ROOT)
     if a.cmd == "eval":
-        return evaluate(a.model, a.seed)
+        return evaluate(a.model, a.seed, root=RUN_ROOT)
     if a.cmd == "status":
-        return status()
+        return status(root=RUN_ROOT)
     return dryrun(a.models)
 
 

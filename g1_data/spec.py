@@ -596,6 +596,81 @@ def next_weld_label(weld) -> np.ndarray:
         out[:-1] = w[1:]
     return out
 
+
+#: What the three walking-velocity ACTION dims (19-21) mean in a file, stored as
+#: `meta["velocity_label"]`. A file WITHOUT the field carries the command the
+#: locomotion policy was given - the teleop keys, the scripted P-controller -
+#: which is `VELOCITY_LABEL_COMMAND`, so every file recorded before 2026-11-19
+#: groups with it. Refused when mixed (`dataset.assert_uniform_velocity_label`)
+#: or when the normalizer was fitted on another label
+#: (`dataset.assert_norm_velocity_label`). Spec version unchanged: the layout is
+#: the same, only what three columns were filled with.
+VELOCITY_LABEL_COMMAND: str = "command_v1"
+#: The centred moving average of the command over VELOCITY_LABEL_WINDOW ticks
+#: (`velocity_label_smoothed`). A TEST, not adopted (2026-11-19): human key taps
+#: are 0.25 s latch pulses, and ACT collapsed vx/vy to the constant "no key".
+VELOCITY_LABEL_SMOOTH: str = "centred_ma13_v1"
+VELOCITY_LABEL_WINDOW: int = 13
+VELOCITY_LABELS: Dict[str, dict] = {
+    VELOCITY_LABEL_COMMAND: dict(window=1, rule="the command given to the locomotion policy"),
+    VELOCITY_LABEL_SMOOTH: dict(
+        window=VELOCITY_LABEL_WINDOW,
+        rule="centred moving average of the command over 13 ticks (0.52 s), zero padding "
+             "beyond the episode, locked ticks exactly 0 (D17); dims 19-21 only"),
+}
+
+
+def velocity_label_of(meta: dict, where: str = "") -> str:
+    """The velocity label a file carries; an absent field is the recorded command."""
+    lab = meta.get("velocity_label", VELOCITY_LABEL_COMMAND)
+    if lab not in VELOCITY_LABELS:
+        raise ValueError("unknown velocity_label %r%s; this build knows %s"
+                         % (lab, (" in " + where) if where else "", sorted(VELOCITY_LABELS)))
+    return lab
+
+
+def velocity_label_smoothed(states, actions, window: int = VELOCITY_LABEL_WINDOW) -> np.ndarray:
+    """`actions` with dims 19-21 replaced by their centred moving average.
+
+        v'[t] = mean(v[t - h .. t + h]),  h = window // 2,  v = 0 outside the episode
+        v'[t] = 0 wherever the base is locked (state dim 47)
+
+    Every other dim is returned unchanged, bit for bit. Zero-phase, so no lag;
+    the sum of each dim (the commanded displacement) is preserved up to the
+    lock re-zeroing. The recorded command is already 0 on every locked tick
+    (D17), and a file where it is not is refused rather than averaged.
+
+    WHY 13 ticks (0.52 s), from the human demos: one keypress is a 0.25 s latch
+    pulse (6 ticks, `KeyboardCommand.release_sec`), key-down runs in the walk-in
+    have a median of 6-7 ticks and the gaps between them a lower quartile of
+    6-7, so one press-plus-gap cycle is ~12 ticks; and the forward response of
+    the locomotion policy has a time constant of ~0.5 s, so the robot already
+    averages forward commands over about this window. The steady response is
+    linear in the command (forward 0.66-0.80 x for 0.1-0.8, turn 0.83-0.92 x),
+    so the response to the averaged command is the averaged response.
+    """
+    S = np.asarray(states)
+    A = np.array(actions, copy=True)
+    if S.ndim != 2 or S.shape[1] != STATE_DIM:
+        raise ValueError(f"states must be (T, {STATE_DIM}), got {S.shape}")
+    if A.ndim != 2 or A.shape[1] != ACTION_DIM or len(A) != len(S):
+        raise ValueError(f"actions must be ({len(S)}, {ACTION_DIM}), got {A.shape}")
+    window = int(window)
+    if window < 1 or window % 2 == 0:
+        raise ValueError(f"window must be a positive odd number of ticks, got {window}")
+    locked = S[:, BASE_LOCKED] >= 0.5
+    V = np.asarray(A[:, VEL_A], dtype=np.float64)
+    if np.any(V[locked] != 0.0):
+        raise ValueError("velocity command is nonzero on %d locked tick(s); D17 says it is "
+                         "logged 0 while the base is locked" % int(np.any(V[locked] != 0.0, axis=1).sum()))
+    h = window // 2
+    P = np.vstack([np.zeros((h, 3)), V, np.zeros((h, 3))])
+    c = np.vstack([np.zeros((1, 3)), np.cumsum(P, axis=0)])
+    out = (c[window:] - c[:-window]) / float(window)
+    out[locked] = 0.0
+    A[:, VEL_A] = out.astype(A.dtype)
+    return A
+
 #: Tolerance for CHECKING recorded data against VELOCITY_CLIP. Not slack in the
 #: limit - slack in the comparison.
 #
