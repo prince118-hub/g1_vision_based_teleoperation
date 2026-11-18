@@ -104,7 +104,14 @@ assert ZERO_DIMS == (6, 13, 14, 15, 16), ZERO_DIMS
 def stored_path(p: str) -> str:
     """A repo-relative path read from a run's metadata.json, as an absolute path.
     Runs trained on Windows store backslashes (`recordings\\scripted_v3`); on
-    Linux/macOS those are not separators, so split on both before joining."""
+    Linux/macOS those are not separators, so split on both before joining.
+
+    An ABSOLUTE path is returned as stored (2026-11-18): splitting it dropped
+    the drive and joined the rest onto ROOT (`D:\\tmp\\x` -> `<repo>\\tmp\\x`),
+    which broke every run the tests build in a temporary folder. Real runs
+    store repo-relative paths and take the line below, unchanged."""
+    if os.path.isabs(str(p)):
+        return str(p)
     return os.path.join(ROOT, *[part for part in str(p).replace("\\", "/").split("/") if part])
 
 

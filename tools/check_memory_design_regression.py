@@ -107,6 +107,15 @@ def actions(run, ckpt, seed):
     return np.stack([pol.act(S[t], t) for t in range(a.ticks)]), pol
 
 KINDS = (("bc", 1), ("act", 100), ("act_lstm", 100))
+
+# The synthetic run's data paths are stored RELATIVE to its runs folder (the
+# one --load names) and resolved with deploy.ROOT pointed there (2026-11-18): deploy.stored_path
+# (since d9e85a3) joins every stored path onto ROOT, so the absolute paths this
+# probe used to write resolved to <repo>/Users/... and the probe failed on both
+# sides. A real run's paths are repo-relative and resolve the same way.
+def rel(p):
+    return os.path.relpath(p, os.path.join(a.out, "runs"))
+
 if a.make:
     rng = np.random.default_rng(7)
     st_std = 0.5 + rng.random(spec.STATE_DIM)
@@ -126,8 +135,8 @@ if a.make:
         mcfg = TB._model_config(kind, K, W, BATCH, gate=False)
         tcfg = TB._train_config(mcfg, 1, BATCH, seed=0,
                                 notes=dict(model=kind, chunk_size=K,
-                                           data_paths=dict(episodes=runs, splits=splits,
-                                                           norm=norm)))
+                                           data_paths=dict(episodes=rel(runs), splits=rel(splits),
+                                                           norm=rel(os.path.join(runs, "norm.npz")))))
         model = TB._make_model(mcfg, tcfg)
         run = os.path.join(runs, kind)
         os.makedirs(run, exist_ok=True)
@@ -138,6 +147,7 @@ if a.make:
                           epoch=0, train_loss=0.0, val_loss=None, step=0)
 
 if a.load:
+    D.ROOT = a.load                      # the synthetic run's relative data paths
     for kind, _ in KINDS:
         A, pol = actions(os.path.join(a.load, kind), "ckpt_step0000000.pt", seed=11)
         np.save(os.path.join(a.out, "actions_%s.npy" % kind), A)

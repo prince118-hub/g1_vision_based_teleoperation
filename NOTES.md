@@ -8234,3 +8234,58 @@ late ticks, a long tick and the push, as it already was for a failed success rul
 reason. A blocked success is still saved in discarded/ and its seed re-offered.
 
 Tests, in parts (one process per test file, tools/test_train_policy.py one per test, temp on D:): **616 passed, 2 skipped, 0 failed**; tools/test_keypoint_recording.py SELFTEST PASS; `--invariance` CONFIRMED. The first pass had 1 failure, `test_every_relpath_call_site_goes_through_the_helper`: tools/test_revoke_episode.py (merged 8fc1a3c without a full-suite run) called `os.path.relpath` directly; fixed to `repo_relpath`. So `main` carried one failing test from 8fc1a3c until this merge.
+
+## 2026-11-18 — Deploy memory leak: the locomotion LSTM's autograd history (branch `fix-loco-graph-leak`)
+
+**Symptom.** Human seed-0 evaluation, bc_b256_human40_seed0 Exp 1: `deploy.py` died after 92/100 episodes (`DefaultCPUAllocator:
+not enough memory ... 51136 bytes` inside the locomotion LSTM), the automatic retry after 34 (`ValueError: engine error: Could not
+allocate memory` in `contact_contract.load_model`). act_orig_human40_seed0's selection then stopped in `best.jsonl` (KeyboardInterrupt).
+
+**Measured, per episode, one process set up as `deploy.main` (cap 1568, Exp 1 seeds).** Before: private bytes 1404 MB at setup,
+2056 -> 2786 MB over 8 BC episodes (stopped at 8: system free commit was down to 1.3 GB). A walking episode added ~140 MB and exactly
+3136 gc-tracked objects = 1568 ticks x 2 locomotion queries; an episode that locks early (seeds 241, 246; no queries while locked) added
+~0-40 MB and ~111 objects. In isolation: 3136 `motion.pt` calls leave 3137 `Tensor`s (the `[47]` observation bases) and +114 MB.
+The machine itself starts with little headroom: 329 processes hold 8.8 GB private, nonpaged pool 1.0 GB, commit 12.3 / 15.5 GB idle.
+
+**Cause.** `motion.pt`'s parameters require grad and every caller runs it with grad mode on. Each forward pass records a graph that
+saves its inputs, and `self.hidden_state[:] = h` (in place) chains it to the previous step's graph through the saved hidden state.
+`reset_policy_state` zeroed the buffers with `zero_()`, also in place, which KEEPS the history: the chain spanned every episode of the
+process and was never freed. (A graph walk over `next_functions` shows only 9 nodes - the chain runs through saved tensors.)
+
+**Fix** (`g1_data/reset.py`): `buf.detach_()` before `buf.zero_()`. Grad mode and the forward pass are unchanged; the history is cut
+at each reset, so memory holds at one episode's worth. After: BC 2049-2172 MB flat over 34 episodes, act_orig 2740-2816 MB over 30
+(+~2.5 MB/episode residual with a constant object count - allocator noise, ~0.25 GB per 100 episodes against ~14 GB before).
+Rejected: `torch.no_grad()` around the locomotion call (would remove the graph entirely, but could route the LSTM through a different
+kernel - not provably bit-identical); reusing one MjModel per process (an episode MUTATES the model: `eq_data` of both welds,
+`geom_contype`/`conaffinity` of the pads; and the model was not what leaked).
+
+**Proof that nothing changed.**
+- Re-run in one process, every result field compared with the row `main` (1501dbe) wrote (wall-clock fields and header excluded):
+  human BC ckpt_epoch0030 Exp 1, the 34 saved seeds: **34/34 identical**; human act_orig ckpt_step0200000 selection, 20 seeds:
+  **20/20**; scripted Exp 1 (recorded rows): bc_b256_n40_seed0 6/6, act_orig_n40_seed0 6/6 (incl. successes 252, 255, 261),
+  act_lstm_full_n40_seed0 6/6 (incl. successes 252, 255, 259). On the final code (after the `stored_path` change below): 9/9 again.
+- `tools/check_memory_design_regression.py --base main`, real checkpoints of all three human seed-0 runs and bc_b256 / act_orig /
+  act_lstm_full n40 seed 0: **ALL IDENTICAL, 16/16** (7 model configs, 3 old-format checkpoints, 6 real), before and after the
+  `stored_path` change. Report: runs/memory_design_regression_lococleanup_20261118.json.
+- New g1_data/test_reset_policy_state.py: the reset drops the history (a weakref to a fed input dies), buffers zero and detached, and
+  an episode after a reset is bit-identical to a fresh policy. Run against main's reset: 2 of 3 fail (the bit-identity one passes on
+  both, as it must).
+
+**Found on the way, both PRE-EXISTING on main (same counts with this branch's changes stashed):**
+1. `deploy.stored_path` (d9e85a3, 2026-11-17) split ABSOLUTE paths too and dropped the drive (`D:\tmp\x` -> `<repo>\tmp\x`): 17 tests
+   that build a temporary run failed - among them deploy's own determinism tests - and `check_memory_design_regression.py`'s probe
+   could not load its synthetic checkpoints on either side. **Fixed:** an absolute path is returned as stored. All 34 real runs store
+   repo-relative paths (102 of 102), which take the unchanged line. The regression probe now stores its synthetic run's paths relative
+   to its runs folder and points `deploy.ROOT` there while loading, so `main`'s code can load them too.
+2. `test_every_relpath_call_site_goes_through_the_helper` fails: raw `os.path.relpath` in tools/fetch_release_data.py:141,
+   tools/package_release_data.py:65, 258 (d9e85a3) and tools/human_runs.py:124 (777c797). **NOT fixed here** - the release packager's
+   output is hash-pinned in tools/release_manifest.json, and none of it is on the evaluation path. Open.
+
+**Resume, checked on a copy of the run and its eval folder** (`human_runs.evaluate("bc", 0)` with a scratch root, stopped after 3
+episodes): `selection.json exists: ckpt_epoch0030.pt`, no selection deploys (11 files kept), `exp1.jsonl.part` deleted and redone
+from seed 240; the 3 episodes identical to the saved ones.
+
+**Tests, in parts** (one process per file, tools/test_train_policy.py one per test, temp on D:), final code: **626 passed, 2 skipped,
+1 failed** - the relpath lint test (item 2 above, fails identically on main); tools/test_keypoint_recording.py SELFTEST PASS. Four
+parts (test_act, test_act_memory, test_memory_design, one train_policy test) exit 127 with every test passed: the known cuDNN LSTM
+crash at exit (CLAUDE.md section 8, 2026-09-29). Before the `stored_path` fix the same run had 18 failures, all pre-existing.

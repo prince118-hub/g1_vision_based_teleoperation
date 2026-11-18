@@ -97,11 +97,22 @@ def reset_policy_state(policy) -> list:
     N-1's gait: the first actions differ, the robot starts from a different
     effective controller state, and nothing raises. Verified: zeroing these two
     buffers is what makes repeated runs bit-identical.
+
+    `detach_()` first (2026-11-18): the policy's parameters require grad and it
+    is called with grad mode on, so every forward pass records an autograd
+    graph that saves its inputs, and the in-place copy into these buffers
+    chains each step's graph to the previous one's. `zero_()` alone is also in
+    place, so it KEPT that history: the chain grew across every episode of a
+    process (~36 KB per locomotion query, ~140 MB per walking episode) until
+    MuJoCo or torch could not allocate (human seed-0 evaluation, 92 then 34
+    episodes). Detaching drops the history at each reset; the values, and the
+    forward pass itself (grad mode unchanged), are untouched.
     """
     cleared = []
     for name in RECURRENT_BUFFERS:
         buf = getattr(policy, name, None)
         if buf is not None:
+            buf.detach_()
             buf.zero_()
             cleared.append(name)
     return cleared
