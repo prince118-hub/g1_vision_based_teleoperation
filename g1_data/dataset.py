@@ -264,6 +264,41 @@ def assert_uniform_grip_label(eps: Sequence[Episode]) -> None:
         % (spec.GRIP_LABEL, "\n  ".join(lines)))
 
 
+def assert_uniform_velocity_label(eps: Sequence[Episode]) -> str:
+    """One velocity label across the episodes, or raise naming the groups. Returns it.
+
+    2026-11-19 (a test, not adopted): the walking dims 19-21 may carry the
+    recorded command (`spec.VELOCITY_LABEL_COMMAND`, also every file without the
+    field) or its smoothed relabel (`tools/convert_velocity_label.py`). A mix
+    would train one set of dims on two meanings.
+    """
+    groups: Dict[str, List[Episode]] = {}
+    for e in eps:
+        groups.setdefault(spec.velocity_label_of(e.meta, where=os.path.basename(e.path)), []).append(e)
+    if len(groups) > 1:
+        lines = ["%s: %d episode(s), e.g. %s" % (k, len(v), os.path.basename(v[0].path))
+                 for k, v in sorted(groups.items())]
+        raise DatasetError("this dataset mixes walking-velocity labels - dims 19-21 mean "
+                           "different things across it; do not split, normalize or train "
+                           "across a mix:\n  " + "\n  ".join(lines))
+    return next(iter(groups)) if groups else spec.VELOCITY_LABEL_COMMAND
+
+
+def assert_norm_velocity_label(meta: dict, label: str, where: str = "") -> None:
+    """The normalizer was fitted on episodes with velocity label `label`, or raise.
+
+    A stats file without the field predates it and was fitted on the recorded
+    command. Smoothing changes the walking dims' mean and std, so a normalizer
+    from the other label scales every walking target wrongly without an error.
+    """
+    tag = (" (" + where + ")") if where else ""
+    got = meta.get("velocity_label", spec.VELOCITY_LABEL_COMMAND)
+    if got != label:
+        raise DatasetError(
+            "normalization stats%s were fitted on velocity label %r; the episodes carry %r. "
+            "Fit the stats on these episodes (tools/build_dataset.py norm)." % (tag, got, label))
+
+
 def heldout_leak(eps: Sequence[Episode], box_cfg=None) -> List[int]:
     """Seeds whose spawn falls inside the Objective 4 held-out patch."""
     from g1_teleop.box_reset import in_heldout
@@ -623,7 +658,8 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
 
 def save_norm_stats(state, action, path: str = NORM_STATS, source: str = "real",
                     n_episodes: int = 0, seeds: Optional[Sequence[int]] = None,
-                    split: Optional[str] = None) -> str:
+                    split: Optional[str] = None,
+                    velocity_label: Optional[str] = None) -> str:
     """Write the stats WITH the provenance needed to check them later.
 
     The file used to carry four fields - spec version, split, source, episode
@@ -647,6 +683,12 @@ def save_norm_stats(state, action, path: str = NORM_STATS, source: str = "real",
                 git_commit=_git_commit(),
                 # O33: the floor these stats were fitted under. Checked on load.
                 std_floor=float(spec.NormStats.STD_FLOOR))
+    if velocity_label is not None:
+        # 2026-11-19: what dims 19-21 held when fitted (assert_norm_velocity_label).
+        # Absent = the recorded command, so files fitted before keep their meaning.
+        if velocity_label not in spec.VELOCITY_LABELS:
+            raise DatasetError("unknown velocity_label %r" % (velocity_label,))
+        meta["velocity_label"] = velocity_label
     np.savez(path, state_mean=state.mean, state_std=state.std,
              action_mean=action.mean, action_std=action.std,
              meta=np.array(json.dumps(meta)))

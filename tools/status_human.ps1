@@ -1,6 +1,8 @@
 # Status of every human-data run and evaluation: done / not started / incomplete / running.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\status_human.ps1
+#   powershell -ExecutionPolicy Bypass -File tools\status_human.ps1 -Data human_v2
+param([ValidateSet("human_v1", "human_v2")][string]$Data = "human_v1")
 Set-Location (Split-Path -Parent $PSScriptRoot)
-& python -u tools\human_runs.py status
+& python -u tools\human_runs.py status --data $Data
 exit $LASTEXITCODE
