@@ -64,7 +64,7 @@ from g1_data import dataset as DS
 from g1_data import spec
 from g1_data.paths import repo_relpath
 from g1_model.loader import ChunkDataset, LoaderConfig, TrackingPolicy
-from g1_model.models import (K_PROVISIONAL, PROVISIONAL, BCConfig,
+from g1_model.models import (K_PROVISIONAL, PROVISIONAL, BCConfig, BCFeatureConfig,
                              BCPolicy, build_bc)
 from g1_model import ambiguity as AMB
 from g1_model.act import ACTConfig, build_act
@@ -171,9 +171,11 @@ def _model_config(kind, K, W, batch, gate, state_dim=spec.STATE_DIM):
                        weight_decay=0.0 if gate else ACT_WD,
                        use_lstm=(kind == AM.ACT_LSTM_FULL), state_dim=int(state_dim))
     if kind == "bc":
-        return BCConfig(obs_window=int(W), chunk_size=K, batch_size=int(batch),
-                        state_dim=int(state_dim),
-                        **(dict(dropout=0.0, weight_decay=0.0) if gate else {}))
+        extra = dict(dropout=0.0, weight_decay=0.0) if gate else {}
+        if int(state_dim) != spec.STATE_DIM:          # a non-raw observation (spec.STATE_FEATURES)
+            return BCFeatureConfig(obs_window=int(W), chunk_size=K, batch_size=int(batch),
+                                   state_dim=int(state_dim), **extra)
+        return BCConfig(obs_window=int(W), chunk_size=K, batch_size=int(batch), **extra)
     if kind in ("act", "act_lstm"):
         from g1_model.act import LR as ACT_LR, WEIGHT_DECAY as ACT_WD
         # lr is ACT's published 1e-5 (README.md:77). weight_decay is the

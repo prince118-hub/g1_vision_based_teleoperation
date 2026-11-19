@@ -191,11 +191,15 @@ def test_robot_frame_norm_round_trips_and_widths_are_enforced(tmp_path):
 
 
 def test_bc_config_and_hparams_omit_state_dim_at_48():
-    from g1_model.models import BCConfig, build_bc
+    import dataclasses
+    from g1_model.models import BCConfig, BCFeatureConfig, build_bc
     c = BCConfig(obs_window=12, chunk_size=1)
+    assert "state_dim" not in dataclasses.asdict(c) and c.state_dim == 48
     assert "state_dim" not in c.as_metadata()
     assert "state_dim" not in build_bc(cfg=c).hparams
-    c56 = BCConfig(obs_window=12, chunk_size=1, state_dim=56)
+    with pytest.raises(ValueError):
+        BCFeatureConfig(obs_window=12, chunk_size=1, state_dim=48)
+    c56 = BCFeatureConfig(obs_window=12, chunk_size=1, state_dim=56)
     assert c56.as_metadata()["state_dim"] == 56
     m = build_bc(cfg=c56)
     assert m.hparams["state_dim"] == 56
@@ -248,8 +252,8 @@ def _v3_run(kind, W, tmp):
     sp = DS.load_splits(V3_SPLITS)
     torch.manual_seed(0)
     if kind == "bc":
-        from g1_model.models import BCConfig, build_bc
-        model, K = build_bc(cfg=BCConfig(obs_window=W, chunk_size=1, hidden=(32,), state_dim=56)), 1
+        from g1_model.models import BCFeatureConfig, build_bc
+        model, K = build_bc(cfg=BCFeatureConfig(obs_window=W, chunk_size=1, hidden=(32,), state_dim=56)), 1
     else:
         from g1_model.act import ACTConfig, build_act
         K = 4

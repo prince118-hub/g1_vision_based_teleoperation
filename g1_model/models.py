@@ -70,10 +70,13 @@ class BCConfig:
     grad_clip: float = LADDER_GRAD_CLIP
 
     provisional: str = PROVISIONAL
-    #: Width of one observation (spec.state_dim_of; 2026-11-20). 48 = the raw
-    #: state, and then it is LEFT OUT of the metadata and hparams, so every BC
-    #: run and checkpoint before it reads back unchanged (absent = 48).
-    state_dim: int = spec.STATE_DIM
+
+    #: Width of one observation: the raw 48-D state. Not a field, so a raw BC
+    #: config is exactly the dataclass it was before 2026-11-20; a wider
+    #: observation uses `BCFeatureConfig`.
+    @property
+    def state_dim(self) -> int:
+        return spec.STATE_DIM
 
     def optimizer_config(self) -> dict:
         """The training hyperparameters BC declares for itself (TR28). Exactly
@@ -84,9 +87,21 @@ class BCConfig:
     def as_metadata(self) -> dict:
         d = asdict(self)
         d["hidden"] = list(self.hidden)
-        if int(self.state_dim) == spec.STATE_DIM:
-            del d["state_dim"]
         return d
+
+
+@dataclass(frozen=True)
+class BCFeatureConfig(BCConfig):
+    """BC on an observation wider than the raw state (spec.STATE_FEATURES,
+    2026-11-20): `BCConfig` plus its width, and nothing else. Used only for a
+    non-raw feature set, so every raw BC config is unchanged."""
+
+    state_dim: int = spec.STATE_DIM
+
+    def __post_init__(self):
+        if int(self.state_dim) <= spec.STATE_DIM:
+            raise ValueError("BCFeatureConfig is for observations wider than %d; got state_dim=%r "
+                             "(use BCConfig for the raw state)" % (spec.STATE_DIM, self.state_dim))
 
 
 _ACT = dict(relu=nn.ReLU, gelu=nn.GELU, tanh=nn.Tanh, silu=nn.SiLU)
