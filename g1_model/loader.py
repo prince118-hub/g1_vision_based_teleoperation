@@ -119,8 +119,7 @@ class ChunkDataset(Dataset):
         velocity_label = DS.assert_uniform_velocity_label(episodes)
         # 2026-11-20: ONE observation feature set (absent = the raw 48-D state);
         # the observation is spec.observation(recorded state), as deploy builds it.
-        self.state_features = DS.assert_uniform_state_features(episodes)
-        self.state_dim = spec.state_dim_of(self.state_features)
+        self._state_features = DS.assert_uniform_state_features(episodes)
         if state_norm.state_features != self.state_features:
             raise LoaderError(
                 "the state normalizer describes state_features %r; the episodes carry %r%s"
@@ -197,6 +196,21 @@ class ChunkDataset(Dataset):
         self.index, self.excluded_samples = self._build_index()
         self.build_seconds = time.perf_counter() - t0
 
+    # ---- the observation ---------------------------------------------------
+    @property
+    def state_features(self) -> str:
+        """The observation feature set (spec.STATE_FEATURES); raw for a dataset
+        assembled without __init__ (tools/bench_*, tests)."""
+        return getattr(self, "_state_features", spec.STATE_FEATURES_RAW)
+
+    @property
+    def state_dim(self) -> int:
+        """Width of one observation: the held states' own width when there are any."""
+        st = getattr(self, "states", None)
+        if st:
+            return int(st[0].shape[-1])
+        return spec.state_dim_of(self.state_features)
+
     # ---- construction helpers -------------------------------------------
     def _build_index(self) -> Tuple[np.ndarray, int]:
         """Every (episode, start tick) pair, in a fixed order; short end chunks are padded."""
@@ -257,7 +271,7 @@ class ChunkDataset(Dataset):
         n = self.lengths[ei]
 
         # B4. Observation window ENDING at t, left-padded at the episode start.
-        obs = np.zeros((W, self.state_dim), dtype=np.float32)
+        obs = np.zeros((W, S.shape[1]), dtype=np.float32)
         obs_mask = np.zeros(W, dtype=bool)
         lo = max(0, t - W + 1)
         got = S[lo:t + 1]

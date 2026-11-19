@@ -126,6 +126,14 @@ def _features_notes(features: str) -> dict:
                 state_features_rule=spec.STATE_FEATURES[features]["rule"])
 
 
+def _width_kw(features: str) -> dict:
+    """`_model_config`'s width argument: {} for raw, so a raw run calls it exactly
+    as before 2026-11-20 (absent = 48)."""
+    if features == spec.STATE_FEATURES_RAW:
+        return {}
+    return dict(state_dim=spec.state_dim_of(features))
+
+
 def _check_width(ds, mcfg) -> None:
     """The model is built for the loader's observation width, or refuse."""
     want = int(getattr(mcfg, "state_dim", spec.STATE_DIM))
@@ -440,8 +448,7 @@ def cmd_overfit10(a):
     """
     K = int(a.chunk)
     feats = _observation_features()
-    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=True,
-                         state_dim=spec.state_dim_of(feats))
+    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=True, **_width_kw(feats))
     tr, _ = _splits()
     seeds = tr[:10]
     st, ac, meta = DS.load_norm_stats(DATA["norm"])
@@ -543,8 +550,7 @@ def cmd_full(a, purpose="plumbing"):
     out_dir = _out_dir(a)        # refused here, before minutes of data loading
     K = int(a.chunk)
     feats = _observation_features()
-    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=False,
-                         state_dim=spec.state_dim_of(feats))
+    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=False, **_width_kw(feats))
     tr, va = _splits()
     st, ac, meta = DS.load_norm_stats(DATA["norm"])
     tds = _load(tr, mcfg, meta)
