@@ -299,6 +299,38 @@ def assert_norm_velocity_label(meta: dict, label: str, where: str = "") -> None:
             "Fit the stats on these episodes (tools/build_dataset.py norm)." % (tag, got, label))
 
 
+def assert_uniform_state_features(eps: Sequence[Episode]) -> str:
+    """One observation feature set across the episodes, or raise naming the groups. Returns it.
+
+    2026-11-20 ("fix #1"): an episode may declare `state_features` (absent =
+    `spec.STATE_FEATURES_RAW`, the recorded 48-D state). The observation is
+    computed from the recorded state by `spec.observation`; a mix would build
+    observations of two widths from one dataset.
+    """
+    groups: Dict[str, List[Episode]] = {}
+    for e in eps:
+        groups.setdefault(spec.state_features_of(e.meta, where=os.path.basename(e.path)), []).append(e)
+    if len(groups) > 1:
+        lines = ["%s: %d episode(s), e.g. %s" % (k, len(v), os.path.basename(v[0].path))
+                 for k, v in sorted(groups.items())]
+        raise DatasetError("this dataset mixes observation feature sets - the policy input "
+                           "would mean different things across it; do not split, normalize "
+                           "or train across a mix:\n  " + "\n  ".join(lines))
+    return next(iter(groups)) if groups else spec.STATE_FEATURES_RAW
+
+
+def assert_norm_state_features(meta: dict, features: str, where: str = "") -> None:
+    """The normalizer was fitted on observations of feature set `features`, or raise.
+
+    A stats file without the field predates it and describes the raw 48-D state."""
+    tag = (" (" + where + ")") if where else ""
+    got = spec.state_features_of(meta, where=where)
+    if got != features:
+        raise DatasetError(
+            "normalization stats%s were fitted on state_features %r; the episodes carry %r. "
+            "Fit the stats on these episodes (tools/build_dataset.py norm)." % (tag, got, features))
+
+
 def heldout_leak(eps: Sequence[Episode], box_cfg=None) -> List[int]:
     """Seeds whose spawn falls inside the Objective 4 held-out patch."""
     from g1_teleop.box_reset import in_heldout
@@ -626,10 +658,13 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
             "allow_synthetic=True to do this deliberately, and the stats file "
             "will say so." % (len(synth), len(eps),
                               ", ".join(sorted({str(e.meta.get("source")) for e in synth}))))
+    # 2026-11-20: the state stats describe the OBSERVATION (spec.observation),
+    # which for raw48_v1 is the recorded state itself.
+    features = assert_uniform_state_features(eps)
     S, A = [], []
     for e in eps:
         arrays, _ = e.load()
-        S.append(np.asarray(arrays["states"], dtype=np.float64))
+        S.append(spec.observation(np.asarray(arrays["states"], dtype=np.float64), features))
         A.append(np.asarray(arrays["actions"], dtype=np.float64))
     S, A = np.concatenate(S), np.concatenate(A)
     assert_masked_actions_constant(A, where="%d %s episodes" % (len(eps), split))
@@ -638,7 +673,7 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
                           "synthetic" if len(synth) == len(eps) else "mixed"),
                   split=split, seeds=sorted(e.seed for e in eps))
 
-    def _stats(X, kind, mask):
+    def _stats(X, kind, mask, features=spec.STATE_FEATURES_RAW):
         mean, std = X.mean(axis=0), X.std(axis=0)
         raw_std = std.copy()
         # Masked dims are the identity, exactly (NormStats enforces it too).
@@ -647,9 +682,10 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
         floored = [int(i) for i in np.flatnonzero(mask & (std < spec.NormStats.STD_FLOOR))]
         std = np.where(mask & (std < spec.NormStats.STD_FLOOR),
                        spec.NormStats.STD_FLOOR, std)
-        return spec.NormStats(kind=kind, mean=mean, std=std, split=split), raw_std, floored
+        return (spec.NormStats(kind=kind, mean=mean, std=std, split=split,
+                               state_features=features), raw_std, floored)
 
-    st, st_raw, st_floor = _stats(S, "state", spec.STATE_MASK)
+    st, st_raw, st_floor = _stats(S, "state", spec.state_mask_of(features), features)
     ac, ac_raw, ac_floor = _stats(A, "action", spec.ACTION_MASK)
     report.update(state_raw_std=st_raw, action_raw_std=ac_raw,
                   state_floored=st_floor, action_floored=ac_floor)
@@ -659,7 +695,8 @@ def fit_norm_stats(eps: Sequence[Episode], split: str,
 def save_norm_stats(state, action, path: str = NORM_STATS, source: str = "real",
                     n_episodes: int = 0, seeds: Optional[Sequence[int]] = None,
                     split: Optional[str] = None,
-                    velocity_label: Optional[str] = None) -> str:
+                    velocity_label: Optional[str] = None,
+                    state_features: Optional[str] = None) -> str:
     """Write the stats WITH the provenance needed to check them later.
 
     The file used to carry four fields - spec version, split, source, episode
@@ -689,6 +726,15 @@ def save_norm_stats(state, action, path: str = NORM_STATS, source: str = "real",
         if velocity_label not in spec.VELOCITY_LABELS:
             raise DatasetError("unknown velocity_label %r" % (velocity_label,))
         meta["velocity_label"] = velocity_label
+    # 2026-11-20: the observation the STATE stats describe. Written only when it
+    # is not raw, so a raw file is the file it always was (absent = raw).
+    feats = state_features if state_features is not None else state.state_features
+    if feats != state.state_features:
+        raise DatasetError("state_features %r does not match the state stats' %r"
+                           % (feats, state.state_features))
+    if feats != spec.STATE_FEATURES_RAW:
+        spec.state_dim_of(feats)                       # raises on an unknown set
+        meta["state_features"] = feats
     np.savez(path, state_mean=state.mean, state_std=state.std,
              action_mean=action.mean, action_std=action.std,
              meta=np.array(json.dumps(meta)))
@@ -725,7 +771,8 @@ def load_norm_stats(path: str = NORM_STATS):
         spec.assert_spec_version(meta["spec_version"], where=os.path.basename(path))
         assert_std_floor(meta, where=os.path.basename(path))
         st = spec.NormStats(kind="state", mean=z["state_mean"], std=z["state_std"],
-                            split=meta["split"])
+                            split=meta["split"],
+                            state_features=spec.state_features_of(meta, where=os.path.basename(path)))
         ac = spec.NormStats(kind="action", mean=z["action_mean"], std=z["action_std"],
                             split=meta["split"])
     return st, ac, meta

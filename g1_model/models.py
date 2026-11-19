@@ -70,6 +70,10 @@ class BCConfig:
     grad_clip: float = LADDER_GRAD_CLIP
 
     provisional: str = PROVISIONAL
+    #: Width of one observation (spec.state_dim_of; 2026-11-20). 48 = the raw
+    #: state, and then it is LEFT OUT of the metadata and hparams, so every BC
+    #: run and checkpoint before it reads back unchanged (absent = 48).
+    state_dim: int = spec.STATE_DIM
 
     def optimizer_config(self) -> dict:
         """The training hyperparameters BC declares for itself (TR28). Exactly
@@ -80,6 +84,8 @@ class BCConfig:
     def as_metadata(self) -> dict:
         d = asdict(self)
         d["hidden"] = list(self.hidden)
+        if int(self.state_dim) == spec.STATE_DIM:
+            del d["state_dim"]
         return d
 
 
@@ -95,7 +101,8 @@ class BCPolicy(nn.Module):
 
     def __init__(self, obs_window: int, chunk_size: int,
                  hidden: Tuple[int, ...] = (512, 512), activation: str = "relu",
-                 dropout: float = 0.0, layer_norm: bool = False):
+                 dropout: float = 0.0, layer_norm: bool = False,
+                 state_dim: int = spec.STATE_DIM):
         super().__init__()
         if int(chunk_size) < 1:
             raise ValueError("chunk_size must be >= 1, got %r" % (chunk_size,))
@@ -111,8 +118,11 @@ class BCPolicy(nn.Module):
                             chunk_size=int(chunk_size),
                             hidden=tuple(hidden), activation=activation,
                             dropout=float(dropout), layer_norm=bool(layer_norm))
+        self.state_dim = int(state_dim)
+        if self.state_dim != spec.STATE_DIM:            # absent = 48 (BCConfig.state_dim)
+            self.hparams["state_dim"] = self.state_dim
 
-        in_dim = self.obs_window * spec.STATE_DIM
+        in_dim = self.obs_window * self.state_dim
         layers, d = [], in_dim
         for h in hidden:
             layers.append(nn.Linear(d, h))
@@ -139,10 +149,10 @@ class BCPolicy(nn.Module):
                 else dict(self._declared_training))
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        """(B, W_o, 48) -> (B, K, 22)."""
-        if obs.dim() != 3 or obs.shape[-1] != spec.STATE_DIM:
+        """(B, W_o, state_dim) -> (B, K, 22)."""
+        if obs.dim() != 3 or obs.shape[-1] != self.state_dim:
             raise ValueError("obs must be (B, W_o, %d), got %s"
-                             % (spec.STATE_DIM, tuple(obs.shape)))
+                             % (self.state_dim, tuple(obs.shape)))
         if obs.shape[1] != self.obs_window:
             raise ValueError(
                 "this policy was built for obs_window=%d but was given %d. W_o "
@@ -170,6 +180,7 @@ def build_bc(cfg: BCConfig = None, **kw) -> BCPolicy:
     if cfg is not None:
         return BCPolicy(obs_window=cfg.obs_window, chunk_size=cfg.chunk_size,
                         hidden=cfg.hidden, activation=cfg.activation,
-                        dropout=cfg.dropout, layer_norm=cfg.layer_norm
+                        dropout=cfg.dropout, layer_norm=cfg.layer_norm,
+                        state_dim=cfg.state_dim
                         ).declare_training(cfg.optimizer_config())
     return BCPolicy(**kw)

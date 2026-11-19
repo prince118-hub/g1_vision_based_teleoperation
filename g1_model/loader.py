@@ -117,6 +117,15 @@ class ChunkDataset(Dataset):
         # 2026-11-19: dims 19-21 hold ONE velocity label (absent = the recorded
         # command), and the normalizer was fitted on that label.
         velocity_label = DS.assert_uniform_velocity_label(episodes)
+        # 2026-11-20: ONE observation feature set (absent = the raw 48-D state);
+        # the observation is spec.observation(recorded state), as deploy builds it.
+        self.state_features = DS.assert_uniform_state_features(episodes)
+        self.state_dim = spec.state_dim_of(self.state_features)
+        if state_norm.state_features != self.state_features:
+            raise LoaderError(
+                "the state normalizer describes state_features %r; the episodes carry %r%s"
+                % (state_norm.state_features, self.state_features,
+                   (" (" + where + ")") if where else ""))
 
         # A3: a normalizer from another split loads without complaint and shifts
         # every input by a constant. This is the only place that can notice.
@@ -126,6 +135,7 @@ class ChunkDataset(Dataset):
                 list(norm_fit_seeds) if norm_fit_seeds is not None else episodes,
                 where=where or "norm stats")
             DS.assert_norm_velocity_label(norm_meta, velocity_label, where=where or "norm stats")
+            DS.assert_norm_state_features(norm_meta, self.state_features, where=where or "norm stats")
 
         # ─── B1: read everything, once ───────────────────────────────────────
         # why: see DESIGN_NOTES.md#loader-in-memory
@@ -162,8 +172,9 @@ class ChunkDataset(Dataset):
             self.real_demonstration.append(bool(info["real"]))
             # why: see DESIGN_NOTES.md#loader-normalization
             self.states.append(
-                self.state_norm.normalize(
-                    np.asarray(arrays["states"], dtype=np.float64)
+                self.state_norm.normalize(spec.observation(
+                    np.asarray(arrays["states"], dtype=np.float64),
+                    self.state_features)
                 ).astype(np.float32))
             self.actions.append(
                 self.action_norm.normalize(
@@ -246,7 +257,7 @@ class ChunkDataset(Dataset):
         n = self.lengths[ei]
 
         # B4. Observation window ENDING at t, left-padded at the episode start.
-        obs = np.zeros((W, spec.STATE_DIM), dtype=np.float32)
+        obs = np.zeros((W, self.state_dim), dtype=np.float32)
         obs_mask = np.zeros(W, dtype=bool)
         lo = max(0, t - W + 1)
         got = S[lo:t + 1]
@@ -288,6 +299,8 @@ class ChunkDataset(Dataset):
             excluded_samples=int(self.excluded_samples),
             dropped_episodes=list(self.dropped_episodes),
             norm_split=self.state_norm.split,
+            **({} if self.state_features == spec.STATE_FEATURES_RAW
+               else dict(state_features=self.state_features, state_dim=self.state_dim)),
             norm_source=(self.norm_meta or {}).get("source", "unverified"),
             bytes_in_ram=int(sum(a.nbytes for a in self.states)
                              + sum(a.nbytes for a in self.actions)),

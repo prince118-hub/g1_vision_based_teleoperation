@@ -267,6 +267,7 @@ def cmd_split(a):
     DS.assert_uniform_lock_rule(eps)
     DS.assert_uniform_grip_label(eps)
     DS.assert_uniform_velocity_label(eps)
+    DS.assert_uniform_state_features(eps)
     DS.assert_successful(eps)
     DS.assert_no_leak(eps)
     led = EpisodeLedger(a.ledger)
@@ -321,6 +322,7 @@ def cmd_norm(a):
     DS.assert_uniform_lock_rule(eps)
     DS.assert_uniform_grip_label(eps)
     velocity_label = DS.assert_uniform_velocity_label(eps)
+    state_features = DS.assert_uniform_state_features(eps)
     DS.assert_successful(eps)
     sp_path = _splits_path(a)
     if os.path.exists(sp_path):
@@ -339,7 +341,8 @@ def cmd_norm(a):
                                     allow_synthetic=a.allow_synthetic)
     DS.save_norm_stats(st, ac, path=_norm_path(a), source=rep["source"],
                        n_episodes=rep["n_episodes"], seeds=rep["seeds"],
-                       split=rep["split"], velocity_label=velocity_label)
+                       split=rep["split"], velocity_label=velocity_label,
+                       state_features=state_features)
     print("fitted on %d TRAIN episodes (%d ticks), source=%s"
           % (rep["n_episodes"], rep["n_ticks"], rep["source"]))
     print("saved %s" % repo_relpath(_norm_path(a)))
@@ -354,11 +357,13 @@ def cmd_norm(a):
     # The provenance is only worth writing if something reads it back.
     DS.assert_norm_stats_match(meta, train, where=os.path.basename(_norm_path(a)))
     DS.assert_norm_velocity_label(meta, velocity_label, where=os.path.basename(_norm_path(a)))
-    print("  seed provenance matches the %d episode(s) just fitted on; velocity label %s"
-          % (len(train), velocity_label))
+    DS.assert_norm_state_features(meta, state_features, where=os.path.basename(_norm_path(a)))
+    print("  seed provenance matches the %d episode(s) just fitted on; velocity label %s; "
+          "state features %s (%d-D)" % (len(train), velocity_label, state_features,
+                                        spec.state_dim_of(state_features)))
     # round trip
     arrays, _ = train[0].load()
-    S = np.asarray(arrays["states"], dtype=np.float64)
+    S = spec.observation(np.asarray(arrays["states"], dtype=np.float64), state_features)
     A = np.asarray(arrays["actions"], dtype=np.float64)
     ds = float(np.abs(st2.denormalize(st2.normalize(S)) - S).max())
     da = float(np.abs(ac2.denormalize(ac2.normalize(A)) - A).max())
@@ -372,7 +377,8 @@ def cmd_norm(a):
 
     print("\nsmallest unmasked standard deviations (the z-scoring risk):")
     for kind, stats, raw, names, mask in (
-            ("state", st2, rep["state_raw_std"], spec.STATE_NAMES, spec.STATE_MASK),
+            ("state", st2, rep["state_raw_std"], spec.state_names_of(state_features),
+             spec.state_mask_of(state_features)),
             ("action", ac2, rep["action_raw_std"], spec.ACTION_NAMES, spec.ACTION_MASK)):
         idx = [i for i in np.argsort(raw) if mask[i]][:5]
         for i in idx:
@@ -386,8 +392,8 @@ def cmd_norm(a):
         print("  state dim %d (%s) is the BINARY weld bit: mean %.3f, std %.3f -> "
               "z-scores %.2f (released) and %.2f (welded)"
               % (i, spec.STATE_NAMES[i], st2.mean[i], st2.std[i],
-                 float(st2.normalize(np.zeros(spec.STATE_DIM))[i]),
-                 float(st2.normalize(np.eye(spec.STATE_DIM)[i])[i])))
+                 float(st2.normalize(np.zeros(st2.mean.shape[0]))[i]),
+                 float(st2.normalize(np.eye(st2.mean.shape[0])[i])[i])))
     return 0
 
 

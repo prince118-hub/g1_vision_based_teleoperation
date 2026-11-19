@@ -163,6 +163,17 @@ class CheckpointPolicy:
         DS.assert_norm_stats_match(self.norm_meta, run_train_seeds(meta),
                                    where="%s vs %s" % (repo_relpath(self.norm_path),
                                                        repo_relpath(run_dir)))
+        # 2026-11-20: the OBSERVATION is the normalizer's feature set (absent =
+        # the raw 48-D state), built from the recorded-layout state by
+        # spec.observation - the function the loader trained on. The run's own
+        # metadata (written only for a non-raw set) must agree with it.
+        self.features = self.st.state_features
+        run_feats = notes.get("state_features", spec.STATE_FEATURES_RAW)
+        if run_feats != self.features:
+            raise SystemExit("run %s was trained on state_features %r; its normalizer %s "
+                             "describes %r" % (repo_relpath(run_dir), run_feats,
+                                               repo_relpath(self.norm_path), self.features))
+        self.state_dim = spec.state_dim_of(self.features)
         self.ckpt_path = os.path.join(run_dir, ckpt)
         ck = torch.load(self.ckpt_path, map_location="cpu", weights_only=False)
         factory, _ = TB._factory_for(ck)
@@ -172,6 +183,12 @@ class CheckpointPolicy:
         if int((kw.get("cfg") or kw)["chunk_size"]) != self.K:
             raise SystemExit("checkpoint chunk_size %r != run metadata %r"
                              % ((kw.get("cfg") or kw)["chunk_size"], self.K))
+        cfg_kw = kw.get("cfg") or kw
+        model_dim = int(cfg_kw.get("state_dim", spec.STATE_DIM))   # absent = 48 (BC)
+        if model_dim != self.state_dim:
+            raise SystemExit("checkpoint %s takes %d-D observations; state_features %r gives %d-D"
+                             % (repo_relpath(self.ckpt_path), model_dim, self.features,
+                                self.state_dim))
         self.device = device or T.select_device()
         self.model = model.to(self.device).eval()
         # act_lstm_full (g1_model/act_memory.py) reads the whole episode: its
@@ -198,17 +215,30 @@ class CheckpointPolicy:
                     if self.ensemble else None)
         self.name = "%s/%s" % (os.path.basename(os.path.normpath(run_dir)), ckpt)
 
+    def check_goal(self, model) -> None:
+        """A robot-frame policy's goal constant is the compiled scene's goal, or refuse."""
+        if self.features == spec.STATE_FEATURES_RAW:
+            return
+        g = np.asarray(PlatformGeometry.resolve(model).goal_xy, dtype=np.float64)
+        if not np.array_equal(g, np.asarray(spec.GOAL_XY, dtype=np.float64)):
+            raise SystemExit("scene goal %s != spec.GOAL_XY %s: the robot-frame features "
+                             "would point at the wrong place" % (g.tolist(), list(spec.GOAL_XY)))
+
     def reset(self) -> None:
-        self.window = np.zeros((self.W, spec.STATE_DIM), dtype=np.float32)
+        self.window = np.zeros((self.W, self.state_dim), dtype=np.float32)
         self.memory = None                          # a recurrent policy's (h, c): tick 0
         if self.ens is not None:
             self.ens.reset()
 
     def act(self, state, t: int) -> np.ndarray:
-        """Raw 48-D state -> denormalized 22-D action (before post_process)."""
+        """Raw 48-D state -> denormalized 22-D action (before post_process).
+
+        The observation is spec.observation(state as the recorder stores it),
+        the loader's function; for raw48_v1 that is the state itself."""
         torch = self.torch
         s32 = np.asarray(state, dtype=np.float32)            # as the recorder stores it
-        z = self.st.normalize(s32.astype(np.float64)).astype(np.float32)
+        x = spec.observation(s32.astype(np.float64), self.features)
+        z = self.st.normalize(x).astype(np.float32)
         self.window = np.concatenate([self.window[1:], z[None]], axis=0)
         obs = torch.from_numpy(self.window).unsqueeze(0).to(self.device)
         with torch.no_grad():
@@ -467,6 +497,8 @@ def deploy_episode(seed: int, policy, loco=None, cfg: Optional[TeleopConfig] = N
     demo_cfg = DemoConfig()
     scripted_ticks = 0
     walk_cmd = np.zeros(3)      # the scripted command IN FORCE (zero before the first query)
+    if hasattr(policy, "check_goal"):
+        policy.check_goal(m)    # robot-frame features: spec.GOAL_XY is this scene's goal
     policy.reset()
 
     states: List[np.ndarray] = []
@@ -814,6 +846,8 @@ def main(argv=None):
                   determinism=det.get("notes") if isinstance(det, dict) else None)
     if cap_rule is not None:                            # --max-ticks-from only
         header["max_ticks_rule"] = cap_rule
+    if policy.features != spec.STATE_FEATURES_RAW:     # robot-frame observation only
+        header["state_features"] = policy.features
     if policy.recurrent:                                # act_lstm_full only
         header["lstm_memory"] = ("(h, c) carried tick by tick from a zero state, reset "
                                  "per episode (g1_model/act_memory.py)")

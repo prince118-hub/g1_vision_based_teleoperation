@@ -110,7 +110,31 @@ def _load(seeds, mcfg, norm_meta, norm_fit_seeds=None) -> ChunkDataset:
         norm_fit_seeds=norm_fit_seeds)
 
 
-def _model_config(kind, K, W, batch, gate):
+def _observation_features() -> str:
+    """The observation feature set of the run's normalizer (spec.STATE_FEATURES;
+    absent = raw 48-D). The loader refuses episodes that disagree with it."""
+    st, _, _ = DS.load_norm_stats(DATA["norm"])
+    return st.state_features
+
+
+def _features_notes(features: str) -> dict:
+    """Run-metadata notes for a non-raw observation; {} for raw, so every raw
+    run's metadata is what it was before 2026-11-20 (absent = raw)."""
+    if features == spec.STATE_FEATURES_RAW:
+        return {}
+    return dict(state_features=features, state_dim=spec.state_dim_of(features),
+                state_features_rule=spec.STATE_FEATURES[features]["rule"])
+
+
+def _check_width(ds, mcfg) -> None:
+    """The model is built for the loader's observation width, or refuse."""
+    want = int(getattr(mcfg, "state_dim", spec.STATE_DIM))
+    if int(ds.state_dim) != want:
+        raise SystemExit("the model is built for %d-D observations; the data (%s) gives %d-D"
+                         % (want, ds.state_features, ds.state_dim))
+
+
+def _model_config(kind, K, W, batch, gate, state_dim=spec.STATE_DIM):
     """Each model STATES its own optimizer settings (TR28).
 
     The runner shares the training LOOP. It never shares a hyperparameter source:
@@ -145,9 +169,10 @@ def _model_config(kind, K, W, batch, gate):
         cfg_cls = AM.ACTFullHistoryConfig if kind == AM.ACT_LSTM_FULL else ACTConfig
         return cfg_cls(obs_window=AM.ORIGINAL_OBS_WINDOW, chunk_size=K, lr=ACT_LR,
                        weight_decay=0.0 if gate else ACT_WD,
-                       use_lstm=(kind == AM.ACT_LSTM_FULL))
+                       use_lstm=(kind == AM.ACT_LSTM_FULL), state_dim=int(state_dim))
     if kind == "bc":
         return BCConfig(obs_window=int(W), chunk_size=K, batch_size=int(batch),
+                        state_dim=int(state_dim),
                         **(dict(dropout=0.0, weight_decay=0.0) if gate else {}))
     if kind in ("act", "act_lstm"):
         from g1_model.act import LR as ACT_LR, WEIGHT_DECAY as ACT_WD
@@ -162,7 +187,7 @@ def _model_config(kind, K, W, batch, gate):
         # reason ACT's 0.1 is.
         return ACTConfig(obs_window=int(W), chunk_size=K, lr=ACT_LR,
                          weight_decay=0.0 if gate else ACT_WD,
-                         use_lstm=(kind == "act_lstm"))
+                         use_lstm=(kind == "act_lstm"), state_dim=int(state_dim))
     raise SystemExit("unknown --model %r (bc|act|act_lstm|%s)"
                      % (kind, "|".join(AM.MEMORY_DESIGN_MODELS)))
 
@@ -412,11 +437,14 @@ def cmd_overfit10(a):
     prediction target changed.
     """
     K = int(a.chunk)
-    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=True)
+    feats = _observation_features()
+    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=True,
+                         state_dim=spec.state_dim_of(feats))
     tr, _ = _splits()
     seeds = tr[:10]
     st, ac, meta = DS.load_norm_stats(DATA["norm"])
     ds = _load(seeds, mcfg, meta, norm_fit_seeds=tr)
+    _check_width(ds, mcfg)
     name = ("ACT (K=%d)" % K if a.model == "act"
             else "ACT-LSTM (K=%d)" % K if a.model == "act_lstm"
             else "%s (K=%d)" % (a.model, K) if a.model in AM.MEMORY_DESIGN_MODELS
@@ -462,7 +490,7 @@ def cmd_overfit10(a):
                    ambiguity_reference=ref.as_metadata(),
                    provisional_hyperparameters=PROVISIONAL,
                    data_caveat=T.dataset_provenance(ds)["caveat"],
-                   data_paths=_data_paths(),
+                   data_paths=_data_paths(), **_features_notes(feats),
                    regularization=regularization_statement(mcfg)))
     model = _make_model(mcfg, cfg)
     assert_regularization_matches(model, mcfg)
@@ -512,11 +540,15 @@ def cmd_full(a, purpose="plumbing"):
     mechanic identical, only the metadata's statement of purpose differs."""
     out_dir = _out_dir(a)        # refused here, before minutes of data loading
     K = int(a.chunk)
-    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=False)
+    feats = _observation_features()
+    mcfg = _model_config(a.model, K, a.obs_window, a.batch, gate=False,
+                         state_dim=spec.state_dim_of(feats))
     tr, va = _splits()
     st, ac, meta = DS.load_norm_stats(DATA["norm"])
     tds = _load(tr, mcfg, meta)
     vds = _load(va, mcfg, meta, norm_fit_seeds=tr)
+    _check_width(tds, mcfg)
+    _check_width(vds, mcfg)
     assert not (set(tds.seeds) & set(vds.seeds)), "train and val share a seed"
     _banner(tds, "%s: %d train episodes, %d val episodes (%s, K=%d, W_o=%d)"
             % ("TRAINING RUN" if purpose == "train" else "FULL SPLIT",
@@ -571,7 +603,7 @@ def cmd_full(a, purpose="plumbing"):
                    ambiguity_reference_val=ref_va.as_metadata(),
                    provisional_hyperparameters=PROVISIONAL,
                    data_caveat=T.dataset_provenance(tds)["caveat"],
-                   data_paths=_data_paths()))
+                   data_paths=_data_paths(), **_features_notes(feats)))
     model = _make_model(mcfg, cfg)
     assert_regularization_matches(model, mcfg)
     res = T.train(model, tds, cfg, val_ds=vds, resume=_resume_arg(a),
