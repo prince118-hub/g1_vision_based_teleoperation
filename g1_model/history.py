@@ -14,6 +14,10 @@ from g1_data import spec
 from g1_model.loader import ChunkDataset, LoaderError, collate_chunks
 
 
+#: Observation widths this build produces (spec.STATE_FEATURES).
+_WIDTHS = frozenset(int(v["dim"]) for v in spec.STATE_FEATURES.values())
+
+
 class _CurrentWindow:
     """The current window as `ACTPolicy` reads its `obs`; nothing else is delegated."""
 
@@ -46,12 +50,14 @@ class HistoryObs(_CurrentWindow):
 
     def __init__(self, current: torch.Tensor, history: torch.Tensor,
                  lengths: torch.Tensor):
-        if current.dim() != 3 or current.shape[-1] != spec.STATE_DIM:
-            raise ValueError("current must be (B, W_o, %d), got %s"
-                             % (spec.STATE_DIM, tuple(current.shape)))
-        if history.dim() != 3 or history.shape[-1] != spec.STATE_DIM:
+        # The width is the observation's (spec.state_dim_of): 48 raw, 56 with
+        # robot-frame features. The model checks it against its own state_dim.
+        if current.dim() != 3 or current.shape[-1] not in _WIDTHS:
+            raise ValueError("current must be (B, W_o, one of %s), got %s"
+                             % (sorted(_WIDTHS), tuple(current.shape)))
+        if history.dim() != 3 or history.shape[-1] != current.shape[-1]:
             raise ValueError("history must be (B, T, %d), got %s"
-                             % (spec.STATE_DIM, tuple(history.shape)))
+                             % (current.shape[-1], tuple(history.shape)))
         lengths = torch.as_tensor(lengths, dtype=torch.int64).cpu()
         B = current.shape[0]
         if history.shape[0] != B or tuple(lengths.shape) != (B,):
@@ -80,9 +86,9 @@ class CarriedObs(_CurrentWindow):
     __slots__ = ("current", "lstm_hidden")
 
     def __init__(self, current: torch.Tensor, lstm_hidden: torch.Tensor):
-        if current.dim() != 3 or current.shape[-1] != spec.STATE_DIM:
-            raise ValueError("current must be (B, W_o, %d), got %s"
-                             % (spec.STATE_DIM, tuple(current.shape)))
+        if current.dim() != 3 or current.shape[-1] not in _WIDTHS:
+            raise ValueError("current must be (B, W_o, one of %s), got %s"
+                             % (sorted(_WIDTHS), tuple(current.shape)))
         if lstm_hidden.dim() != 2 or lstm_hidden.shape[0] != current.shape[0]:
             raise ValueError("lstm_hidden must be (B, H) with B = %d, got %s"
                              % (current.shape[0], tuple(lstm_hidden.shape)))

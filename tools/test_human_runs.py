@@ -161,9 +161,11 @@ def test_human_v2_train_and_eval_commands(root, monkeypatch, dataset_reset):
 
 
 def test_ps1_launchers_pass_data_with_human_v1_default():
-    for f in ("run_human.ps1", "eval_human.ps1", "status_human.ps1"):
+    # every launcher offers exactly the datasets human_runs.py knows (2026-11-20: + human_v3)
+    want = "[ValidateSet(%s)][string]$Data = \"human_v1\"" % ", ".join('"%s"' % d for d in sorted(HR.DATASETS))
+    for f in ("run_human.ps1", "eval_human.ps1", "status_human.ps1", "queue_human.ps1"):
         s = _ps1(f)
-        assert '[ValidateSet("human_v1", "human_v2")][string]$Data = "human_v1"' in s, f
+        assert want in s, (f, want)
         assert "--data" in s and "$Data" in s, f
 
 

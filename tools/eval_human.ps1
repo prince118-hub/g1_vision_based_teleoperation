@@ -11,7 +11,7 @@
 param(
     [Parameter(Mandatory = $true)][ValidateSet("bc", "act_orig", "act_lstm_full")][string]$Model,
     [Parameter(Mandatory = $true)][ValidateSet(0, 1, 2)][int]$Seed,
-    [ValidateSet("human_v1", "human_v2")][string]$Data = "human_v1"
+    [ValidateSet("human_v1", "human_v2", "human_v3")][string]$Data = "human_v1"
 )
 Set-Location (Split-Path -Parent $PSScriptRoot)
 & python -u tools\human_runs.py eval --data $Data --model $Model --seed $Seed

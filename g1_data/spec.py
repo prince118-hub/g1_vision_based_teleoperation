@@ -671,6 +671,159 @@ def velocity_label_smoothed(states, actions, window: int = VELOCITY_LABEL_WINDOW
     A[:, VEL_A] = out.astype(A.dtype)
     return A
 
+
+# ─── observation features (2026-11-20, "fix #1") ──────────────────────────────
+#: What a policy's OBSERVATION is, stored as `meta["state_features"]` on an
+#: episode and in its normalizer. The RECORDED state is the 48-D layout above
+#: under SPEC_VERSION, always; a feature set is a deterministic function of it
+#: (`observation`), so no recording changes and SPEC_VERSION does not move -
+#: the same rule as VELOCITY_LABELS. A file WITHOUT the field is
+#: `STATE_FEATURES_RAW`: the 48-D state as recorded, so every episode, norm-stats
+#: file and checkpoint written before 2026-11-20 keeps its meaning. Refused when
+#: mixed (`dataset.assert_uniform_state_features`), when the normalizer was
+#: fitted on another set (`dataset.assert_norm_state_features`), and at deploy
+#: when the checkpoint's input width is not the set's (`tools/deploy.py`).
+STATE_FEATURES_RAW: str = "raw48_v1"
+#: + 8 robot-frame task features (`robot_frame_features`), appended as dims 48-55.
+STATE_FEATURES_ROBOT_FRAME: str = "robot_frame_v1"
+
+#: The goal platform's centre, world xy (scene `platform_goal`). The placement
+#: target is FIXED (TR13: the platform never moves), so this is a constant of
+#: the task, not information about an episode. Checked against the compiled
+#: scene in the tests and whenever deploy runs a robot-frame policy.
+GOAL_XY: Tuple[float, float] = (1.5, -1.5)
+
+TASK_FEATURE_NAMES: Tuple[str, ...] = (
+    "box_rf_x", "box_rf_y", "box_bearing_sin", "box_bearing_cos",
+    "goal_rf_x", "goal_rf_y", "goal_bearing_sin", "goal_bearing_cos")
+TASK_FEATURE_DIM: int = len(TASK_FEATURE_NAMES)
+#: Where the task features sit in a robot_frame_v1 observation.
+TASK_FEATURES = slice(STATE_DIM, STATE_DIM + TASK_FEATURE_DIM)
+
+STATE_FEATURES: Dict[str, dict] = {
+    STATE_FEATURES_RAW: dict(
+        dim=STATE_DIM, rule="the recorded 48-D state, unchanged"),
+    STATE_FEATURES_ROBOT_FRAME: dict(
+        dim=STATE_DIM + TASK_FEATURE_DIM,
+        rule="the recorded 48-D state + (box, goal) x (x, y, sin bearing, cos bearing) in the "
+             "base HEADING frame (yaw of base_quat; x forward, y left), from state dims 0-1 "
+             "(box xy), 7-8 (base xy), 10-13 (base quat) and the fixed GOAL_XY; "
+             "spec.robot_frame_features"),
+}
+
+
+def state_features_of(meta: dict, where: str = "") -> str:
+    """The feature set a file (episode or norm stats) declares; absent = raw."""
+    f = meta.get("state_features", STATE_FEATURES_RAW)
+    if f not in STATE_FEATURES:
+        raise ValueError("unknown state_features %r%s; this build knows %s"
+                         % (f, (" in " + where) if where else "", sorted(STATE_FEATURES)))
+    return f
+
+
+def state_dim_of(features: str) -> int:
+    """Width of one observation under `features`."""
+    if features not in STATE_FEATURES:
+        raise ValueError("unknown state_features %r; this build knows %s"
+                         % (features, sorted(STATE_FEATURES)))
+    return int(STATE_FEATURES[features]["dim"])
+
+
+def heading_yaw(states) -> np.ndarray:
+    """(...,) base yaw from state dims 10-13 (wxyz) - the formula of
+    `phases.LockPredicate.terms` and `walk_test.yaw_from_quat`."""
+    q = np.asarray(states, dtype=np.float64)[..., BASE_QUAT]
+    return np.arctan2(2.0 * (q[..., 0] * q[..., 3] + q[..., 1] * q[..., 2]),
+                      1.0 - 2.0 * (q[..., 2] * q[..., 2] + q[..., 3] * q[..., 3]))
+
+
+def robot_frame_features(states, goal_xy=GOAL_XY) -> np.ndarray:
+    """(..., 48) state -> (..., 8) float64 task features in the base heading frame.
+
+        for P in (box xy = state dims 0-1, the fixed goal xy):
+            d      = P - base xy                          (world)
+            x, y   = R(-yaw) d                            (x forward, y left)
+            sin b, cos b = y / |d|, x / |d|               (b = bearing of P off the heading)
+
+    NO NEW INFORMATION: every input is already in the 48-D state, except the
+    goal, which is a constant of the task. What changes is that the policy no
+    longer has to learn the rotation itself: x, y and b ARE the lock
+    predicate's `fwd`, `lat` and `head` (`phases.LockPredicate.terms`), the
+    quantities the walk-in is judged on, for the box before the weld and the
+    goal after it. Both targets are given on every tick (no switch on the weld
+    bit), so the features are a smooth function of the state.
+
+    HEADING frame, not the full base frame: pelvis pitch and roll rock with the
+    gait; projecting through yaw alone keeps that wobble out of the features,
+    and it is the frame the lock rule and the walking command (vx, vy, wz) use.
+
+    BEARING as (sin, cos), not an angle: an angle wraps at +-pi, and the goal
+    sits at about -90 deg at the start and passes behind the robot during the
+    turn to transport, where an angle would jump by 2 pi between two ticks.
+    (sin, cos) is continuous everywhere, bounded, and sin b ~ b near the lock's
+    |head| <= 5 deg band, so the turn signal is linear where it matters. It is
+    also scale-free, unlike x and y: it says "turn left" as clearly at 1.2 m as
+    at 0.3 m. At |d| < 1e-9 m (never reached: the base cannot stand on the box)
+    it is defined as (0, 1).
+
+    Pure NumPy in float64 on whatever `states` holds. The loader and deploy both
+    pass the float32 state as the recorder stores it, widened to float64
+    (`observation`), so training and deployment compute the same bits.
+    """
+    S = np.asarray(states, dtype=np.float64)
+    if S.shape[-1] != STATE_DIM:
+        raise ValueError(f"states must be (..., {STATE_DIM}), got {S.shape}")
+    yaw = heading_yaw(S)
+    c, s = np.cos(yaw), np.sin(yaw)
+    base = S[..., BASE_POS][..., :2]
+    goal = np.broadcast_to(np.asarray(goal_xy, dtype=np.float64), base.shape)
+    out = np.empty(S.shape[:-1] + (TASK_FEATURE_DIM,), dtype=np.float64)
+    for k, P in enumerate((S[..., BOX_POS][..., :2], goal)):
+        dx, dy = P[..., 0] - base[..., 0], P[..., 1] - base[..., 1]
+        x = c * dx + s * dy
+        y = -s * dx + c * dy
+        r = np.hypot(x, y)
+        far = r >= 1e-9
+        safe = np.where(far, r, 1.0)
+        out[..., 4 * k + 0] = x
+        out[..., 4 * k + 1] = y
+        out[..., 4 * k + 2] = np.where(far, y / safe, 0.0)
+        out[..., 4 * k + 3] = np.where(far, x / safe, 1.0)
+    return out
+
+
+def observation(states, features: str) -> np.ndarray:
+    """The policy's observation from recorded (..., 48) states - THE one function
+    the loader (`g1_model/loader.py`) and deploy (`CheckpointPolicy.act`) call.
+
+    raw48_v1 returns `states` ITSELF (no copy, no cast), so every existing path
+    computes exactly what it computed before. robot_frame_v1 returns float64
+    (..., 56): the 48 dims as given, then `robot_frame_features`."""
+    if features == STATE_FEATURES_RAW:
+        return states
+    if features == STATE_FEATURES_ROBOT_FRAME:
+        S = np.asarray(states, dtype=np.float64)
+        return np.concatenate([S, robot_frame_features(S)], axis=-1)
+    raise ValueError("unknown state_features %r; this build knows %s"
+                     % (features, sorted(STATE_FEATURES)))
+
+
+def state_names_of(features: str) -> Tuple[str, ...]:
+    """Dim names of an observation under `features`."""
+    n = state_dim_of(features)
+    return STATE_NAMES + (TASK_FEATURE_NAMES if n > STATE_DIM else ())
+
+
+def state_mask_of(features: str) -> np.ndarray:
+    """Trainable-dim mask of an observation: STATE_MASK, plus True on every task
+    feature (none is constant: they vary with the spawn and the walk)."""
+    n = state_dim_of(features)
+    if n == STATE_DIM:
+        return STATE_MASK
+    m = np.concatenate([STATE_MASK, np.ones(n - STATE_DIM, dtype=bool)])
+    m.flags.writeable = False
+    return m
+
 #: Tolerance for CHECKING recorded data against VELOCITY_CLIP. Not slack in the
 #: limit - slack in the comparison.
 #
@@ -812,6 +965,9 @@ class NormStats:
     std: np.ndarray
     split: str = "train"
     spec_version: str = SPEC_VERSION
+    #: The OBSERVATION these state stats describe (`STATE_FEATURES`); sets the
+    #: width. Always raw for action stats. Default raw = every file before it.
+    state_features: str = STATE_FEATURES_RAW
 
     STD_FLOOR = 1e-2        # O33, 2026-10-17 (was 1e-6)
 
@@ -819,7 +975,10 @@ class NormStats:
         if self.kind not in ("state", "action"):
             raise ValueError(f"kind must be 'state' or 'action', got "
                              f"{self.kind!r}")
-        dim = STATE_DIM if self.kind == "state" else ACTION_DIM
+        if self.kind == "action" and self.state_features != STATE_FEATURES_RAW:
+            raise ValueError("action stats do not depend on the observation features; "
+                             f"got state_features {self.state_features!r}")
+        dim = state_dim_of(self.state_features) if self.kind == "state" else ACTION_DIM
         mean = np.asarray(self.mean, dtype=np.float64)
         std = np.asarray(self.std, dtype=np.float64)
         if mean.shape != (dim,) or std.shape != (dim,):
@@ -828,10 +987,10 @@ class NormStats:
         if not (np.all(np.isfinite(mean)) and np.all(np.isfinite(std))):
             raise ValueError(f"{self.kind} stats contain non-finite values")
         assert_spec_version(self.spec_version, f"{self.kind} NormStats")
-        mask = STATE_MASK if self.kind == "state" else ACTION_MASK
+        mask = state_mask_of(self.state_features) if self.kind == "state" else ACTION_MASK
         if np.any(std[mask] < self.STD_FLOOR):
             bad = [i for i in np.flatnonzero(mask) if std[i] < self.STD_FLOOR]
-            names = STATE_NAMES if self.kind == "state" else ACTION_NAMES
+            names = state_names_of(self.state_features) if self.kind == "state" else ACTION_NAMES
             raise ValueError(
                 "std below STD_FLOOR on unmasked dims "
                 + ", ".join(f"{i}:{names[i]}={std[i]:.3e}" for i in bad)
@@ -845,10 +1004,12 @@ class NormStats:
         object.__setattr__(self, "std", std)
 
     @classmethod
-    def identity(cls, kind: str, split: str = "train") -> "NormStats":
+    def identity(cls, kind: str, split: str = "train",
+                 state_features: str = STATE_FEATURES_RAW) -> "NormStats":
         """A no-op normalizer. For tests and for ablating normalization."""
-        dim = STATE_DIM if kind == "state" else ACTION_DIM
-        return cls(kind=kind, mean=np.zeros(dim), std=np.ones(dim), split=split)
+        dim = state_dim_of(state_features) if kind == "state" else ACTION_DIM
+        return cls(kind=kind, mean=np.zeros(dim), std=np.ones(dim), split=split,
+                   state_features=state_features)
 
     def normalize(self, x) -> np.ndarray:
         return (np.asarray(x, dtype=np.float64) - self.mean) / self.std

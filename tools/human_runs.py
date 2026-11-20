@@ -5,8 +5,11 @@
     python tools/human_runs.py eval   --model act_lstm_full --seed 0
     python tools/human_runs.py status
     python tools/human_runs.py dryrun                  # every path, short; measures the time
+    python tools/human_runs.py queue  --data human_v3  # train+eval bc, act_orig, act_lstm_full x seeds 0-2
+    python tools/human_runs.py queue  --data human_v3 --restart   # after an interruption
 
-(PowerShell wrappers: tools\\run_human.ps1, tools\\eval_human.ps1, tools\\status_human.ps1.)
+(PowerShell wrappers: tools\\run_human.ps1, tools\\eval_human.ps1, tools\\status_human.ps1,
+tools\\queue_human.ps1.)
 
 WHAT IS RUN
 -----------
@@ -60,6 +63,13 @@ human_v2  a TEST (2026-11-19, not adopted): the SAME 40/10 seeds, walking dims 1
           *_human_v2 split/norm, runs/human_v2, run names *_human40v2_seed<k> - so it
           can never write into human_v1. Same models, settings and evaluation; the cap
           still comes from recordings/demonstrations (identical episode lengths).
+human_v3  "fix #1" (2026-11-20): human_v2 exactly (same seeds, same smoothed labels) with
+          the observation extended by robot-frame task features - box and goal (x, y,
+          sin bearing, cos bearing) in the base heading frame, spec.robot_frame_features,
+          declared as state_features robot_frame_v1 by tools/convert_state_features.py
+          into data/processed/episodes_human_v3; *_human_v3 split (= human_v2's) and its
+          own 56-D norm (state dims 0-47 and every action dim equal human_v2's), runs/
+          human_v3, run names *_human40v3_seed<k>. The model width follows the norm.
 """
 from __future__ import annotations
 
@@ -99,6 +109,13 @@ DATASETS: Dict[str, Dict[str, str]] = {
                      root="runs/human_v2", suffix="v2",
                      why="human_v2 (the human_v1 40/10 seeds; walking labels 19-21 = centred moving "
                          "average, velocity_label centred_ma13_v1; a TEST): settings of the scripted main runs"),
+    "human_v3": dict(episodes="data/processed/episodes_human_v3",
+                     splits="data/processed/splits_human_v3.json",
+                     norm="data/processed/norm_stats_human_v3.npz",
+                     root="runs/human_v3", suffix="v3",
+                     why="human_v3 (human_v2 exactly - same 40/10 seeds, smoothed walking labels - "
+                         "plus robot-frame task features, state_features robot_frame_v1, 56-D "
+                         "observation; fix #1): settings of the scripted main runs"),
 }
 DATASET = "human_v1"
 
@@ -437,6 +454,83 @@ def status(root: str = RUN_ROOT) -> int:
     return 0
 
 
+# ─── queue ───────────────────────────────────────────────────────────────────
+def queue_plan(models: List[str], seeds: List[int]) -> List[tuple]:
+    """(model, seed) in queue order: SEED-major, so every model's seed 0 is trained
+    and evaluated before any seed 1 - the first complete comparison comes first."""
+    return [(m, s) for s in seeds for m in models]
+
+
+def _wait_for_heavy(poll_s: float, wait: bool) -> None:
+    """Block (loudly) while another heavy process runs; with wait=False, refuse."""
+    first = True
+    while True:
+        h = heavy_processes()
+        if not h:
+            return
+        if not wait:
+            _refuse_if_heavy()
+        if first:
+            print("%s QUEUE WAITING: another heavy process is running (one at a time):\n  %s"
+                  % (now(), "\n  ".join(h)), flush=True)
+            first = False
+        time.sleep(poll_s)
+
+
+def queue(models: List[str], seeds: List[int], restart: bool = False, wait: bool = True,
+          poll_s: float = 60.0, dry: bool = False, root: Optional[str] = None) -> int:
+    """Train then evaluate each (model, seed) back to back, ONE heavy process at a time.
+
+    Resumable by running the same command again, with the rules of `train` and
+    `evaluate` unchanged:
+      * a finished training (result.json finished / hard_cap) is never redone;
+      * an INTERRUPTED training is REFUSED and the queue STOPS there; `--restart`
+        moves it to <root>/_failed/ and trains it from step 0 (never resumed);
+      * a finished evaluation is skipped; an incomplete one redoes only its
+        unfinished JSONL (deterministic per episode).
+    Before every step the queue waits while another heavy process (train_bc.py,
+    deploy.py, eval_scripted.py) runs, printing once that it waits; `--no-wait`
+    refuses instead. The queue stops at the first step that does not finish.
+    """
+    root = root or RUN_ROOT
+    plan = queue_plan(models, seeds)
+    print("QUEUE %s (%s): %d run(s), seed-major, train then eval each:"
+          % (DATASET, root, len(plan)))
+    for m, s in plan:
+        n = run_name(m, s)
+        t, e = train_status(root, n), eval_status(root, n)
+        print("  %-30s train %-12s eval %s" % (n, t["state"], e["state"]))
+    if dry:
+        return 0
+    _append_summary(root, "%s QUEUE started  %d run(s): %s%s"
+                    % (now(), len(plan), " ".join(run_name(m, s) for m, s in plan),
+                       "  (--restart)" if restart else ""))
+    for m, s in plan:
+        n = run_name(m, s)
+        if train_status(root, n)["state"] != "done":
+            _wait_for_heavy(poll_s, wait)
+            try:
+                rc = train(m, s, restart=restart, root=root)
+            except SystemExit as ex:                      # an interrupted run, refused
+                print(str(ex))
+                print("\nQUEUE STOPPED at %s. Re-run the queue with -Restart to retrain it from step 0."
+                      % n)
+                _append_summary(root, "%s QUEUE STOPPED at %s (training refused)" % (now(), n))
+                return 1
+            if rc != 0:
+                _append_summary(root, "%s QUEUE STOPPED at %s (training did not finish)" % (now(), n))
+                return rc
+        if eval_status(root, n)["state"] != "done":
+            _wait_for_heavy(poll_s, wait)
+            rc = evaluate(m, s, root=root)
+            if rc != 0:
+                _append_summary(root, "%s QUEUE STOPPED at %s (evaluation did not finish; re-run the "
+                                      "queue to finish it)" % (now(), n))
+                return rc
+    _append_summary(root, "%s QUEUE DONE     %d run(s)" % (now(), len(plan)))
+    return 0
+
+
 # ─── dry run ─────────────────────────────────────────────────────────────────
 def dryrun(models: List[str]) -> int:
     """Seed 0 of each model, short budgets, into runs/human_v1_dryrun/: training, the full
@@ -498,6 +592,16 @@ def main(argv=None):
     p.add_argument("--data", default="human_v1", choices=sorted(DATASETS))
     p = sub.add_parser("dryrun")
     p.add_argument("--models", nargs="+", default=list(MODELS), choices=sorted(MODELS))
+    p = sub.add_parser("queue", help="train + eval each (model, seed) back to back, resumable")
+    p.add_argument("--data", default="human_v1", choices=sorted(DATASETS))
+    p.add_argument("--models", nargs="+", default=list(MODELS), choices=sorted(MODELS))
+    p.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS), choices=SEEDS)
+    p.add_argument("--restart", action="store_true",
+                   help="an INTERRUPTED training in the queue is moved to _failed/ and retrained from step 0")
+    p.add_argument("--no-wait", action="store_true",
+                   help="refuse (instead of waiting) when another heavy process runs")
+    p.add_argument("--poll-seconds", type=float, default=60.0)
+    p.add_argument("--plan", action="store_true", help="print the queue and each run's state; run nothing")
     a = ap.parse_args(argv)
     use_dataset(getattr(a, "data", "human_v1"))
     if a.cmd == "train":
@@ -506,6 +610,9 @@ def main(argv=None):
         return evaluate(a.model, a.seed, root=RUN_ROOT)
     if a.cmd == "status":
         return status(root=RUN_ROOT)
+    if a.cmd == "queue":
+        return queue(list(a.models), list(a.seeds), restart=a.restart, wait=not a.no_wait,
+                     poll_s=a.poll_seconds, dry=a.plan, root=RUN_ROOT)
     return dryrun(a.models)
 
 

@@ -207,14 +207,15 @@ def observation_matrix(ds: ChunkDataset) -> np.ndarray:
     would make the reference describe a space no model ever sees.
     """
     W = ds.cfg.obs_window
+    D = int(getattr(ds, "state_dim", spec.STATE_DIM))    # 48, or 56 with task features
     out = []
     for S in ds.states:
         n = S.shape[0]
         padded = np.concatenate(
-            [np.zeros((W - 1, spec.STATE_DIM), dtype=np.float32), S], axis=0)
+            [np.zeros((W - 1, D), dtype=np.float32), S], axis=0)
         win = np.lib.stride_tricks.sliding_window_view(
-            padded, (W, spec.STATE_DIM))          # (n, 1, W, 48)
-        out.append(win.reshape(n, W * spec.STATE_DIM))
+            padded, (W, D))                       # (n, 1, W, D)
+        out.append(win.reshape(n, W * D))
     return np.ascontiguousarray(np.concatenate(out, axis=0))
 
 
@@ -326,7 +327,7 @@ def neighbour_ambiguity(ds: ChunkDataset,
             max=float(dists.max())),
         exclude_same_episode=bool(exclude_same_episode),
         subsampled_to=sub, metric="euclidean on normalized observation window "
-                                  "(%d dims)" % (ds.cfg.obs_window * spec.STATE_DIM))
+                                  "(%d dims)" % (ds.cfg.obs_window * int(getattr(ds, "state_dim", spec.STATE_DIM))))
 
 
 # ─── the gate verdict ─────────────────────────────────────────────────────────

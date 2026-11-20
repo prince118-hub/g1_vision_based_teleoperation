@@ -8362,3 +8362,61 @@ final val 0.272), open loop through `CheckpointPolicy.act`, walk-in, deployed ac
 timed (corr with the smoothed label 0.30; ~0.12-0.15 commanded on key-down and key-up alike = a slow steady approach, ~0.1 m/s).
 **Walk-in turning still collapses to 0**, as the 10-NN proxy predicted; lateral alignment (|lat| <= 0.05 m, |heading| <= 5 deg)
 then depends on the spawn. Not yet run: closed loop. Not adopted: the full 200k run and its evaluation are Charles's call.
+
+## 2026-11-20 — Robot-frame task features ("fix #1"): built, versioned, probe gate FAIL (branch `robot-frame-features`)
+
+**What.** A versioned observation feature set, the velocity_label pattern: episodes and norm stats may declare
+`state_features` (absent = `raw48_v1`, the recorded 48-D state - every existing file keeps its meaning; SPEC_VERSION stays
+1.2.0 because the recorded layout does not move). `robot_frame_v1` appends 8 dims (48-55): for P in (box xy, goal xy):
+x, y = R(-yaw)(P - base xy) in the base HEADING frame (x forward, y left), and the bearing as (sin, cos) = (y, x)/|d|.
+Inputs: state dims 0-1, 7-8, 10-13 and `spec.GOAL_XY` = (1.5, -1.5), the fixed goal (checked against the compiled scene in
+the tests and at every robot-frame deploy). x, y, bearing ARE the lock predicate's fwd / lat / head
+(`phases.LockPredicate.terms`, test-enforced) - the quantities the walk-in is judged on. Heading frame (not full base):
+keeps gait pitch/roll out. (sin, cos) not an angle: the goal starts at -59 deg and passes behind the robot in the turn to
+transport, where an angle wraps by 2 pi; (sin, cos) is continuous, bounded, ~linear in the lock's +-5 deg band, scale-free.
+**One function**, `spec.observation(states, features)`, is called by the loader and by `CheckpointPolicy.act` (raw returns
+its input object, so every raw path is unchanged). Guards: mixed sets refused (`dataset.assert_uniform_state_features`,
+split/norm/loader), a normalizer of another set refused (`assert_norm_state_features`, `NormStats.state_features` sets the
+width), deploy refuses run-metadata vs normalizer mismatch, a checkpoint of another width, and a scene goal != GOAL_XY.
+Widths: ACTConfig.state_dim (existing field); BC: `BCConfig.state_dim` is a property (48) and `BCFeatureConfig` carries a
+wider width, so a raw BC config is main's dataclass exactly.
+
+**human_v3** = `tools/convert_state_features.py` copies of human_v2 (arrays byte-identical, meta + provenance only) in
+`data/processed/episodes_human_v3`; `splits_human_v3.json` = human_v2's byte for byte; `norm_stats_human_v3.npz` 56-D on
+the same 40 seeds: state dims 0-47 and every action dim EQUAL human_v2's; the 8 new stds 0.011-0.79 (box_bearing_cos 0.0114,
+above the floor). `human_runs.py --data human_v3` (runs/human_v3, `*_human40v3_seed<k>`); launchers `-Data human_v3`.
+
+**Queue.** `human_runs.py queue` / `tools/queue_human.ps1 -Data <d> [-Models a,b] [-Seeds 0,1] [-Restart] [-NoWait] [-Plan]`:
+train then eval each run, SEED-major (all seed-0 runs first), reusing `train`/`evaluate` unchanged - finished steps skipped,
+an interrupted training REFUSED and the queue stops (-Restart: to _failed/, retrain from step 0), an incomplete eval redoes
+its unfinished file; waits loudly while another heavy process runs (-NoWait refuses). `tools/test_queue_human.py` (7).
+
+**Checks.** `tools/test_state_features.py` 17 passed: definition vs LockPredicate on synthetic and recorded states, yaw =
+walk_test's, GOAL_XY = scene, rigid-motion invariance, bearing continuity, guards, and TRAIN/DEPLOY PARITY: for every tick
+of all 50 human_v3 demos (37,508 ticks), the normalized observation CheckpointPolicy.act feeds the model equals the loader's
+bit for bit, and the W_o window equals the loader sample (BC W 12, ACT W 1). Regression vs main
+(`tools/check_memory_design_regression.py --base main`, 13 real checkpoints incl. human_v1, human_v2, scripted_v3 BC/ACT/
+ACT-LSTM/act_orig/act_lstm_full): **ALL IDENTICAL 23/23**. Loader + norm refit + ambiguity matrix hashes for human_v1,
+human_v2, scripted_v3, scripted_v3_n40 under main vs branch: **24/24 identical**. Neighbour-ambiguity reference on human_v3
+(W_o 1, K 100): train 0.020620 / val 0.016167 vs human_v2 0.022359 / 0.017879 - LOWER despite 8 more dims (O31 predicts
+higher), i.e. neighbours in the robot frame agree more on the action.
+
+**Adoption gate (decided in advance): act_orig 20k on human_v3, open loop through CheckpointPolicy.act; PASS = wz turn
+direction right on >= 50% of VALIDATION walk-in turn-key ticks.** `runs/human_v3_probe/act_orig_human40v3_seed0`
+(commit 33310d0, 0.47 h, 11.9 st/s, final val 0.2755; v2 probe 0.2723). Metric = the human_v2 probe's: on ticks with
+|raw key| > 0.3, deployed command has the key's sign AND |cmd| > 0.1. Same script run on both probes:
+
+| walk-in, 20k probes | human_v2 train / val | **human_v3 train / val** |
+|---|---|---|
+| **wz key-down direction (THE GATE, val n 479)** | 0% / 0% | **0% / 0%** |
+| wz sign only (no magnitude) | 48% / 48% | 70% / 71% |
+| wz corr with smoothed label | 0.17 / 0.23 | 0.30 / 0.31 |
+| wz mean command on left-key / right-key ticks (train) | -0.002 / -0.004 rad/s | +0.004 / -0.001 rad/s |
+| vx key-down direction | 79% / 69% | 78% / 64% |
+| wz key-down direction in MOVE (transport) | 90% / 81% | 91% / 81% |
+
+**GATE: FAIL** (0% < 50%). Reading: the features moved the turn command's SIGN (48% -> 71%, corr 0.23 -> 0.31) but not its
+size - |wz| stays ~0.002-0.004 rad/s, two orders below a key's 0.3+, so the robot still does not turn in the walk-in. Not
+adopted; no Exp 1 / Exp 2 run (as instructed). Ops note: the first probe attempt died of CUDA OOM because a regression run
+and loader hashing ran beside it (violating ONE heavy process at a time); restarted alone from step 0 under the normal rule,
+the failed folder kept in runs/human_v3_probe/_failed/.
