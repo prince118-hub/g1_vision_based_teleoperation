@@ -54,10 +54,14 @@ OUT = os.path.join(HERE, "c4")
 
 MODELS = ("BC", "ACT", "ACT-LSTM")
 CODE = {"BC": "bc_b256", "ACT": "act_orig", "ACT-LSTM": "act_lstm_full"}
-COL = {"ACT-LSTM": "#008300", "ACT": "#2a78d6", "BC": "#9a9a95"}
-SINGLE = "#52514e"
-GRID = "#e4e3df"
-INK, INK2 = "#1f1f1d", "#52514e"
+COL = {"ACT-LSTM": "#008300", "ACT": "#1c5cab", "BC": "#d55181"}
+SINGLE = "#1c5cab"                       # single-series data marks (Fig 4.1, 4.2)
+PATCH = "#e8f1fc"                        # held-out patch fill (Fig 4.2)
+GRID = "#e6e6e3"
+INK, INK2 = "#1f1f1d", "#52514e"         # text; reference lines (y = +-0.05 m, gap = 0)
+RAMP = ("#cde2fb", "#0d366b")            # Fig A.1
+FAIL_RAMP = ("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#0d366b")   # Fig A.2
+MIN_GAP_PT = 1.5                         # text boxes closer than this "touch" and fail the check
 PHASES = ("walk_in", "grasp", "lift", "transport", "place", "success")
 PNAME = {"walk_in": "Walk-in", "grasp": "Grasp", "lift": "Lift", "transport": "Transport", "place": "Place",
          "success": "Full success"}
@@ -119,17 +123,19 @@ def check(fig, name):
     small = [(t.get_text(), t.get_fontsize()) for t in texts if t.get_fontsize() < 7]
     if small:
         raise SystemExit("%s: text below 7 pt: %s" % (name, small[:5]))
-    boxes = [(t, t.get_window_extent(r).expanded(1.0, 1.0)) for t in texts]
+    gap = MIN_GAP_PT * fig.dpi / 72.0
+    boxes = [(t, t.get_window_extent(r)) for t in texts]
     clash = []
     for i in range(len(boxes)):
         for j in range(i + 1, len(boxes)):
             a, b = boxes[i][1], boxes[j][1]
-            ov_w = min(a.x1, b.x1) - max(a.x0, b.x0)
+            ov_w = min(a.x1, b.x1) - max(a.x0, b.x0)     # > -gap: closer than MIN_GAP_PT horizontally
             ov_h = min(a.y1, b.y1) - max(a.y0, b.y0)
-            if ov_w > 1.0 and ov_h > 1.0:
+            if ov_w > -gap and ov_h > -gap:
                 clash.append((boxes[i][0].get_text(), boxes[j][0].get_text()))
     if clash:
-        raise SystemExit("%s: overlapping text: %s" % (name, clash[:6]))
+        raise SystemExit("%s: overlapping or touching text: %s" % (name, clash[:6]))
+    check_colours(fig, name)
     for leg in fig.legends + [a.get_legend() for a in fig.axes if a.get_legend()]:
         lb = leg.get_window_extent(r)
         for ax in fig.axes:
@@ -141,6 +147,82 @@ def check(fig, name):
     w, h = fig.get_size_inches()
     if abs(w - W) > 1e-6 or h > 5.5 + 1e-6:
         raise SystemExit("%s: size %.2f x %.2f in" % (name, w, h))
+
+
+def check_colours(fig, name):
+    """Every coloured mark inside an axes must be a policy colour, the single-series navy, a ramp step,
+    the patch fill, the reference-line colour, the grid colour or white / ink. Nothing grey, red,
+    orange or yellow can slip in. The colour-bar image is checked through its ramp ends."""
+    import matplotlib.colors as mc
+    from matplotlib.collections import Collection
+    from matplotlib.patches import Patch as _P
+    allowed = {mc.to_hex(c) for c in list(COL.values()) + [SINGLE, PATCH, GRID, INK, INK2, "white"]
+               + list(RAMP) + list(FAIL_RAMP)}
+    bad = set()
+
+    def look(c):
+        try:
+            arr = np.atleast_2d(mc.to_rgba_array(c))
+        except (ValueError, TypeError):
+            return
+        for rgba in arr:
+            if rgba[3] == 0:
+                continue
+            h = mc.to_hex(rgba[:3])
+            if h not in allowed:
+                bad.add(h)
+    def look_line(ln):
+        """A marker-only line (ls 'none') never draws its line colour: check only what is drawn."""
+        if ln.get_linestyle() not in ("None", "none", "", " "):
+            look(ln.get_color())
+        if ln.get_marker() not in (None, "None", "none", ""):
+            look(ln.get_markerfacecolor()), look(ln.get_markeredgecolor())
+    for ax in fig.axes:
+        if ax.get_label() == "<colorbar>":
+            continue
+        for art in ax.get_children():
+            if art is ax.patch or not art.get_visible() or art in ax.spines.values():
+                continue
+            if isinstance(art, Line2D):
+                look_line(art)
+            elif isinstance(art, _P):
+                look(art.get_facecolor()), look(art.get_edgecolor())
+            elif isinstance(art, Collection):
+                if art.get_array() is not None:          # colour-mapped (the A.1 heatmap): ramp-checked
+                    cm = art.get_cmap()
+                    look(cm(0.0)), look(cm(1.0))
+                    look(art.get_edgecolor())
+                else:
+                    look(art.get_facecolor()), look(art.get_edgecolor())
+    for leg in fig.legends:
+        for hnd in leg.legend_handles:
+            if isinstance(hnd, Line2D):
+                look_line(hnd)
+            elif isinstance(hnd, _P):
+                look(hnd.get_facecolor()), look(hnd.get_edgecolor())
+    if bad:
+        raise SystemExit("%s: colours outside the palette: %s" % (name, sorted(bad)))
+
+
+def cibar(ax, x, r, lo, hi, color):
+    """Wilson CI whiskers in the policy colour, with a thin white outline so the part over a
+    same-coloured bar stays visible."""
+    import matplotlib.patheffects as pe
+    x, r, lo, hi = (np.atleast_1d(np.asarray(v, float)) for v in (x, r, lo, hi))
+    cont = ax.errorbar(x, r, yerr=[r - lo, hi - r], fmt="none", ecolor=color, elinewidth=0.9, capsize=1.8,
+                       capthick=0.9, zorder=3)
+    halo = [pe.Stroke(linewidth=2.3, foreground="white"), pe.Normal()]
+    for art in list(cont.lines[1]) + list(cont.lines[2]):
+        art.set_path_effects(halo)
+
+
+def text_on(fill: str) -> str:
+    """White or ink, whichever contrasts more with `fill` (WCAG relative luminance)."""
+    import matplotlib.colors as mc
+    lum = lambda c: sum(w * (v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4)   # noqa: E731
+                        for w, v in zip((0.2126, 0.7152, 0.0722), mc.to_rgb(c)))
+    lf, li = lum(fill), lum(INK)
+    return "white" if (1.05 / (lf + 0.05)) > ((lf + 0.05) / (li + 0.05)) else INK
 
 
 def save(fig, name, out):
@@ -220,8 +302,7 @@ def fig_4_1(out):
     rs = [wilson_pct(k, n) for k, n in zip(S.accepted, S.attempts)]
     r = np.array([v[0] for v in rs])
     ax.bar(x, r, width=0.62, color=SINGLE)
-    ax.errorbar(x, r, yerr=[r - [v[1] for v in rs], [v[2] for v in rs] - r], fmt="none", ecolor=INK, elinewidth=0.9,
-                capsize=2.5)
+    cibar(ax, x, r, [v[1] for v in rs], [v[2] for v in rs], SINGLE)
     pct_axis(ax, "Accepted attempts (%)")
     ax.set_xticks(x)
     ax.set_xlim(0.4, 11.6)
@@ -240,20 +321,22 @@ def fig_4_2(out, layout="stacked"):
     xy = lambda seeds: np.array([AE.spawn_xy(int(s)) for s in seeds])          # noqa: E731
     panels = [("(a) Human", [("Training", xy(sh["train"]), "o", "fill"), ("Validation", xy(sh["val"]), "o", "hollow")]),
               ("(b) Scripted", [("Training", xy(ss["train"]), "o", "fill")]),
-              ("(c) Evaluation", [("Experiment 1", xy(ev["exp1"]), "o", "fill"), ("Experiment 2", xy(ev["exp2"]), "^", "fill")])]
+              ("(c) Evaluation", [("Experiment 1", xy(ev["exp1"]), "s", "fill"), ("Experiment 2", xy(ev["exp2"]), "^", "fill")])]
+    size = {"o": 14, "s": 8, "^": 14}                  # Experiment 1 = a SMALL filled square
+    msz = {"o": 4.5, "s": 3.4, "^": 4.5}
     if layout == "stacked":
         fig, axes = fig_(5.3, nrows=3, sharex=True)
     else:
         fig, axes = fig_(2.0, ncols=3, sharey=True)
     for ax, (lab, series) in zip(axes, panels):
         ax.add_patch(Rectangle((reg["heldout_y"][0], reg["heldout_x"][0]), reg["heldout_y"][1] - reg["heldout_y"][0],
-                               reg["heldout_x"][1] - reg["heldout_x"][0], fc="#e8e7e3", ec="none", zorder=0))
+                               reg["heldout_x"][1] - reg["heldout_x"][0], fc=PATCH, ec="none", zorder=0))
         ax.add_patch(Rectangle((reg["y"][0], reg["x"][0]), reg["y"][1] - reg["y"][0], reg["x"][1] - reg["x"][0],
-                               fill=False, ec="#8a8984", lw=0.8, zorder=1))
+                               fill=False, ec=INK2, lw=0.8, zorder=1))
         for v in (-SIDE_Y, SIDE_Y):
             ax.axvline(v, color=INK2, lw=0.8, ls="--", zorder=1)
         for _, p, mk, fill in series:
-            ax.scatter(p[:, 1], p[:, 0], s=14, marker=mk, linewidths=0.8, zorder=3,
+            ax.scatter(p[:, 1], p[:, 0], s=size[mk], marker=mk, linewidths=0.8, zorder=3,
                        facecolors=SINGLE if fill == "fill" else "white", edgecolors=SINGLE)
         ax.set_xlim(reg["y"][1] + 0.012, reg["y"][0] - 0.012)        # robot's left (+y) on the left
         ax.set_ylim(reg["x"][0] - 0.01, reg["x"][1] + 0.01)
@@ -262,13 +345,13 @@ def fig_4_2(out, layout="stacked"):
         ax.set_yticks([1.45, 1.50, 1.55])
         panel(ax, lab)
         ax.set_ylabel("Box x (m)")
-    # ONE legend: the symbols of all three panels (Training and Experiment 1 share the filled dot)
+    # ONE legend: the symbols of all three panels
     seen = {}
     for _, series in panels:
         for n, _, mk, fill in series:
-            seen.setdefault(n, Line2D([], [], ls="none", marker=mk, ms=4.5, mfc=SINGLE if fill == "fill" else "white",
-                                      mec=SINGLE, label=n))
-    seen["Held-out patch"] = Patch(facecolor="#e8e7e3", ec="none", label="Held-out patch")
+            seen.setdefault(n, Line2D([], [], ls="none", marker=mk, ms=msz[mk], mfc=SINGLE if fill == "fill" else "white",
+                                      mec=SINGLE, mew=0.8, label=n))
+    seen["Held-out patch"] = Patch(facecolor=PATCH, ec="none", label="Held-out patch")
     fig.legend(handles=list(seen.values()), loc="outside right upper", handletextpad=0.3)
     axes[-1].set_xlabel("Box y (m)")
     if layout != "stacked":
@@ -284,8 +367,8 @@ def fig_4_3(H, out):
             h = H[(m, s)]
             ax.plot(h["x"], h["train"], color=COL[m], lw=0.8, ls="-")
             ax.plot(h["x"], h["val"], color=COL[m], lw=0.8, ls=(0, (3, 1.6)))
-            ax.plot([h["chosen"]["x"]], [h["chosen"]["val"]], ls="none", marker="o", ms=4.5, mfc=COL[m], mec=INK,
-                    mew=0.6, zorder=4)
+            ax.plot([h["chosen"]["x"]], [h["chosen"]["val"]], ls="none", marker="o", ms=5, mfc=COL[m], mec="white",
+                    mew=0.8, zorder=4)
         ax.set_yscale("log")
         import matplotlib.ticker as mt
         ax.yaxis.set_major_locator(mt.LogLocator(subs=(1.0, 2.0, 3.0, 5.0)))
@@ -294,9 +377,9 @@ def fig_4_3(H, out):
         ax.set_xlabel("Epoch" if H[(m, 0)]["by_epoch"] else "Training step (thousands)")
         panel(ax, "(%s) %s" % (lab, m))
     axes[0].set_ylabel("Loss (masked L1)")
-    fig.legend(handles=[Line2D([], [], color=INK2, lw=1.0, label="Training loss"),
-                        Line2D([], [], color=INK2, lw=1.0, ls=(0, (3, 1.6)), label="Validation loss"),
-                        Line2D([], [], ls="none", marker="o", ms=4.5, mfc=INK2, mec=INK, mew=0.6, label="Selected checkpoint")],
+    fig.legend(handles=[Line2D([], [], color=INK, lw=1.0, label="Training loss"),
+                        Line2D([], [], color=INK, lw=1.0, ls=(0, (3, 1.6)), label="Validation loss"),
+                        Line2D([], [], ls="none", marker="o", ms=5, mfc=INK, mec="white", mew=0.8, label="Selected checkpoint")],
                loc="outside upper center", ncol=3)
     return save(fig, "Fig_4-3", out)
 
@@ -312,30 +395,29 @@ def fig_4_4(H, out):
             h = H[(m, s)]
             ax.plot([c["x"] for c in h["cands"]], [c["success"] for c in h["cands"]], color=COL[m], lw=0.8,
                     marker=marks[s], ms=2.8, mew=0)
-            ax.plot([h["chosen"]["x"]], [h["chosen"]["success"]], ls="none", marker="o", ms=7, mfc=COL[m], mec=INK,
-                    mew=0.7, zorder=4)
+            ax.plot([h["chosen"]["x"]], [h["chosen"]["success"]], ls="none", marker="o", ms=7, mfc=COL[m], mec="white",
+                    mew=0.9, zorder=4)
         ax.set_ylim(-0.3, 7)
         ax.set_yticks(range(0, 8))
         ax.set_xlabel("Epoch" if H[(m, 0)]["by_epoch"] else "Training step (thousands)")
         panel(ax, "(%s) %s" % (lab, m))
     axes[0].set_ylabel("Successes (of 20)")
-    fig.legend(handles=[Line2D([], [], color=INK2, lw=0.8, marker=marks[s], ms=3.5, mew=0, label="Seed %d" % s)
+    fig.legend(handles=[Line2D([], [], color=INK, lw=0.8, marker=marks[s], ms=3.5, mew=0, label="Seed %d" % s)
                         for s in (0, 1, 2)]
-               + [Line2D([], [], ls="none", marker="o", ms=7, mfc=INK2, mec=INK, mew=0.7, label="Selected checkpoint")],
+               + [Line2D([], [], ls="none", marker="o", ms=7, mfc=INK, mec="white", mew=0.9, label="Selected checkpoint")],
                loc="outside upper center", ncol=4)
     return save(fig, "Fig_4-4", out)
 
 
 def phase_bars(ax, P, exp, labels=True):
     x = np.arange(len(PHASES))
-    w = 0.26
+    w = 0.29
     for i, m in enumerate(MODELS):
         v = [rate_ci(P, "human", m, exp, p) for p in PHASES]
         r = np.array([a[0] for a in v])
         xs = x + (i - 1) * w
         ax.bar(xs, r, width=w * 0.92, color=COL[m], label=m)
-        ax.errorbar(xs, r, yerr=[r - [a[1] for a in v], [a[2] for a in v] - r], fmt="none", ecolor=INK,
-                    elinewidth=0.8, capsize=1.8)
+        cibar(ax, xs, r, [a[1] for a in v], [a[2] for a in v], COL[m])
         if labels:
             ax.text(xs[-1], v[-1][2] + 2, "%.1f" % r[-1], ha="center", va="bottom", fontsize=7, color=INK)
     ax.set_xticks(x, [PNAME[p] for p in PHASES])
@@ -397,8 +479,7 @@ def fig_4_7(E, out):
         r = np.array([R[(m, s)][0] for s in SIDES])
         xs = x + (i - 1) * w
         ax.bar(xs, r, width=w * 0.92, color=COL[m], label=m)
-        ax.errorbar(xs, r, yerr=[r - [R[(m, s)][1] for s in SIDES], [R[(m, s)][2] for s in SIDES] - r], fmt="none",
-                    ecolor=INK, elinewidth=0.8, capsize=1.8)
+        cibar(ax, xs, r, [R[(m, s)][1] for s in SIDES], [R[(m, s)][2] for s in SIDES], COL[m])
     ax.set_xticks(x, SIDES)
     ax.set_xlabel("Box side")
     pct_axis(ax, "Walk-in rate (%)")
@@ -419,14 +500,14 @@ def fig_4_8(P, out):
                     ax.bar(xi, r, width=w * 0.9, color=COL[m], ec=COL[m], lw=0.8)
                 else:
                     ax.bar(xi, r, width=w * 0.9, facecolor="white", ec=COL[m], hatch=HATCH, lw=0.8)
-                ax.errorbar([xi], [r], yerr=[[r - lo], [hi - r]], fmt="none", ecolor=INK, elinewidth=0.8, capsize=1.8)
+                cibar(ax, [xi], [r], [lo], [hi], COL[m])
                 ax.text(xi, hi + 2, "%.1f" % r, ha="center", va="bottom", fontsize=7, color=INK)
         ax.set_xticks(x, MODELS)
         pct_axis(ax, "Full success (%)")
         panel(ax, "(%s) %s" % (lab, EXPN[exp]))
     axes[1].set_ylabel("")
-    fig.legend(handles=[Patch(facecolor=INK2, ec=INK2, label="Human"),
-                        Patch(facecolor="white", ec=INK2, hatch=HATCH, label="Scripted")],
+    fig.legend(handles=[Patch(facecolor=INK, ec=INK, label="Human"),
+                        Patch(facecolor="white", ec=INK, hatch=HATCH, label="Scripted")],
                loc="outside upper center", ncol=2)
     return save(fig, "Fig_4-8", out)
 
@@ -435,7 +516,7 @@ def fig_a_1(E, out):
     import matplotlib.colors as mc
     reg = AE.region()
     xe, ye = AE._grid(reg)
-    cmap = mc.LinearSegmentedColormap.from_list("blue", ["#cde2fb", "#0d366b"])
+    cmap = mc.LinearSegmentedColormap.from_list("blue", list(RAMP))
     cmap.set_bad("white")
     H = E[E.data == "human"]
     fig, axes = fig_(5.2, nrows=2, ncols=3, sharex=True, sharey=True)
@@ -451,7 +532,7 @@ def fig_a_1(E, out):
             ax.add_patch(Rectangle((reg["heldout_y"][0], reg["heldout_x"][0]), reg["heldout_y"][1] - reg["heldout_y"][0],
                                    reg["heldout_x"][1] - reg["heldout_x"][0], fill=False, ec=INK, lw=1.1, zorder=3))
             for v in (-SIDE_Y, SIDE_Y):
-                ax.axvline(v, color=INK, lw=0.8, ls="--", zorder=3)
+                ax.axvline(v, color=INK2, lw=0.8, ls="--", zorder=3)
             ax.set_xlim(reg["y"][1], reg["y"][0])
             ax.set_ylim(*reg["x"])
             ax.grid(False)
@@ -469,8 +550,9 @@ def fig_a_1(E, out):
     return save(fig, "Fig_A-1", out)
 
 
-FAIL = (("WALK_IN", "Walk-in", "#e3e2de"), ("GRASP", "Grasp", "#c4c3be"), ("LIFT", "Lift", "#a3a29c"),
-        ("TRANSPORT", "Transport", "#7f7e78"), ("PLACE", "Place", "#5c5b56"), ("success", "Full success", "#184f95"))
+FAIL = tuple((c, n, colr) for (c, n), colr in zip(
+    (("WALK_IN", "Walk-in"), ("GRASP", "Grasp"), ("LIFT", "Lift"), ("TRANSPORT", "Transport"), ("PLACE", "Place"),
+     ("success", "Full success")), FAIL_RAMP))
 
 
 def fig_a_2(E, out):
@@ -494,9 +576,7 @@ def fig_a_2(E, out):
         for (c, name, colr), s in zip(FAIL, shares):
             ax.barh(yy, s, left=left, height=0.8, color=colr, ec="white", lw=0.6)
             if s >= 10:
-                dark = colr in ("#7f7e78", "#5c5b56", "#184f95")
-                ax.text(left + s / 2, yy, "%.0f%%" % s, ha="center", va="center", fontsize=7,
-                        color="white" if dark else INK)
+                ax.text(left + s / 2, yy, "%.0f%%" % s, ha="center", va="center", fontsize=7, color=text_on(colr))
             left += s
     ax.set_yticks(ys, ["%s, %s" % (m, EXPN[e]) for m, e, _ in bars])
     ax.set_xlim(0, 100)
