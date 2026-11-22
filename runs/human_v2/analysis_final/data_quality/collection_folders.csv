@@ -1,0 +1,3 @@
+dataset,ledger,attempts,seeds_issued,accepted,rejected,errors,episodes_on_disk,failed_on_disk,len_min_ticks,len_median_ticks,len_max_ticks,len_median_s,spec_version,lock_rule,grip_label,source,demonstrator_operator,tracking_measured_episodes,dropout_pct,replay_check
+recordings\demonstrations,present,289,50,50,0,0,50,2,526,715.5,1206,28.62,g1-spec-1.2.0,v3,next_weld_v1,teleop_live,operator: charles,50,0.0,not run / not saved
+recordings\scripted_v3,present,208,208,200,8,0,200,0,488,551.5,608,22.06,g1-spec-1.2.0,v2,next_weld_v1,scripted_demo.run_episode,"scripted (hold_max=0.8, reposition_s=0.5)",0,n/a (not measured),not run / not saved

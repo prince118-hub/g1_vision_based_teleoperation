@@ -1,0 +1,6 @@
+recommendation_reason,episodes
+late ticks > 2% (rule then),10
+success rule failed at GRASP,2
+box pushed > 50 mm before the weld,2
+one tick > 150 ms,2
+late ticks > 5%,1

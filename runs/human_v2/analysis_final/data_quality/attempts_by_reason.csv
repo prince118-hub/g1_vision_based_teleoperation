@@ -1,0 +1,10 @@
+reason,attempts,pct
+aborted by the operator during the episode (x),207,71.62629757785467
+accepted (in the data set),50,17.301038062283737
+"task succeeded, operator discarded (recommended accept)",13,4.498269896193771
+"task succeeded, operator discarded (recommended discard)",12,4.1522491349480966
+"revoked after acceptance: peak push before weld > 50 mm, new acceptance rule",3,1.0380622837370241
+"revoked after acceptance: operator mis-key: pressed a on a RECOMMEND: DISCARD verdict (task success, 14/633 = 2.2% tick overruns > 2%)",1,0.3460207612456747
+failed the success rule: GRASP (operator_stop),1,0.3460207612456747
+unfinished,1,0.3460207612456747
+failed the success rule: GRASP (operator_quit),1,0.3460207612456747
