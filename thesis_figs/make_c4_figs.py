@@ -542,6 +542,10 @@ def fig_a_1(E, out):
             with np.errstate(invalid="ignore", divide="ignore"):
                 rate = np.ma.masked_invalid(np.where(tot > 0, 100 * ok / tot, np.nan))
             im = ax.pcolormesh(ye, xe, rate, cmap=cmap, vmin=0, vmax=100, shading="flat", edgecolors="white", lw=0.6)
+            # cells with no box position: white with a thin diagonal hatch, never read as 0 %
+            for a_, b_ in zip(*np.nonzero(tot == 0)):
+                ax.add_patch(Rectangle((ye[b_], xe[a_]), ye[b_ + 1] - ye[b_], xe[a_ + 1] - xe[a_], facecolor="white",
+                                       edgecolor=INK2, hatch="////", lw=0, zorder=2))
             ax.add_patch(Rectangle((reg["heldout_y"][0], reg["heldout_x"][0]), reg["heldout_y"][1] - reg["heldout_y"][0],
                                    reg["heldout_x"][1] - reg["heldout_x"][0], fill=False, ec=INK, lw=1.1, zorder=3))
             for v in (-SIDE_Y, SIDE_Y):
