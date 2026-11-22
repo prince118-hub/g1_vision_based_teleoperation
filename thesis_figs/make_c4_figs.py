@@ -55,14 +55,18 @@ OUT = os.path.join(HERE, "c4")
 MODELS = ("BC", "ACT", "ACT-LSTM")
 CODE = {"BC": "bc_b256", "ACT": "act_orig", "ACT-LSTM": "act_lstm_full"}
 COL = {"ACT-LSTM": "#008300", "ACT": "#1c5cab", "BC": "#d55181"}
-SINGLE = "#1c5cab"                       # single-series data marks (Fig 4.1, 4.2)
-PATCH = "#e8f1fc"                        # held-out patch fill (Fig 4.2)
+SINGLE = "#5b3aa8"                       # single-series data marks (Fig 4.1, 4.2); navy is ACT only
+PATCH = "#ece6f8"                        # held-out patch fill (Fig 4.2)
 GRID = "#e6e6e3"
 INK, INK2 = "#1f1f1d", "#52514e"         # text; reference lines (y = +-0.05 m, gap = 0)
-RAMP = ("#cde2fb", "#0d366b")            # Fig A.1
-FAIL_RAMP = ("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#0d366b")   # Fig A.2
+RAMP = ("#fff4e6", "#fdcc8a", "#fc8d59", "#d7301f", "#7f0000")   # Fig A.1 ONLY, 0 -> 100 %
+FAIL_RAMP = ("#ebe5f8", "#cbbcef", "#a58fe0", "#8063cc", "#5f3fb0", "#3d2380")   # Fig A.2
 MIN_GAP_PT = 1.5                         # text boxes closer than this "touch" and fail the check
 PHASES = ("walk_in", "grasp", "lift", "transport", "place", "success")
+#: Fig 4.5 / 4.6: Place and Full success are the same count in every human cell (asserted in load()),
+#: so the bars show one group, "Place (full success)".
+BAR_PHASES = PHASES[:5]
+BAR_NAME = dict(walk_in="Walk-in", grasp="Grasp", lift="Lift", transport="Transport", place="Place\n(full success)")
 PNAME = {"walk_in": "Walk-in", "grasp": "Grasp", "lift": "Lift", "transport": "Transport", "place": "Place",
          "success": "Full success"}
 EXPN = {"exp1": "Experiment 1", "exp2": "Experiment 2"}
@@ -156,8 +160,9 @@ def check_colours(fig, name):
     import matplotlib.colors as mc
     from matplotlib.collections import Collection
     from matplotlib.patches import Patch as _P
-    allowed = {mc.to_hex(c) for c in list(COL.values()) + [SINGLE, PATCH, GRID, INK, INK2, "white"]
-               + list(RAMP) + list(FAIL_RAMP)}
+    allowed = {mc.to_hex(c) for c in list(COL.values()) + [SINGLE, PATCH, GRID, INK, INK2, "white"] + list(FAIL_RAMP)}
+    if name == "Fig_A-1":                       # orange-red is allowed in the heatmap and nowhere else
+        allowed |= {mc.to_hex(c) for c in RAMP}
     bad = set()
 
     def look(c):
@@ -250,6 +255,14 @@ def load():
         a = P[(P.data == r.data) & (P.model == r.model) & (P.phase == r.phase)].set_index("exp")
         if int(a.loc["exp1", "k"]) != r.exp1_k or int(a.loc["exp2", "k"]) != r.exp2_k:
             raise SystemExit("generalization_gap disagrees with phase_pooled")
+    for m in MODELS:                               # BAR_PHASES merges Place and Full success
+        for exp in ("exp1", "exp2"):
+            a = P[(P.data == "human") & (P.model == m) & (P.exp == exp)].set_index("phase")
+            if int(a.loc["place", "k"]) != int(a.loc["success", "k"]):
+                raise SystemExit("Place != Full success for %s %s: the merged group is wrong" % (m, exp))
+        g = G[(G.data == "human") & (G.model == m)].set_index("phase")
+        if g.loc["place", "gap"] != g.loc["success", "gap"]:
+            raise SystemExit("Place gap != Full success gap for %s" % m)
     return E, P, G
 
 
@@ -410,17 +423,17 @@ def fig_4_4(H, out):
 
 
 def phase_bars(ax, P, exp, labels=True):
-    x = np.arange(len(PHASES))
+    x = np.arange(len(BAR_PHASES))
     w = 0.29
     for i, m in enumerate(MODELS):
-        v = [rate_ci(P, "human", m, exp, p) for p in PHASES]
+        v = [rate_ci(P, "human", m, exp, p) for p in BAR_PHASES]
         r = np.array([a[0] for a in v])
         xs = x + (i - 1) * w
         ax.bar(xs, r, width=w * 0.92, color=COL[m], label=m)
         cibar(ax, xs, r, [a[1] for a in v], [a[2] for a in v], COL[m])
         if labels:
             ax.text(xs[-1], v[-1][2] + 2, "%.1f" % r[-1], ha="center", va="bottom", fontsize=7, color=INK)
-    ax.set_xticks(x, [PNAME[p] for p in PHASES])
+    ax.set_xticks(x, [BAR_NAME[p] for p in BAR_PHASES])
     pct_axis(ax)
 
 
@@ -435,10 +448,10 @@ def fig_4_6(P, G, out):
     fig, (a, b) = fig_(5.5, nrows=2, height_ratios=[1, 1.08])
     phase_bars(a, P, "exp2")
     panel(a, "(a)")
-    g = G[(G.data == "human") & G.phase.isin(PHASES)]
+    g = G[(G.data == "human") & G.phase.isin(BAR_PHASES)]
     off = {"BC": 0.25, "ACT": 0.0, "ACT-LSTM": -0.25}
-    for k, p in enumerate(PHASES):
-        y0 = len(PHASES) - 1 - k
+    for k, p in enumerate(BAR_PHASES):
+        y0 = len(BAR_PHASES) - 1 - k
         for m in MODELS:
             r = g[(g.model == m) & (g.phase == p)].iloc[0]
             y = y0 + off[m]
@@ -447,10 +460,10 @@ def fig_4_6(P, G, out):
             b.plot([100 * r.gap], [y], ls="none", marker="o", ms=4.5, mfc="white" if hollow else COL[m], mec=COL[m],
                    mew=1.0, zorder=3)
     b.axvline(0, color=INK2, lw=0.8)
-    b.set_yticks(range(len(PHASES)), [PNAME[p] for p in reversed(PHASES)])
-    b.set_ylim(-0.6, len(PHASES) - 0.4)
+    b.set_yticks(range(len(BAR_PHASES)), [BAR_NAME[p] for p in reversed(BAR_PHASES)])
+    b.set_ylim(-0.6, len(BAR_PHASES) - 0.4)
     b.grid(False)
-    for yy in np.arange(len(PHASES) - 1) + 0.5:
+    for yy in np.arange(len(BAR_PHASES) - 1) + 0.5:
         b.axhline(yy, color=GRID, lw=0.7, zorder=0)
     b.set_xlabel("Generalization gap, Experiment 1 minus Experiment 2 (percentage points)")
     panel(b, "(b)")
@@ -516,7 +529,7 @@ def fig_a_1(E, out):
     import matplotlib.colors as mc
     reg = AE.region()
     xe, ye = AE._grid(reg)
-    cmap = mc.LinearSegmentedColormap.from_list("blue", list(RAMP))
+    cmap = mc.LinearSegmentedColormap.from_list("orange_red", list(RAMP))
     cmap.set_bad("white")
     H = E[E.data == "human"]
     fig, axes = fig_(5.2, nrows=2, ncols=3, sharex=True, sharey=True)
