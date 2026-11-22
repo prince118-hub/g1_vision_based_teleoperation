@@ -59,7 +59,7 @@ SINGLE = "#5b3aa8"                       # single-series data marks (Fig 4.1, 4.
 PATCH = "#ece6f8"                        # held-out patch fill (Fig 4.2)
 GRID = "#e6e6e3"
 INK, INK2 = "#1f1f1d", "#52514e"         # text; reference lines (y = +-0.05 m, gap = 0)
-RAMP = ("#fff4e6", "#fdcc8a", "#fc8d59", "#d7301f", "#7f0000")   # Fig A.1 ONLY, 0 -> 100 %
+RAMP = ("#f3effb", "#cbbcef", "#8063cc", "#5f3fb0", "#2e1a66")   # Fig A.1 heatmap, 0 -> 100 %
 FAIL_RAMP = ("#ebe5f8", "#cbbcef", "#a58fe0", "#8063cc", "#5f3fb0", "#3d2380")   # Fig A.2
 MIN_GAP_PT = 1.5                         # text boxes closer than this "touch" and fail the check
 PHASES = ("walk_in", "grasp", "lift", "transport", "place", "success")
@@ -156,12 +156,13 @@ def check(fig, name):
 def check_colours(fig, name):
     """Every coloured mark inside an axes must be a policy colour, the single-series navy, a ramp step,
     the patch fill, the reference-line colour, the grid colour or white / ink. Nothing grey, red,
-    orange or yellow can slip in. The colour-bar image is checked through its ramp ends."""
+    orange or yellow can slip in. A colour-mapped artist (the A.1 heatmap) is checked at its ramp ends
+    and, sampled across the whole map, must contain no warm hue."""
     import matplotlib.colors as mc
     from matplotlib.collections import Collection
     from matplotlib.patches import Patch as _P
     allowed = {mc.to_hex(c) for c in list(COL.values()) + [SINGLE, PATCH, GRID, INK, INK2, "white"] + list(FAIL_RAMP)}
-    if name == "Fig_A-1":                       # orange-red is allowed in the heatmap and nowhere else
+    if name == "Fig_A-1":                       # the heatmap ramp, in its own figure only
         allowed |= {mc.to_hex(c) for c in RAMP}
     bad = set()
 
@@ -196,6 +197,10 @@ def check_colours(fig, name):
                 if art.get_array() is not None:          # colour-mapped (the A.1 heatmap): ramp-checked
                     cm = art.get_cmap()
                     look(cm(0.0)), look(cm(1.0))
+                    for v in np.linspace(0, 1, 101):    # no red / orange / yellow anywhere on the map
+                        hh, ss_, _ = mc.rgb_to_hsv(cm(float(v))[:3])
+                        if ss_ > 0.08 and (hh * 360 < 75 or hh * 360 > 345):
+                            bad.add("warm hue in the colour map at %.2f: %s" % (v, mc.to_hex(cm(float(v)))))
                     look(art.get_edgecolor())
                 else:
                     look(art.get_facecolor()), look(art.get_edgecolor())
@@ -529,7 +534,7 @@ def fig_a_1(E, out):
     import matplotlib.colors as mc
     reg = AE.region()
     xe, ye = AE._grid(reg)
-    cmap = mc.LinearSegmentedColormap.from_list("orange_red", list(RAMP))
+    cmap = mc.LinearSegmentedColormap.from_list("violet", list(RAMP))
     cmap.set_bad("white")
     H = E[E.data == "human"]
     fig, axes = fig_(5.2, nrows=2, ncols=3, sharex=True, sharey=True)
